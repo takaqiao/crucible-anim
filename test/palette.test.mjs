@@ -61,34 +61,68 @@ test("特效没有任何颜色分支时返回空颜色且不补偿", () => {
   assert.equal(r.hue, 0);
 });
 
-test("COLOR_HUE 的每个键都在素材库索引中实际存在", () => {
+test("COLOR_HUE 的每个键都是真实颜色段（兄弟关系验证）", () => {
   const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
 
-  // 收集索引中所有字母数字（可含下划线）的叶子键名
-  const colorSet = new Set();
+  // 种子集：绝对无歧义的颜色名
+  const SEED_COLORS = new Set(["blue", "green", "red", "purple", "orange", "yellow"]);
+
+  // 非颜色词黑名单（参数词、索引号等）
+  const NON_COLOR_WORDS = new Set([
+    "intro", "outro", "01", "02", "03", "04", "05", "06", "07", "08", "09",
+    "001", "002", "003", "004", "005", "006", "007", "008", "009", "010",
+    "011", "012", "013", "014",
+    "reversed", "standard", "loop", "still_frame",
+    "001_reversed", "01_reversed",
+    "deployed", "reserve", "sequence",
+    "fast", "slow", "normal", "veryfast",
+    "single", "few", "many",
+    "small", "large", "complete",
+    "particles", "particles_only", "no_base", "no_ring",
+    "ring", "circle", "deployed",
+    "refraction", "rainbow",
+    "200px", "400px", "1200",
+    "rock", "shrapnel", "ground_crack", "side_fracture", "top_fracture",
+    "standard", "reversed", "still_frame", "textured", "unlit", "extinguished", "multicolored",
+    "water", "earth", "fire", "poison", "sound"
+  ]);
+
+  // 递归收集所有「颜色选择分组」的子键
+  const colorSegments = new Set();
   function traverse(node, depth = 0) {
-    if (!node || typeof node !== 'object' || depth > 10) return;
+    if (!node || typeof node !== 'object' || depth > 20) return;
     for (const key in node) {
       if (key.startsWith('_')) continue;
       const child = node[key];
-      if (typeof child === 'string' && /^[a-z_]+$/.test(key)) {
-        colorSet.add(key);
-      } else if (typeof child === 'object' && child !== null) {
+      if (typeof child === 'object' && child !== null) {
+        const childKeys = Object.keys(child).filter(k => !k.startsWith('_'));
+        const seedCount = childKeys.filter(k => SEED_COLORS.has(k)).length;
+
+        // 识别颜色分组：≥2 个种子颜色，且多数键看起来像颜色（不在黑名单中）
+        if (seedCount >= 2) {
+          const colorLikeKeys = childKeys.filter(k => !NON_COLOR_WORDS.has(k));
+          const ratio = colorLikeKeys.length / childKeys.length;
+
+          // 如果颜色词占比 ≥ 60%，认定这是一个选色分组
+          if (ratio >= 0.6) {
+            colorLikeKeys.forEach(k => colorSegments.add(k));
+          }
+        }
+
         traverse(child, depth + 1);
       }
     }
   }
   traverse(index.tree);
 
-  // 白名单：在表中但素材库真实不存在的颜色（含原因和出现次数）
-  // 当前应该为空，因为所有双色混合已改用无下划线版本
+  // 白名单：在 COLOR_HUE 中但在索引中确实不出现的颜色
   const UNUSED_COLORS = new Set();
 
-  // 验证 COLOR_HUE 的每个键
+  // 验证 COLOR_HUE 的每个键都在识别出的颜色分组中
   for (const key of Object.keys(COLOR_HUE)) {
-    const found = colorSet.has(key);
+    const isColorSegment = colorSegments.has(key);
     const whitelisted = UNUSED_COLORS.has(key);
-    assert.ok(found || whitelisted,
-      `颜色 '${key}' 既不在索引中实际存在，也不在白名单中`);
+    assert.ok(isColorSegment || whitelisted,
+      `键 '${key}' 不存在于任何颜色分组中`);
   }
 });
