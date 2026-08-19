@@ -11,22 +11,22 @@
 export const COLOR_HUE = Object.freeze({
   red: 0, orange: 30, yellow: 55, green: 120, teal: 165, blue: 215,
   dark_blue: 225, purple: 275, dark_purple: 285, pink: 320, dark_green: 130,
-  blue_yellow: 235, green_yellow: 90, orange_purple: 340, blue_purple: 250,
+  blueyellow: 235, greenyellow: 90, orangepurple: 340, bluepurple: 250,
   white: -1, dark_red: 355, dark_orange: 25,
 });
 
-/** 12 个符文的主色。取自各符文的意象：storm 用电蓝、earth 用土绿、soul 用青、oblivion 用暗紫。 */
+/** 12 个符文的主色。取自各符文的意象：storm 用蓝黄电光、earth 用土绿、soul 用青、oblivion 用暗紫。 */
 export const RUNE_COLOR = Object.freeze({
   flame: "orange",
   frost: "blue",
   life: "green",
   death: "purple",
-  storm: "blue",
+  storm: "blueyellow",
   earth: "dark_green",
   illumination: "yellow",
   illusion: "pink",
   kinesis: "teal",
-  control: "blue_purple",
+  control: "bluepurple",
   oblivion: "dark_purple",
   soul: "teal"
 });
@@ -34,7 +34,7 @@ export const RUNE_COLOR = Object.freeze({
 /** 12 个伤害类型的主色。物理三种走血迹与火花，不配色。 */
 export const DAMAGE_COLOR = Object.freeze({
   bludgeoning: null, piercing: null, slashing: null,
-  fire: "orange", cold: "blue", electricity: "blue",
+  fire: "orange", cold: "blue", electricity: "blueyellow",
   acid: "green", poison: "dark_green", radiant: "yellow",
   void: "dark_purple", psychic: "purple", corruption: "dark_green"
 });

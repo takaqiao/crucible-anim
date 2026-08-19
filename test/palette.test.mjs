@@ -60,3 +60,35 @@ test("特效没有任何颜色分支时返回空颜色且不补偿", () => {
   assert.equal(r.color, null);
   assert.equal(r.hue, 0);
 });
+
+test("COLOR_HUE 的每个键都在素材库索引中实际存在", () => {
+  const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
+
+  // 收集索引中所有字母数字（可含下划线）的叶子键名
+  const colorSet = new Set();
+  function traverse(node, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 10) return;
+    for (const key in node) {
+      if (key.startsWith('_')) continue;
+      const child = node[key];
+      if (typeof child === 'string' && /^[a-z_]+$/.test(key)) {
+        colorSet.add(key);
+      } else if (typeof child === 'object' && child !== null) {
+        traverse(child, depth + 1);
+      }
+    }
+  }
+  traverse(index.tree);
+
+  // 白名单：在表中但素材库真实不存在的颜色（含原因和出现次数）
+  // 当前应该为空，因为所有双色混合已改用无下划线版本
+  const UNUSED_COLORS = new Set();
+
+  // 验证 COLOR_HUE 的每个键
+  for (const key of Object.keys(COLOR_HUE)) {
+    const found = colorSet.has(key);
+    const whitelisted = UNUSED_COLORS.has(key);
+    assert.ok(found || whitelisted,
+      `颜色 '${key}' 既不在索引中实际存在，也不在白名单中`);
+  }
+});
