@@ -9,7 +9,7 @@
  */
 import {readFileSync, writeFileSync, existsSync} from "node:fs";
 import {join, dirname} from "node:path";
-import {fileURLToPath} from "node:url";
+import {fileURLToPath, pathToFileURL} from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const argData = process.argv.indexOf("--data");
@@ -124,7 +124,7 @@ function installStubs(moduleId) {
   return {captured, hooks};
 }
 
-async function extract(moduleId) {
+export async function extract(moduleId) {
   const manifestPath = join(MODULES, moduleId, "module.json");
   if (!existsSync(manifestPath)) return {error: "模组未安装"};
   const mj = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -170,22 +170,27 @@ function countLeaves(node) {
   return n;
 }
 
-const out = {generated: new Date().toISOString().slice(0, 10), modules: {}, failed: {}, tree: {}};
+/** 直跑守卫：只有脚本被直接执行（而非被测试 import）时才跑整轮提取。 */
+const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
 
-for (const id of TARGETS) {
-  const r = await extract(id);
-  if (r.error) { out.failed[id] = r.error; console.log(`✗ ${id.padEnd(32)} ${r.error}`); continue; }
-  for (const {ns, tree} of r.captured) {
-    out.tree[ns] ??= {};
-    mergeTree(out.tree[ns], tree);
-    const n = countLeaves(tree);
-    out.modules[id] = {namespace: ns, leaves: n};
-    console.log(`✓ ${id.padEnd(32)} ${ns.padEnd(32)} ${n}`);
+if (isMain) {
+  const out = {generated: new Date().toISOString().slice(0, 10), modules: {}, failed: {}, tree: {}};
+
+  for (const id of TARGETS) {
+    const r = await extract(id);
+    if (r.error) { out.failed[id] = r.error; console.log(`✗ ${id.padEnd(32)} ${r.error}`); continue; }
+    for (const {ns, tree} of r.captured) {
+      out.tree[ns] ??= {};
+      mergeTree(out.tree[ns], tree);
+      const n = countLeaves(tree);
+      out.modules[id] = {namespace: ns, leaves: n};
+      console.log(`✓ ${id.padEnd(32)} ${ns.padEnd(32)} ${n}`);
+    }
   }
-}
 
-for (const ns of Object.keys(out.tree)) {
-  console.log(`  合并后 ${ns}: ${countLeaves(out.tree[ns])} 叶子`);
+  for (const ns of Object.keys(out.tree)) {
+    console.log(`  合并后 ${ns}: ${countLeaves(out.tree[ns])} 叶子`);
+  }
+  writeFileSync(join(ROOT, "data/asset-index.json"), JSON.stringify(out));
+  console.log(`已写入 data/asset-index.json`);
 }
-writeFileSync(join(ROOT, "data/asset-index.json"), JSON.stringify(out));
-console.log(`已写入 data/asset-index.json`);
