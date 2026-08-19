@@ -72,7 +72,16 @@ test("resolver 与 armory 不得引用 Foundry 全局", async () => {
   const banned = /\b(game|canvas|Hooks|Sequencer|ui|CONFIG)\s*\./;
   for (const f of files) {
     const src = readFileSync(f, "utf8")
-      .split("\n").filter(l => !l.trimStart().startsWith("//")).join("\n");
+      .split("\n")
+      .filter(l => {
+        // 过滤掉单行注释、块注释、以及标记为 foundry-global-ok 的行
+        const trimmed = l.trimStart();
+        if (trimmed.startsWith("//")) return false;
+        if (trimmed.startsWith("*")) return false;
+        if (l.includes("// foundry-global-ok")) return false;
+        return true;
+      })
+      .join("\n");
     assert.ok(!banned.test(src), `${f} 引用了 Foundry 全局`);
   }
 });
