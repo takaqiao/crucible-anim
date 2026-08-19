@@ -70,18 +70,29 @@ test("resolver 与 armory 不得引用 Foundry 全局", async () => {
     ...walk(join(ROOT, "scripts/armory"))
   ];
   const banned = /\b(game|canvas|Hooks|Sequencer|ui|CONFIG)\s*\./;
-  for (const f of files) {
-    const src = readFileSync(f, "utf8")
+
+  // 剥离注释的辅助函数
+  function stripComments(src) {
+    // 第一步：去掉块注释 /* ... */（包括跨行）
+    let stripped = src.replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // 第二步：去掉行尾注释 //，但过滤掉标记为 foundry-global-ok 的整行
+    stripped = stripped
       .split("\n")
-      .filter(l => {
-        // 过滤掉单行注释、块注释、以及标记为 foundry-global-ok 的行
-        const trimmed = l.trimStart();
-        if (trimmed.startsWith("//")) return false;
-        if (trimmed.startsWith("*")) return false;
-        if (l.includes("// foundry-global-ok")) return false;
-        return true;
+      .filter(line => !line.includes("// foundry-global-ok"))
+      .map(line => {
+        const commentIdx = line.indexOf("//");
+        if (commentIdx !== -1) return line.substring(0, commentIdx);
+        return line;
       })
       .join("\n");
-    assert.ok(!banned.test(src), `${f} 引用了 Foundry 全局`);
+
+    return stripped;
+  }
+
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    const stripped = stripComments(src);
+    assert.ok(!banned.test(stripped), `${f} 引用了 Foundry 全局`);
   }
 });

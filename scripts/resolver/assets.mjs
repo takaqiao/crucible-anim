@@ -74,19 +74,39 @@ export function offlineBackend(index) {
 
 /**
  * 运行时后端。函数体内才触碰 Sequencer 全局，因此本模块在 Node 中导入无副作用。
+ *
+ * 注意 Sequencer 4.2.3 的真实行为：
+ * - getEntry 精确命中返回对象，前缀匹配多条返回裸数组
+ * - getPathsUnder 未命中返回 false（会弹红色错误提示），不要试探拼错的命名空间
  * @returns {Backend}
  */
 export function runtimeBackend() {
   return {
     getPathsUnder(path) {
-      try { return Sequencer.Database.getPathsUnder(path) ?? []; } // foundry-global-ok
-      catch { return []; }
+      try {
+        const r = Sequencer.Database.getPathsUnder(path); // foundry-global-ok
+        return Array.isArray(r) ? r : [];
+      } catch { return []; }
     },
     getEntry(path) {
       try {
         const e = Sequencer.Database.getEntry(path, {softFail: true}); // foundry-global-ok
-        if (!e) return null;
-        const file = typeof e === "string" ? e : (e.file ?? e.files ?? null);
+        // 处理四种返回形态
+        if (e === false || !e) return null;
+        // 字符串直接返回
+        if (typeof e === "string") {
+          return {file: e, template: null};
+        }
+        // 裸数组（前缀匹配多条）：取第一个元素代表
+        if (Array.isArray(e)) {
+          if (e.length === 0) return null;
+          const first = e[0];
+          const file = first?.file ?? first?.files ?? null;
+          if (!file) return null;
+          return {file, template: first?.template ?? null};
+        }
+        // 对象形态（精确命中或单条前缀）
+        const file = e.file ?? e.files ?? null;
         if (!file) return null;
         return {file, template: e.template ?? null};
       } catch { return null; }
