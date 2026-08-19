@@ -9,7 +9,7 @@
 import {ClassicLevel} from "classic-level";
 import {writeFileSync, existsSync} from "node:fs";
 import {join, dirname} from "node:path";
-import {fileURLToPath} from "node:url";
+import {fileURLToPath, pathToFileURL} from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const argData = process.argv.indexOf("--data");
@@ -35,11 +35,15 @@ const RUNES = ["control", "death", "earth", "flame", "frost", "illumination",
 const GESTURES = ["arrow", "aspect", "aura", "blast", "cone", "conjure", "create", "fan",
                   "influence", "pulse", "ray", "sense", "step", "strike", "surge", "touch", "ward"];
 
-/** 法术姿态 → 目标形态与模板形状，取自 crucible/module/const/spellcraft.mjs 的 GESTURES。 */
-const GESTURE_TARGET = {
+/**
+ * 法术姿态 → 目标形态与模板形状，取自 crucible/module/const/spellcraft.mjs 的
+ * GESTURES.<gesture>.target.type。由 test/source-tables.test.mjs 直接解析该源文件逐项
+ * 核对锁定——Crucible 升级改动姿态定义时测试会自己报警，不会再次悄悄漂移。
+ */
+export const GESTURE_TARGET = {
   arrow: "single", aspect: "self", aura: "aura", blast: "blast", cone: "cone",
-  conjure: "summon", create: "single", fan: "fan", influence: "single", pulse: "pulse",
-  ray: "ray", sense: "self", step: "movement", strike: "single", surge: "self",
+  conjure: "summon", create: "summon", fan: "fan", influence: "single", pulse: "pulse",
+  ray: "ray", sense: "aura", step: "movement", strike: "single", surge: "ray",
   touch: "single", ward: "self"
 };
 const TARGET_REGION = {
@@ -97,82 +101,101 @@ function baseSnapshot(id, {tags = [], target, range, cost, spell = null, region 
   };
 }
 
-const out = [];
-const seen = new Set();
-
-for (const p of PACKS) {
-  if (!existsSync(p)) { console.warn(`跳过不存在的包: ${p}`); continue; }
-  const db = new ClassicLevel(p, {valueEncoding: "json"});
-  for await (const [key, doc] of db.iterator()) {
-    if (!key.startsWith("!items!") && !key.startsWith("!actors!")) continue;
-    for (const a of (doc?.system?.actions ?? [])) {
-      const id = a.id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      out.push(baseSnapshot(id, {
-        tags: a.tags ?? [],
-        target: a.target ?? {type: "single", number: 1, distance: 1, scope: 2},
-        range: a.range ?? {minimum: 0, maximum: 1},
-        cost: a.cost ?? {action: 1, focus: 0, heroism: 0, health: 0},
-        strikes: (a.tags ?? []).includes("strike")
-          ? [{category: (a.tags ?? []).includes("natural") ? "unarmed" : "balanced1",
-              damageType: "slashing"}]
-          : [],
-        usage: {
-          isAttack: (a.tags ?? []).some(t => ["strike", "spell", "skill"].includes(t)),
-          isRanged: (a.tags ?? []).includes("ranged")
-        }
-      }));
-    }
-  }
-  await db.close();
-}
-
-for (const id of DEFAULT_ACTIONS) {
-  if (seen.has(id)) continue;
-  seen.add(id);
-  out.push(baseSnapshot(id, {
-    tags: id === "strike" ? ["strike", "melee"] : [id === "move" ? "movement" : "generic"],
-    target: id === "strike" ? {type: "single", number: 1, distance: 1, scope: 2}
-                            : {type: "self", number: 0, distance: 0, scope: 1},
-    range: {minimum: 0, maximum: 1},
-    cost: {action: 1, focus: 0, heroism: 0, health: 0},
-    strikes: id === "strike" ? [{category: "balanced1", damageType: "slashing"}] : [],
-    usage: {isAttack: id === "strike"}
-  }));
-}
-
-for (const rune of RUNES) {
-  for (const gesture of GESTURES) {
-    const id = `spell.${rune}.${gesture}`;
-    const tt = GESTURE_TARGET[gesture];
-    out.push(baseSnapshot(id, {
-      tags: ["spell", "composed"],
-      target: {type: tt, number: tt === "single" ? 1 : 0, distance: 5, scope: 2},
-      range: {minimum: 0, maximum: 10},
-      cost: {action: 1, focus: 1, heroism: 0, health: 0},
-      spell: {rune, gesture, inflection: null},
-      region: TARGET_REGION[tt] ?? null,
-      usage: {isAttack: true, isRanged: tt !== "self"}
-    }));
-  }
-}
-
-writeFileSync(join(ROOT, "test/fixtures/actions.json"), JSON.stringify(out));
-console.log(`actions.json: ${out.length} 个快照`);
-
-/** 47 个状态，取自 crucible/module/const/statuses.mjs。 */
-const STATUSES = ["weakened", "dead", "broken", "insane", "staggered", "stunned", "prone",
+/**
+ * 46 个可赋予状态，取自 crucible/module/const/statuses.mjs 的 `statusEffects`（不是
+ * `derivedConditions`——那边的 flanked 源码注释明写「derived from circumstance ...
+ * cannot be assigned」，不会作为 ActiveEffect 出现，因此不属于这份状态 fixture）。
+ * 由 test/source-tables.test.mjs 直接解析该源文件核对锁定。
+ */
+export const STATUSES = ["weakened", "dead", "broken", "insane", "staggered", "stunned", "prone",
   "restrained", "slowed", "hastened", "disoriented", "exhausted", "blinded", "burrowing",
   "flying", "deafened", "silenced", "enraged", "frightened", "invisible", "invulnerable",
   "limitless", "resolute", "guarded", "exposed", "overrun", "diseased", "paralyzed", "asleep",
   "suffocating", "incapacitated", "unaware", "falling", "bleeding", "burning", "freezing",
   "confused", "corroding", "decaying", "dominated", "entropy", "irradiated", "mending",
-  "inspired", "poisoned", "shocked", "flanked"];
+  "inspired", "poisoned", "shocked"];
 
-const effects = STATUSES.map(statusId => ({
-  statusId, effectUuid: `Scene.s.Token.t.ActiveEffect.${statusId}`,
-  target: makeToken(ORIGIN), seed: hashSeed(statusId)
-}));
-writeFileSync(join(ROOT, "test/fixtures/effects.json"), JSON.stringify(effects));
-console.log(`effects.json: ${effects.length} 个状态`);
+/** 直跑守卫：只有脚本被直接执行（而非被测试 import 取表）时才跑整轮抽取与写盘。 */
+const isMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+
+if (isMain) {
+  const out = [];
+  const seen = new Set();       // 已出现过的 id，供 DEFAULT_ACTIONS 判重（id 级）
+  const seenSig = new Set();    // 已出现过的内容签名，供包内/跨包动作判重（内容级）
+
+  for (const p of PACKS) {
+    if (!existsSync(p)) { console.warn(`跳过不存在的包: ${p}`); continue; }
+    const db = new ClassicLevel(p, {valueEncoding: "json"});
+    for await (const [key, doc] of db.iterator()) {
+      if (!key.startsWith("!items!") && !key.startsWith("!actors!")) continue;
+      for (const a of (doc?.system?.actions ?? [])) {
+        const id = a.id;
+        if (!id) continue;
+        const tags = a.tags ?? [];
+        const target = a.target ?? {type: "single", number: 1, distance: 1, scope: 2};
+        const range = a.range ?? {minimum: 0, maximum: 1};
+        const cost = a.cost ?? {action: 1, focus: 0, heroism: 0, health: 0};
+        // 同 id 不等于同一动作：不同道具上可能各自定义一个语义完全不同的同名动作
+        // （如 adversary-talents 里 "Burnout" 与 "Steam Vent" 都用 id="steamVent"）。
+        // 按 id+tags+target+range+cost 的内容签名去重，只吞掉真正的重复条目。
+        const sig = `${id}::${JSON.stringify([...tags].sort())}::` +
+          `${JSON.stringify(target)}::${JSON.stringify(range)}::${JSON.stringify(cost)}`;
+        if (seenSig.has(sig)) continue;
+        seenSig.add(sig);
+        seen.add(id);
+        out.push(baseSnapshot(id, {
+          tags, target, range, cost,
+          strikes: tags.includes("strike")
+            ? [{category: tags.includes("natural") ? "unarmed" : "balanced1",
+                damageType: "slashing"}]
+            : [],
+          usage: {
+            isAttack: tags.some(t => ["strike", "spell", "skill"].includes(t)),
+            isRanged: tags.includes("ranged")
+          }
+        }));
+      }
+    }
+    await db.close();
+  }
+
+  for (const id of DEFAULT_ACTIONS) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(baseSnapshot(id, {
+      tags: id === "strike" ? ["strike", "melee"] : [id === "move" ? "movement" : "generic"],
+      target: id === "strike" ? {type: "single", number: 1, distance: 1, scope: 2}
+                              : {type: "self", number: 0, distance: 0, scope: 1},
+      range: {minimum: 0, maximum: 1},
+      cost: {action: 1, focus: 0, heroism: 0, health: 0},
+      strikes: id === "strike" ? [{category: "balanced1", damageType: "slashing"}] : [],
+      usage: {isAttack: id === "strike"}
+    }));
+  }
+
+  for (const rune of RUNES) {
+    for (const gesture of GESTURES) {
+      const id = `spell.${rune}.${gesture}`;
+      const tt = GESTURE_TARGET[gesture];
+      out.push(baseSnapshot(id, {
+        tags: ["spell", "composed"],
+        target: {type: tt, number: tt === "single" ? 1 : 0, distance: 5, scope: 2},
+        range: {minimum: 0, maximum: 10},
+        cost: {action: 1, focus: 1, heroism: 0, health: 0},
+        spell: {rune, gesture, inflection: null},
+        region: TARGET_REGION[tt] ?? null,
+        usage: {isAttack: true, isRanged: tt !== "self"}
+      }));
+    }
+  }
+
+  writeFileSync(join(ROOT, "test/fixtures/actions.json"), JSON.stringify(out));
+  console.log(`actions.json: ${out.length} 个快照`);
+
+  const effects = STATUSES.map(statusId => ({
+    statusId, effectUuid: `Scene.s.Token.t.ActiveEffect.${statusId}`,
+    target: makeToken(ORIGIN), seed: hashSeed(statusId)
+  }));
+  writeFileSync(join(ROOT, "test/fixtures/effects.json"), JSON.stringify(effects));
+  console.log(`effects.json: ${effects.length} 个状态`);
+}

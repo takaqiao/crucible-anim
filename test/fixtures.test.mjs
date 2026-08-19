@@ -10,10 +10,13 @@ const effects = JSON.parse(readFileSync(join(ROOT, "test/fixtures/effects.json")
 
 test("动作 fixture 数量达到预期规模", () => {
   // 简报预期 435 = 131+46+15+26 (compendium 四包) + 13 (DEFAULT_ACTIONS) + 204 (法术矩阵)。
-  // 实测四包的原始动作数与简报table完全一致(131/46/15/26)，但 dedup 用的 seen 集合
-  // 命中了 3 个跨/同包重复的真实 action id (steamVent, invisibility, graveMark)，
-  // 使去重后的合计比理论值少 3 —— 简报本身预告过这种情况"属正常"。故阈值下调为 432。
-  assert.ok(actions.length >= 432, `只有 ${actions.length} 个，应 >= 432`);
+  // 实测四包的原始动作数与简报table完全一致(131/46/15/26)。三个撞 id 经逐字段核实：
+  // graveMark 两处内容全等（Crucible 核心与 Ember 间的移植，去重无害），但 steamVent
+  // （"Burnout" vs "Steam Vent"）与 invisibility（"Natural Invisibility" vs 法术
+  // "Invisibility"）两处内容并不相同、是两个独立动作。去重判据已改为内容签名
+  // （id+tags+target+range+cost）而非纯 id，因此这两个 id 各保留 2 条、graveMark 保留 1
+  // 条，理论值 435 - 1(graveMark 去重) = 434。
+  assert.ok(actions.length >= 434, `只有 ${actions.length} 个，应 >= 434`);
 });
 
 test("合成法术矩阵 12 × 17 完整", () => {
@@ -40,7 +43,10 @@ test("同时覆盖贴身与隔格两种几何", () => {
   assert.ok(adj.length > 0 && far.length > 0);
 });
 
-test("状态 fixture 覆盖全部 47 个状态", () => {
-  assert.equal(effects.length, 47);
+test("状态 fixture 覆盖全部 46 个状态", () => {
+  // 46 个，取自 statuses.mjs 的 statusEffects；不含 flanked——那是 derivedConditions
+  // 里「由情境派生、不可赋予」的条件，永远不会作为 ActiveEffect 出现。
+  assert.equal(effects.length, 46);
+  assert.ok(!effects.some(e => e.statusId === "flanked"), "flanked 不应出现在状态 fixture 里");
   assert.ok(effects.every(e => e.statusId && typeof e.target.x === "number"));
 });
