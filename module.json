@@ -1,0 +1,22 @@
+{
+  "id": "crucible-anim",
+  "title": "Crucible 动画补齐",
+  "description": "为 Crucible 系统补齐原生 VFX 未覆盖的动作、法术与状态动画。",
+  "version": "0.1.0",
+  "compatibility": {"minimum": "14", "verified": "14.366"},
+  "authors": [{"name": "gaoqiao"}],
+  "esmodules": ["scripts/main.mjs"],
+  "languages": [
+    {"lang": "en", "name": "English", "path": "lang/en.json"},
+    {"lang": "zh-CN", "name": "中文（简体）", "path": "lang/zh-CN.json"}
+  ],
+  "relationships": {
+    "systems": [
+      {"id": "crucible", "type": "system", "compatibility": {"minimum": "0.10.2"}}
+    ],
+    "requires": [
+      {"id": "sequencer", "type": "module", "compatibility": {"minimum": "4.2"}}
+    ]
+  },
+  "socket": false
+}

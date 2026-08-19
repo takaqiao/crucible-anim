@@ -1,17 +1,14 @@
 {
   "name": "crucible-anim",
-  "version": "1.0.0",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Crucible 系统动画补齐模组的开发工具与测试",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/",
+    "index": "node tools/extract-db.mjs",
+    "fixtures": "node tools/dump-fixtures.mjs"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "devDependencies": {
     "classic-level": "^3.0.0"
   }

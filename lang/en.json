@@ -1,0 +1,19 @@
+{
+  "CANIM": {
+    "SelfCheckFailed": "Crucible Anim disabled itself: {reason}",
+    "Settings": {
+      "Enabled": {"Name": "Enable animations", "Hint": "Master switch. Crucible's own \"Enable VFX\" setting is always respected as well."},
+      "Density": {
+        "Name": "Animation density", "Hint": "How many actions receive animations.",
+        "Minimal": "Minimal — attacks and spells only",
+        "Standard": "Standard — restrained, matches Crucible's own style",
+        "Full": "Full — every action (not implemented in V1)"
+      },
+      "Volume": {"Name": "Sound volume", "Hint": "Volume for sounds played by this module."},
+      "Shake": {"Name": "Impact shake", "Hint": "Shake the target sprite on critical hits."},
+      "Debug": {"Name": "Debug logging", "Hint": "Print action snapshots, resolved plans and asset fallback warnings to the console."}
+    },
+    "Replay": "Replay animation",
+    "Preview": {"Title": "Animation preview", "NoToken": "Select a token first."}
+  }
+}

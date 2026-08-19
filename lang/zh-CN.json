@@ -1,0 +1,19 @@
+{
+  "CANIM": {
+    "SelfCheckFailed": "Crucible 动画补齐已自我禁用：{reason}",
+    "Settings": {
+      "Enabled": {"Name": "启用动画", "Hint": "总开关。Crucible 自带的「启用 VFX」设置始终同时生效。"},
+      "Density": {
+        "Name": "动画密度", "Hint": "有多少动作会播放动画。",
+        "Minimal": "精简 — 仅攻击与法术",
+        "Standard": "标准 — 克制，与 Crucible 原生风格一致",
+        "Full": "饱满 — 每个动作都有（V1 未实现）"
+      },
+      "Volume": {"Name": "音效音量", "Hint": "本模组播放音效的音量。"},
+      "Shake": {"Name": "受击抖动", "Hint": "暴击时抖动目标 sprite。"},
+      "Debug": {"Name": "调试日志", "Hint": "在控制台打印动作快照、解析结果与素材降级警告。"}
+    },
+    "Replay": "重放动画",
+    "Preview": {"Title": "动画预览", "NoToken": "请先选中一个 token。"}
+  }
+}
