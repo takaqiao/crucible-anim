@@ -29,9 +29,14 @@ test("module.json 字段完整且与常量一致", async () => {
   assert.equal(mj.compatibility.minimum, "14");
   assert.equal(mj.compatibility.verified, "14.366");
   assert.deepEqual(mj.esmodules, ["scripts/main.mjs"]);
-  const reqIds = mj.relationships.requires.map(r => r.id);
-  assert.ok(reqIds.includes("sequencer"), "必须声明 sequencer 依赖");
-  assert.equal(mj.relationships.systems[0].id, "crucible");
+
+  const sequencer = mj.relationships.requires.find(r => r.id === "sequencer");
+  assert.ok(sequencer, "必须声明 sequencer 依赖");
+  assert.equal(sequencer.compatibility.minimum, "4.2", "sequencer 最低版本必须是 4.2");
+
+  const crucible = mj.relationships.systems.find(s => s.id === "crucible");
+  assert.ok(crucible, "必须声明 crucible 系统依赖");
+  assert.equal(crucible.compatibility.minimum, "0.10.2", "crucible 最低版本必须是 0.10.2");
 });
 
 test("清单引用的每个文件都存在", () => {
@@ -52,9 +57,10 @@ test("两份语言文件键集合完全一致", () => {
 test("常量自洽", async () => {
   const C = await import("../scripts/const.mjs");
   assert.deepEqual([...C.SLOTS], ["cast", "travel", "impact", "aftermath", "persist"]);
-  assert.equal(C.RESULT.HIT, 7);
-  assert.equal(C.RESULT.MISS, 0);
-  assert.equal(Object.keys(C.RESULT).length, 8);
+  assert.deepEqual(C.RESULT, {
+    MISS: 0, DODGE: 1, PARRY: 2, BLOCK: 3, ARMOR: 4, RESIST: 5, GLANCE: 6, HIT: 7
+  });
+  assert.equal(C.PLAN_VERSION, 1);
   assert.equal(C.META_KEY, "cav");
 });
 
