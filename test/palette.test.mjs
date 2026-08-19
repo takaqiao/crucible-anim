@@ -61,68 +61,118 @@ test("特效没有任何颜色分支时返回空颜色且不补偿", () => {
   assert.equal(r.hue, 0);
 });
 
-test("COLOR_HUE 的每个键都是真实颜色段（兄弟关系验证）", () => {
+test("映射值可达性：12个符文+9个伤害类型的配色都能精确命中至少一条路径", () => {
   const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
+  const assets = createAssets(offlineBackend(index));
 
-  // 种子集：绝对无歧义的颜色名
-  const SEED_COLORS = new Set(["blue", "green", "red", "purple", "orange", "yellow"]);
+  // 收集所有待验证的值：12个符文 + 9个非物理伤害
+  const mappedValues = new Set();
+  for (const color of Object.values(RUNE_COLOR)) {
+    mappedValues.add(color);
+  }
+  for (const color of Object.values(DAMAGE_COLOR)) {
+    if (color !== null) {
+      mappedValues.add(color);
+    }
+  }
 
-  // 非颜色词黑名单（参数词、索引号等）
-  const NON_COLOR_WORDS = new Set([
-    "intro", "outro", "01", "02", "03", "04", "05", "06", "07", "08", "09",
-    "001", "002", "003", "004", "005", "006", "007", "008", "009", "010",
-    "011", "012", "013", "014",
-    "reversed", "standard", "loop", "still_frame",
-    "001_reversed", "01_reversed",
-    "deployed", "reserve", "sequence",
-    "fast", "slow", "normal", "veryfast",
-    "single", "few", "many",
-    "small", "large", "complete",
-    "particles", "particles_only", "no_base", "no_ring",
-    "ring", "circle", "deployed",
-    "refraction", "rainbow",
-    "200px", "400px", "1200",
-    "rock", "shrapnel", "ground_crack", "side_fracture", "top_fracture",
-    "standard", "reversed", "still_frame", "textured", "unlit", "extinguished", "multicolored",
-    "water", "earth", "fire", "poison", "sound"
-  ]);
-
-  // 递归收集所有「颜色选择分组」的子键
-  const colorSegments = new Set();
-  function traverse(node, depth = 0) {
-    if (!node || typeof node !== 'object' || depth > 20) return;
+  // 收集所有含颜色分支的父节点路径
+  const colorParentPaths = [];
+  function traverse(node, path = '') {
+    if (!node || typeof node !== 'object') return;
     for (const key in node) {
       if (key.startsWith('_')) continue;
       const child = node[key];
+      const newPath = path ? path + '.' + key : key;
       if (typeof child === 'object' && child !== null) {
+        // 检查这个节点是否是颜色分组（至少有一个字母键）
         const childKeys = Object.keys(child).filter(k => !k.startsWith('_'));
-        const seedCount = childKeys.filter(k => SEED_COLORS.has(k)).length;
-
-        // 识别颜色分组：≥2 个种子颜色，且多数键看起来像颜色（不在黑名单中）
-        if (seedCount >= 2) {
-          const colorLikeKeys = childKeys.filter(k => !NON_COLOR_WORDS.has(k));
-          const ratio = colorLikeKeys.length / childKeys.length;
-
-          // 如果颜色词占比 ≥ 60%，认定这是一个选色分组
-          if (ratio >= 0.6) {
-            colorLikeKeys.forEach(k => colorSegments.add(k));
-          }
+        if (childKeys.some(k => /^[a-z]/.test(k))) {
+          colorParentPaths.push(newPath);
         }
-
-        traverse(child, depth + 1);
+        traverse(child, newPath);
       }
     }
   }
   traverse(index.tree);
 
-  // 白名单：在 COLOR_HUE 中但在索引中确实不出现的颜色
-  const UNUSED_COLORS = new Set();
+  // 对每个映射值，验证至少能精确命中一条路径
+  const hitRecord = {};
+  const failures = [];
 
-  // 验证 COLOR_HUE 的每个键都在识别出的颜色分组中
-  for (const key of Object.keys(COLOR_HUE)) {
-    const isColorSegment = colorSegments.has(key);
-    const whitelisted = UNUSED_COLORS.has(key);
-    assert.ok(isColorSegment || whitelisted,
-      `键 '${key}' 不存在于任何颜色分组中`);
+  for (const value of mappedValues) {
+    let found = false;
+    for (const path of colorParentPaths) {
+      const result = pickColor(assets, path, value);
+      if (result.color === value && result.hue === 0) {
+        hitRecord[value] = path;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      // 找出是哪个符文或伤害类型映射到这个值
+      let source = '';
+      for (const [k, v] of Object.entries(RUNE_COLOR)) {
+        if (v === value) source = `RUNE_COLOR.${k}`;
+      }
+      for (const [k, v] of Object.entries(DAMAGE_COLOR)) {
+        if (v === value) source = `DAMAGE_COLOR.${k}`;
+      }
+      failures.push(`${source} → '${value}'`);
+    }
   }
+
+  assert.equal(failures.length, 0,
+    `以下映射值无法精确命中任何路径:\n${failures.join('\n')}`);
+
+  // 记录用于后续参考
+  if (global.TEST_MAPPING_HITS === undefined) {
+    global.TEST_MAPPING_HITS = hitRecord;
+  }
+});
+
+test("COLOR_HUE键的可达性：每个键至少在某个colorsUnder结果里出现", () => {
+  const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
+  const assets = createAssets(offlineBackend(index));
+
+  // 收集所有含颜色分支的父节点路径
+  const colorParentPaths = [];
+  function traverse(node, path = '') {
+    if (!node || typeof node !== 'object') return;
+    for (const key in node) {
+      if (key.startsWith('_')) continue;
+      const child = node[key];
+      const newPath = path ? path + '.' + key : key;
+      if (typeof child === 'object' && child !== null) {
+        const childKeys = Object.keys(child).filter(k => !k.startsWith('_'));
+        if (childKeys.some(k => /^[a-z]/.test(k))) {
+          colorParentPaths.push(newPath);
+        }
+        traverse(child, newPath);
+      }
+    }
+  }
+  traverse(index.tree);
+
+  // 对 COLOR_HUE 的每个键，检查是否在某个 colorsUnder 结果里出现
+  const UNUSED_COLORS = new Set();
+  const missingKeys = [];
+
+  for (const key of Object.keys(COLOR_HUE)) {
+    let found = false;
+    for (const path of colorParentPaths) {
+      const colors = assets.colorsUnder(path);
+      if (colors.includes(key)) {
+        found = true;
+        break;
+      }
+    }
+    if (!found && !UNUSED_COLORS.has(key)) {
+      missingKeys.push(key);
+    }
+  }
+
+  assert.equal(missingKeys.length, 0,
+    `以下颜色键不可达:\n${missingKeys.join(', ')}`);
 });
