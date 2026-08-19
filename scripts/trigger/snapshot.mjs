@@ -55,6 +55,11 @@ export function snapshotAction(action, env) {
     : {tokenId: null, uuid: null, x: 0, y: 0, elevation: 0, width: 1, height: 1,
        w: gridSize, h: gridSize, radiusPx: gridSize / 2};
 
+  // 提取伤害/治疗时看哪个资源，由动作自身决定：大多数打 health，但 control/illusion/oblivion/soul
+  // 四个符文默认打 morale（见 crucible/module/const/spellcraft.mjs）。快照下方 usage.resource 字段
+  // 就是这个值（已经在这里做过一次 "health" 兜底），不要在下面重复硬编码 "health" 再兜一遍。
+  const resourceName = action.usage?.resource ?? "health";
+
   const targets = [];
   const byTarget = action.eventsByTarget ?? new Map();
   for (const [actor, t] of (action.targets ?? new Map())) {
@@ -74,12 +79,25 @@ export function snapshotAction(action, env) {
     }
     // event.resources 是 CrucibleAction#_resolveEventStream 结算后写回的最终资源增量数组：
     // [{resource, delta, damageType, restoration}]（见 crucible/module/models/action.mjs）。
-    // 没有 ev.resource.health 这个字段——resources 恒为数组，需要按 resource 名过滤。
+    // 没有 ev.resource.health 这个字段——resources 恒为数组，需要按 resource 名过滤；按 resourceName
+    // 而非硬编码 "health"，因为部分符文（control/illusion/oblivion/soul）打的是 morale。
+    // 按 delta 的符号判断伤害/治疗而非 restoration 标注：delta 是结算后唯一如实反映最终发生了什么的
+    // 字段，restoration 在合并场景下未必跟随最终结算结果。
+    // 双持等场景对同一目标会有多条负 delta（见「双持」测试），因此伤害总量必须累加而非覆盖，与 healed
+    // 保持对称。type 取伤害量最大的一条决定（视觉上应由主要伤害来源决定元素层）；量相同则取先出现的
+    // 一条——用严格大于比较实现，后来者不会覆盖已记录的同量者。
+    let damageMax = -Infinity;
     for (const ev of (group?.all ?? [])) {
       for (const r of (ev?.resources ?? [])) {
-        if (r.resource !== "health") continue;
+        if (r.resource !== resourceName) continue;
         if (r.delta < 0) {
-          damage = {total: -r.delta, type: r.damageType ?? action.usage?.damageType ?? null, resource: "health"};
+          const amount = -r.delta;
+          damage ??= {total: 0, type: null, resource: resourceName};
+          damage.total += amount;
+          if (amount > damageMax) {
+            damageMax = amount;
+            damage.type = r.damageType ?? action.usage?.damageType ?? null;
+          }
         } else if (r.delta > 0) {
           healed += r.delta;
         }

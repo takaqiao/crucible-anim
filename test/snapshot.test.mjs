@@ -108,6 +108,48 @@ test("targets[].damage/healed 从 event.resources 数组提取（真实事件结
   assert.equal(heal.healed, 4);
 });
 
+test("双持攻击同一目标时伤害应累加，type 取伤害量最大的一条", () => {
+  const targetToken = {id: "t1", uuid: "Scene.s.Token.t1",
+    document: {elevation: 0, width: 1, height: 1}, center: {x: 600, y: 500}};
+  const targetActor = {id: "a1"};
+  // 双持角色对同一目标必然产生两个 strike 事件（见 crucible/module/const/action.mjs
+  // 的 strike 标签 roll(target)：遍历 usage.strikes.entries()），各自带一条 resource:"health" 的 delta。
+  const mainHand = {resources: [{resource: "health", delta: -6, damageType: "slashing"}], effects: []};
+  const offHand = {resources: [{resource: "health", delta: -4, damageType: "piercing"}], effects: []};
+  const action = {
+    id: "test.dualWield", name: "双持", tags: new Set(),
+    target: {type: "single", number: 1, distance: 1, scope: 2},
+    range: {minimum: 0, maximum: 1}, cost: {action: 1, focus: 0, heroism: 0, health: 0},
+    region: null, actor: {type: "hero"},
+    token: {id: "t0", document: {elevation: 0, width: 1, height: 1}, center: {x: 500, y: 500}},
+    targets: new Map([[targetActor, {token: targetToken}]]),
+    usage: {damageType: "slashing", isAttack: true, isRanged: false},
+    eventsByTarget: new Map([[targetActor, {all: [mainHand, offHand], roll: []}]])
+  };
+  const s = snapshotAction(action, ENV);
+  assert.deepEqual(s.targets[0].damage, {total: 10, type: "slashing", resource: "health"});
+});
+
+test("morale 资源动作（control/illusion/oblivion/soul 系）按 usage.resource 提取伤害，不硬编码 health", () => {
+  const targetToken = {id: "t1", uuid: "Scene.s.Token.t1",
+    document: {elevation: 0, width: 1, height: 1}, center: {x: 600, y: 500}};
+  const targetActor = {id: "a1"};
+  const moraleEvent = {resources: [{resource: "morale", delta: -5, damageType: "psychic"}], effects: []};
+  const action = {
+    id: "spell.oblivion.test", name: "湮灭术", tags: new Set(["spell"]),
+    target: {type: "single", number: 1, distance: 5, scope: 2},
+    range: {minimum: 0, maximum: 10}, cost: {action: 1, focus: 1, heroism: 0, health: 0},
+    region: null, actor: {type: "hero"},
+    token: {id: "t0", document: {elevation: 0, width: 1, height: 1}, center: {x: 500, y: 500}},
+    targets: new Map([[targetActor, {token: targetToken}]]),
+    usage: {damageType: "psychic", isAttack: true, isRanged: true, resource: "morale"},
+    eventsByTarget: new Map([[targetActor, {all: [moraleEvent], roll: []}]])
+  };
+  const s = snapshotAction(action, ENV);
+  assert.deepEqual(s.targets[0].damage, {total: 5, type: "psychic", resource: "morale"});
+  assert.equal(s.usage.resource, "morale");
+});
+
 test("快照是纯数据，JSON 往返后完全相等", () => {
   const action = {
     id: "defend", name: "防御", tags: new Set(["generic"]),
