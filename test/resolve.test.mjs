@@ -134,3 +134,81 @@ test("firstMatch 捕获 when() 抛出的异常并记录带规则 id 的警告，
     `警告内容应包含槽位名 "cast"，实际：${JSON.stringify(plan.warnings)}`
   );
 });
+
+/* ---- rule.once：解析器级别的机制测试，不依赖兵库里具体有哪几条区域规则 ---- */
+
+/** 造一条只有单条规则的 travel 槽，用来观察 resolve 怎么调它的 build。 */
+const probeArmory = (rule, calls) => ({
+  ...ARMORY,
+  travel: [{
+    pri: 900, when: () => true,
+    build: (s, ctx, target) => { calls.push(target); return {kind: "effect", file: "探针"}; },
+    ...rule
+  }]
+});
+
+test("rule.once 让 build 每动作只调一次，并默认锚在施法者", () => {
+  assert.ok(strike.targets.length > 1, "探针动作必须多目标，否则测不出每目标与每动作的差别");
+  const calls = [];
+  const plan = resolve(strike, {assets: mkAssets(), armory: probeArmory({id: "一次", once: true}, calls)});
+  const cues = plan.cues.filter(c => c.slot === "travel");
+  assert.equal(calls.length, 1, `once 规则的 build 每动作只该调 1 次，实际 ${calls.length} 次`);
+  assert.equal(cues.length, 1);
+  assert.equal(calls[0], strike.targets[0], "once 规则应收到 targets[0] 作代表目标");
+  assert.deepEqual(cues[0].at, {ref: "origin"}, "once 规则默认锚在施法者");
+});
+
+test("rule.once 在零目标动作上仍出内容，代表目标为 null", () => {
+  const calls = [];
+  const plan = resolve({...strike, targets: []},
+                       {assets: mkAssets(), armory: probeArmory({id: "一次", once: true}, calls)});
+  assert.equal(plan.cues.filter(c => c.slot === "travel").length, 1,
+    "区域/自身特效在没有目标时也该出内容");
+  assert.deepEqual(calls, [null], "零目标时代表目标是 null，once 规则不得当它必然存在");
+});
+
+test("不带 once 的规则仍是每目标一次并锚在各自目标", () => {
+  const calls = [];
+  const plan = resolve(strike, {assets: mkAssets(), armory: probeArmory({id: "每目标"}, calls)});
+  const cues = plan.cues.filter(c => c.slot === "travel");
+  assert.equal(calls.length, strike.targets.length);
+  assert.equal(cues.length, strike.targets.length);
+  assert.deepEqual(cues.map(c => c.at.tokenId), strike.targets.map(t => t.tokenId));
+});
+
+test("once 规则自带的 at 覆盖默认的施法者锚点", () => {
+  const armory = {...ARMORY, travel: [{
+    id: "自带at", pri: 900, once: true, when: () => true,
+    build: () => ({kind: "effect", file: "x", at: {ref: "region"}})
+  }]};
+  const plan = resolve(strike, {assets: mkAssets(), armory});
+  assert.deepEqual(plan.cues.find(c => c.slot === "travel").at, {ref: "region"});
+});
+
+test("每槽只选一次规则：when() 异常的告警不按目标数重复", () => {
+  assert.ok(strike.targets.length > 1);
+  const armory = {...ARMORY, travel: [
+    {id: "低.兜底", pri: 10, when: () => true, build: () => null},
+    {id: "高.抛错", pri: 900, when: () => { throw new Error("模拟规则内部编程错误"); }, build: () => null}
+  ]};
+  const plan = resolve(strike, {assets: mkAssets(), armory});
+  const hits = plan.warnings.filter(w => String(w).includes("高.抛错"));
+  assert.equal(hits.length, 1,
+    `firstMatch 每槽只该跑一次、只告警一次，实际 ${hits.length} 次（按目标数重复）`);
+});
+
+test("build() 抛异常时降级成一条 warning，不带崩整个 resolve", () => {
+  // once 把 build 的输入域扩大了：零目标动作从此也会调 build、代表目标可能是 null，
+  // 这正是最容易踩空的新路径。没有这层 try/catch 时，一个 TypeError 会顺着调用栈把
+  // 整个 resolve() 带崩，该动作五个槽的 cue 全部消失。
+  const armory = {...ARMORY, travel: [{
+    id: "会抛的", pri: 900, when: () => true,
+    build: () => { throw new TypeError("Cannot read properties of null (reading 'x')"); }
+  }]};
+  const plan = resolve(strike, {assets: mkAssets(), armory});
+  assert.ok(plan, "整个 resolve 不该被一条规则带崩");
+  assert.equal(plan.cues.some(c => c.slot === "travel"), false, "抛异常的那次产出应被丢掉");
+  assert.ok(plan.cues.some(c => c.slot === "impact"), "其余槽必须照常装配");
+  assert.ok(plan.warnings.some(w => String(w).includes("会抛的") && String(w).includes("travel")),
+    `降级必须留痕并点名规则与槽位：${JSON.stringify(plan.warnings)}`);
+});

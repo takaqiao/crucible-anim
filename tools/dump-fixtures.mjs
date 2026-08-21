@@ -46,6 +46,13 @@ export const GESTURE_TARGET = {
   ray: "ray", sense: "aura", step: "movement", strike: "single", surge: "ray",
   touch: "single", ward: "self"
 };
+/**
+ * 每种 target.type 一个规范摆位。**注意 rotation 一律为 0、cone 的 angle 只有 60/120**：
+ * 真实放置时 rotation 由玩家鼠标现算（crucible 的 dice/action-use-dialog.mjs 按
+ * directionDelta 吸附后写进 shape.rotation），compendium 里没有「真值」可抽，
+ * 这份语料天然覆盖不到旋转。任何依赖模板朝向/张角的规则都不能靠这里证伪，
+ * 必须在 test/armory-travel.test.mjs 的「模板几何」一组里就地合成旋转过的 region。
+ */
 const TARGET_REGION = {
   blast: {type: "circle", x: 900, y: 500, radius: 200},
   cone: {type: "cone", x: 500, y: 500, radius: 300, angle: 60, rotation: 0},

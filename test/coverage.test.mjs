@@ -85,3 +85,15 @@ test("降级次数不超过阈值", () => {
   const rate = diverged / total;
   assert.ok(rate < 0.15, `降级率 ${(rate * 100).toFixed(1)}%，超过 15% 说明兵库路径写错了`);
 });
+
+test("兵库规则不抛异常：全量 fixture 的 plan.warnings 恒为空", () => {
+  // firstMatch / runBuild 会把规则抛出的异常降级成一条 warning 而不是让 resolve 崩掉。
+  // 这条断言保证「降级」不会变成「无人察觉」：正常代码路径上一条警告都不该有。
+  // （coneYScale 的张角截断告警也走这里，所以真实语料里出现超范围张角同样会被点出来。）
+  const noisy = [];
+  for (const s of actions) {
+    const plan = resolve(s, {assets: mk(), armory: ARMORY});
+    for (const w of plan?.warnings ?? []) noisy.push(`${s.id}: ${w}`);
+  }
+  assert.deepEqual(noisy.slice(0, 10), [], `${noisy.length} 条规则告警`);
+});

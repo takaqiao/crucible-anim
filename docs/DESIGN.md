@@ -364,7 +364,13 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
 
 ### 6.4 六级优先级
 
-规则形如 `{id, pri, when(s), build(s, ctx)}`，槽内按 `pri` 降序取第一个 `when` 为真者：
+规则形如 `{id, pri, once?, when(s), build(s, ctx, target, built)}`，槽内按 `pri` 降序取第一个 `when` 为真者；
+`once: true` 表示这条规则每个动作只调一次 `build`（默认锚在施法者，代表目标为 `targets[0] ?? null`，
+零目标时照样出内容），不置位则每个目标各调一次并锚在该目标。区域与自身特效用前者，投射物与近战用后者；
+两种都可以在返回的 cue 里自带 `at` 覆盖默认锚点（模板类特效就靠这一条把锚点摆回模板起点）。
+第四个形参 `built` 是同一目标可见的前序槽 cue（按槽名索引），用于「素材自带闪爆时后面的槽让位」
+这类交接，见 `scripts/armory/flash.mjs`。
+
 
 | pri | 层级 | 例 |
 | --- | --- | --- |
