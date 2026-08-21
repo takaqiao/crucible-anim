@@ -84,7 +84,6 @@ function pickedPaths(src) {
  *      测试会红，强制它被删掉。白名单因此会自我清算，不需要谁记得回来打扫。
  */
 const LEGACY_UNVERIFIED = new Set([
-  "jb2a.magic_missile",              // travel.mjs generic.travel，待 Task 10 迁移
   "jb2a.impact.004",                 // impact.mjs generic.impact，待 Task 11 迁移
   "jb2a.healing_generic.burst",      // aftermath.mjs generic.aftermath，待 Task 12 迁移
   "jb2a.extras.tmfx.outflow.circle.01" // persist.mjs generic.persist，待 Task 12 迁移
@@ -124,17 +123,18 @@ test("兵库规则引用的每条 DB 路径都能在 ASSET-NOTES 主表里查到
   assert.deepEqual(bad, [], `${bad.length} 条兵库路径没有 ASSET-NOTES 依据或已被否决：\n${bad.join("\n")}`);
 });
 
-test("LEGACY_UNVERIFIED 白名单不许新增：条目数与内容锁死为当前已知的 4 条", () => {
+test("LEGACY_UNVERIFIED 白名单不许新增：条目数与内容锁死为当前已知的 3 条", () => {
+  // Task 10 把 travel.mjs 的 generic.travel 迁到了 ASSET-NOTES 认可的路径，
+  // 原来的 "jb2a.magic_missile" 条目已从这里删除——见下一条「自动失效」测试。
   const KNOWN = [
     "jb2a.extras.tmfx.outflow.circle.01",
     "jb2a.healing_generic.burst",
-    "jb2a.impact.004",
-    "jb2a.magic_missile"
+    "jb2a.impact.004"
   ];
-  assert.ok(LEGACY_UNVERIFIED.size <= 4,
-    `LEGACY_UNVERIFIED 有 ${LEGACY_UNVERIFIED.size} 条，超过已知的 4 条——新增白名单项需要走评审，不能随手加`);
+  assert.ok(LEGACY_UNVERIFIED.size <= 3,
+    `LEGACY_UNVERIFIED 有 ${LEGACY_UNVERIFIED.size} 条，超过已知的 3 条——新增白名单项需要走评审，不能随手加`);
   assert.deepEqual([...LEGACY_UNVERIFIED].sort(), KNOWN,
-    "LEGACY_UNVERIFIED 的内容与已知的 4 条不完全一致（可能被新增或替换了未经评审的条目）");
+    "LEGACY_UNVERIFIED 的内容与已知的 3 条不完全一致（可能被新增或替换了未经评审的条目）");
 });
 
 test("LEGACY_UNVERIFIED 白名单里每一条都仍被某个兵库文件实际引用（否则应删除）", () => {
