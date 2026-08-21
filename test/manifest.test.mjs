@@ -64,12 +64,14 @@ test("常量自洽", async () => {
   assert.equal(C.META_KEY, "cav");
 });
 
-test("resolver 与 armory 不得引用 Foundry 全局", async () => {
+test("resolver 与 armory 不得引用 Foundry 全局或 Math.random", async () => {
   const files = [
     ...walk(join(ROOT, "scripts/resolver")),
     ...walk(join(ROOT, "scripts/armory"))
   ];
-  const banned = /\b(game|canvas|Hooks|Sequencer|ui|CONFIG)\s*\./;
+  // 随机性必须经 ctx.rng()（mulberry32，seed 确定）：Math.random 会让同 seed 的两次
+  // resolve() 结果不同，多客户端画面不同步，且测试不可复现——这是最难靠人工发现的一类回归。
+  const banned = /\b(game|canvas|Hooks|Sequencer|ui|CONFIG)\s*\.|Math\.random\s*\(/;
 
   // 剥离注释的辅助函数
   function stripComments(src) {
@@ -93,6 +95,6 @@ test("resolver 与 armory 不得引用 Foundry 全局", async () => {
   for (const f of files) {
     const src = readFileSync(f, "utf8");
     const stripped = stripComments(src);
-    assert.ok(!banned.test(stripped), `${f} 引用了 Foundry 全局`);
+    assert.ok(!banned.test(stripped), `${f} 引用了 Foundry 全局或 Math.random`);
   }
 });

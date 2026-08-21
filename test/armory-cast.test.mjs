@@ -37,15 +37,42 @@ test("未特化的姿态回落到通用法术规则", () => {
   assert.equal(c?.rule, "spell.composed");
 });
 
-test("12 个符文的通用施法圈都能解析且颜色各异", () => {
+test("12 个符文的通用施法圈都能解析、颜色各异，且色相补偿确实生效", () => {
+  // 阈值原为 >= 6：把 spell.composed 的 filter 硬改成恒 null 也能通过（12 个符文本身
+  // 就落到 8 个不同 file，只看 file 这一半就已经 >= 6）。收紧到 >= 10（12 符文里最多
+  // 允许 2 个因为映射到同一个 RUNE_COLOR 目标色而真正撞车，如 kinesis/soul 都是 teal），
+  // 并单独断言足够多的符文带非零 hue——这才是「色相补偿没被整体丢弃」的直接证据。
   const files = new Set();
+  let withHue = 0;
   for (const rune of ["control", "death", "earth", "flame", "frost", "illumination",
                       "illusion", "kinesis", "life", "oblivion", "soul", "storm"]) {
     const c = castCue(byId(`spell.${rune}.surge`));
     assert.ok(c?.file, `${rune} 无 cast 特效`);
     files.add(`${c.file}|${JSON.stringify(c.filter)}`);
+    if (c.filter?.data?.hue) withHue++;
   }
-  assert.ok(files.size >= 6, `12 个符文只产出 ${files.size} 种视觉，配色没起作用`);
+  assert.ok(files.size >= 10, `12 个符文只产出 ${files.size} 种视觉，配色没起作用`);
+  assert.ok(withHue >= 5, `只有 ${withHue} 个符文带非零 hue 补偿，色相补偿可能被整体丢弃`);
+});
+
+test("conjure 姿态命中专属的召唤法阵规则", () => {
+  const c = castCue(byId("spell.control.conjure"));
+  assert.equal(c?.rule, "spell.gesture.conjure");
+});
+
+test("aspect 姿态命中专属的自身增益规则", () => {
+  const c = castCue(byId("spell.control.aspect"));
+  assert.equal(c?.rule, "spell.gesture.aspect");
+});
+
+test("healing 标签命中手部绿光规则", () => {
+  const c = castCue(byId("medicinalCompound"));
+  assert.equal(c?.rule, "tag.healing");
+});
+
+test("skill 标签（不带 healing）命中轻量闪光规则", () => {
+  const c = castCue(byId("alchemicalResolve"));
+  assert.equal(c?.rule, "tag.skill");
 });
 
 test("重武器近战不出 cast 内容", () => {
