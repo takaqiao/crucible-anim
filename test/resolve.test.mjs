@@ -82,16 +82,55 @@ test("build 返回 null 时该槽静默跳过，不产生空 cue", () => {
 });
 
 test("每个 cue 的数值字段无 NaN / undefined / 负时长", () => {
+  // CUE_DEFAULTS 里所有数值字段。waitUntilFinished 允许为负（与下一段重叠是有意的时序手法），
+  // elevation 默认 null、允许为数字但不作正负约束；zIndex 额外要求非负整数。
+  const NUMERIC_FIELDS = [
+    "delay", "duration", "fadeIn", "fadeOut", "opacity", "objectScale",
+    "zIndex", "playbackRate", "startTime", "waitUntilFinished",
+    "extraEndDuration", "volume", "elevation"
+  ];
+  const NO_SIGN_CHECK = new Set(["waitUntilFinished", "elevation"]);
   for (const s of actions.slice(0, 120)) {
     const plan = resolve(s, {assets: mkAssets(), armory: ARMORY});
     if (!plan) continue;
     for (const c of plan.cues) {
-      for (const k of ["delay", "duration", "fadeIn", "fadeOut", "opacity", "objectScale"]) {
+      for (const k of NUMERIC_FIELDS) {
         const v = c[k];
         if (v === undefined || v === null) continue;
         assert.ok(Number.isFinite(v), `${s.id}.${c.rule}.${k} = ${v}`);
-        if (k !== "waitUntilFinished") assert.ok(v >= 0, `${s.id}.${c.rule}.${k} 为负`);
+        if (k === "zIndex") {
+          assert.ok(Number.isInteger(v) && v >= 0, `${s.id}.${c.rule}.zIndex 应为非负整数，实际 ${v}`);
+        } else if (!NO_SIGN_CHECK.has(k)) {
+          assert.ok(v >= 0, `${s.id}.${c.rule}.${k} 为负`);
+        }
       }
     }
   }
+});
+
+test("firstMatch 捕获 when() 抛出的异常并记录带规则 id 的警告，不静默吞掉", () => {
+  const armory = {
+    ...ARMORY,
+    cast: [
+      {id: "低.兜底", pri: 10, when: () => true, build: () => ({kind: "effect", file: "兜底"})},
+      {
+        id: "高.抛错", pri: 900,
+        when: () => { throw new Error("模拟规则内部编程错误，如访问 s.spell.rune 而 s.spell 为 null"); },
+        build: () => ({kind: "effect", file: "高"})
+      }
+    ]
+  };
+  const plan = resolve(strike, {assets: mkAssets(), armory});
+  const cast = plan.cues.find(c => c.slot === "cast");
+  assert.equal(cast.rule, "低.兜底", "抛异常的规则应被当作不适用，降级到下一条");
+  assert.ok(Array.isArray(plan.warnings), "解析结果应带 warnings 数组");
+  assert.ok(plan.warnings.length >= 1, "应至少记录一条警告");
+  assert.ok(
+    plan.warnings.some(w => String(w).includes("高.抛错")),
+    `警告内容应包含出错规则的 id "高.抛错"，实际：${JSON.stringify(plan.warnings)}`
+  );
+  assert.ok(
+    plan.warnings.some(w => String(w).includes("cast")),
+    `警告内容应包含槽位名 "cast"，实际：${JSON.stringify(plan.warnings)}`
+  );
 });

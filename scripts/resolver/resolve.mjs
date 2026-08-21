@@ -14,12 +14,21 @@ const CUE_DEFAULTS = {
   persist: false, tieTo: null, extraEndDuration: 0, volume: 1
 };
 
-/** 槽内按 pri 降序取第一个 when 为真的规则。 */
-function firstMatch(rules, s, ctx) {
+/**
+ * 槽内按 pri 降序取第一个 when 为真的规则。
+ * when() 抛异常时视作不适用、降到下一条——但要经 ctx.warn 留痕（带规则 id、槽位名、
+ * 错误信息），否则编程错误与「规则本来就不适用」在表现上完全无法区分。
+ */
+function firstMatch(rules, s, ctx, slot) {
   const sorted = [...rules].sort((a, b) => b.pri - a.pri);
   for (const r of sorted) {
     let ok = false;
-    try { ok = r.when(s, ctx); } catch { ok = false; }
+    try {
+      ok = r.when(s, ctx);
+    } catch (err) {
+      ctx.warn(`[${slot}] 规则 "${r.id}" 的 when() 抛出异常：${err?.message ?? err}`);
+      ok = false;
+    }
     if (ok) return r;
   }
   return null;
@@ -43,7 +52,7 @@ export function resolve(snapshot, {assets, armory}) {
   const cues = [];
 
   // S1 cast：整个动作一次，锚在施法者
-  const castRule = firstMatch(armory.cast, snapshot, ctx);
+  const castRule = firstMatch(armory.cast, snapshot, ctx, "cast");
   if (castRule) {
     cues.push(...normalize(castRule.build(snapshot, ctx), "cast", castRule.id, {ref: "origin"}));
   }
@@ -51,7 +60,7 @@ export function resolve(snapshot, {assets, armory}) {
   // S2–S4：每个目标各解析一次
   for (const target of snapshot.targets) {
     for (const slot of ["travel", "impact", "aftermath"]) {
-      const rule = firstMatch(armory[slot], snapshot, ctx);
+      const rule = firstMatch(armory[slot], snapshot, ctx, slot);
       if (!rule) continue;
       const at = {ref: "target", tokenId: target.tokenId, uuid: target.uuid,
                   x: target.x, y: target.y};
@@ -60,7 +69,10 @@ export function resolve(snapshot, {assets, armory}) {
   }
 
   if (!cues.length) return null;
-  return {v: PLAN_VERSION, seed: snapshot.seed, source: snapshot.id, region: snapshot.region ?? null, cues};
+  return {
+    v: PLAN_VERSION, seed: snapshot.seed, source: snapshot.id, region: snapshot.region ?? null,
+    cues, warnings: ctx.warnings
+  };
 }
 
 /**
@@ -71,14 +83,17 @@ export function resolve(snapshot, {assets, armory}) {
  */
 export function resolveEffect(effectSnapshot, {assets, armory}) {
   const ctx = createContext({assets, snapshot: effectSnapshot, seed: effectSnapshot.seed});
-  const rule = firstMatch(armory.persist, effectSnapshot, ctx);
+  const rule = firstMatch(armory.persist, effectSnapshot, ctx, "persist");
   if (!rule) return null;
   const at = {ref: "target", tokenId: effectSnapshot.target.tokenId,
               uuid: effectSnapshot.target.uuid,
               x: effectSnapshot.target.x, y: effectSnapshot.target.y};
   const cues = normalize(rule.build(effectSnapshot, ctx), "persist", rule.id, at);
   if (!cues.length) return null;
-  return {v: PLAN_VERSION, seed: effectSnapshot.seed, source: effectSnapshot.statusId, cues};
+  return {
+    v: PLAN_VERSION, seed: effectSnapshot.seed, source: effectSnapshot.statusId,
+    cues, warnings: ctx.warnings
+  };
 }
 
 export {SLOTS};
