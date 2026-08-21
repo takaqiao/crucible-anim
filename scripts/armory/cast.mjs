@@ -196,7 +196,7 @@ export default [
   },
 
   /**
-   * 兜底：任何非攻击动作给一个中性施法圈；有目标的攻击动作起手交给 travel/impact 段。
+   * 兜底：任何非攻击动作给一个中性起手感；有目标的攻击动作起手交给 travel/impact 段。
    *
    * 但 travel/impact 都是按 snapshot.targets 循环触发的——零目标时它们根本不会执行。
    * Crucible 的 composed 标签动作（见 action.mjs 的 initialize()）无条件把 isAttack
@@ -204,28 +204,43 @@ export default [
    * gesture）也是 isAttack === true 但 targets 为空。这类动作必须靠 cast 段自己扛，
    * 否则整条链断掉、零 cue。因此这里判断的是「攻击且有目标」才让路，不是单看 isAttack。
    *
-   * 素材：ASSET-NOTES 的「被否掉的候选 · cast 槽」明确否掉了旧用的 jb2a.cast_generic.03——
-   * 那是一发命中/爆炸素材（第 15 帧整幅画面变成纯白过曝球、第 20 帧碎裂甩出放射线），
-   * 放在 cast 槽会让观众以为技能已经打中了，且 9 个颜色分支在过曝下分不出差别、配不满
-   * 12 符文色。这条规则实测覆盖 434 个 fixture 里的 185 个（全部是 spell===null 的
-   * 普通武器动作/零目标动作），是 cast 槽命中率最高的规则，选材必须认真对待。改用
-   * jb2a.magic_signs.circle.02.evocation.loop——与 spell.composed 同一条素材，逐帧
-   * alpha 恒定 54.5、真无缝 loop，可以在任意一点截断不露接缝，12 色分支齐全（虽然
-   * 这条规则命中的 185 个 fixture 里 s.spell 全为 null，实际总是落到 "blue"，但保留
-   * {color} 接口以防万一 spell.composed 的 build() 意外失败而回落到这里）。duration
-   * 截在 700ms，比 spell.composed 的 1500ms 更短——它是覆盖率最高的默认兜底，包含大量
-   * 普通近战挥砍前的零目标/无目标动作，不宜像专门的法术起手那样长。
+   * 素材（第二次订正）：第一次订正把旧用的 jb2a.cast_generic.03（否决清单第一条，命中/
+   * 爆炸素材）换成了 jb2a.magic_signs.circle.02.evocation.loop——但那是符文法阵，和
+   * spell.composed 用的是同一条素材。这条规则实测覆盖 434 个 fixture 里的 185 个
+   * （全部是 spell===null：战士的防御/恢复、各类武技天赋、技能检定、社交动作），给这些
+   * 非法术动作脚下点一圈塑能符文阵语义是错的——桌上看会是「战士摆防御姿态，地上浮起法阵」，
+   * 且它与 spell.composed 撞素材，二者仅靠「spell===null 时 runeColor()??"blue" 恒为
+   * 蓝」这一点弱化学区分，视觉上等于没有区分度。
+   *
+   * 改用 jb2a.cast_generic.01：ASSET-NOTES 标注为 [近战/远程蓄力备选]，不是法阵/符文，
+   * 是一圈从中心快速外扩又收回的抽象能量脉冲（"先炸开再收回"，帧 2-8 外扩、第 8 帧 alpha
+   * 峰值 112、之后收回消失），没有任何具象的施法/武器/社交道具意象——足够抽象，能同时
+   * 罩住武技、恢复、技能检定这些差异很大的动作，不会把非法术动作误读成"正在施法"。自带
+   * 闪爆列是「否」（与 jb2a.cast_generic.02 一样全程无爆发闪光），不需要为避免与 travel/
+   * impact 的闪光层双闪做任何额外处理——这也是没选同样中性的 blfx.spell.cast.light_flare
+   * （tag.skill 已用，且自带闪爆="是"）或 eskie.casting.physical.01（自带闪爆="是"，且
+   * "近战起手/蓄力"的火花环对技能检定/社交类动作偏"用力"）的原因之一。
+   *
+   * 参数：21 帧 @30fps=700ms，前 2 帧（f0-1，约 67ms）是空帧——但短于 fadeIn:200，我们
+   * 自己的淡入还在爬升阶段时素材内容就已经出现，会被自然揉进去，不需要额外 startTime
+   * 跳过。备注没有标出「长空尾」一类的坑（"之后收回消失"暗示内容持续到收尾），故不加
+   * duration 截断，让 21 帧自然播完。不再是地面俯视圆阵，而是罩在施法者身上的一圈脉冲，
+   * 去掉 belowTokens（不再需要压在 token 下方）。只有 4 个颜色分支（实测
+   * dark_purple/dark_red/blue/yellow，与同族 02 的 4 分支不完全相同——02 是
+   * dark_purple/dark_red/blue/green），配不满 12 符文色，但这条规则命中的 185 个
+   * fixture 里 spell 全为 null，实际总落到 "blue"；保留 {color} 接口只是防御性地兼容
+   * spell.composed 的 build() 意外失败而回落到这里的边界情况。
    */
   {
     id: "generic.cast", pri: 10,
     when: () => true,
     build: (s, ctx) => {
       if (s.usage.isAttack && s.targets.length) return null;
-      const fx = ctx.pick("jb2a.magic_signs.circle.02.evocation.loop", {color: ctx.runeColor() ?? "blue"});
+      const fx = ctx.pick("jb2a.cast_generic.01", {color: ctx.runeColor() ?? "blue"});
       if (!fx) return null;
       return {
         file: fx.file, objectScale: 0.9 * ctx.geom.sizeScale(),
-        belowTokens: true, fadeIn: 200, fadeOut: 400, duration: 700,
+        fadeIn: 200, fadeOut: 400,
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null
       };
     }
