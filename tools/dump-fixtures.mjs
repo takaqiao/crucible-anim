@@ -139,8 +139,15 @@ function hashSeed(s) {
 }
 
 function makeToken(pos, {width = 1} = {}) {
+  const tokenId = `tok-${pos.x}-${pos.y}`;
   return {
-    tokenId: `tok-${pos.x}-${pos.y}`, x: pos.x, y: pos.y, elevation: 0,
+    // uuid 不可省：生产环境 trigger/snapshot.mjs 的 tokenGeom() 一定会写它
+    // （`token.document?.uuid`），语料缺它会让一整批断言退化成同义反复——例如
+    // armory-persist 的 `assert.notEqual(c.tieTo, e.target.uuid)` 变成
+    // 「真字符串 ≠ undefined」恒真，「绑到 token 而不是效果」这条回归一条都抓不住；
+    // Task 14 resolveRefIn 的 `fromUuidSync(at.uuid)` 主路径也一次都行使不到。
+    tokenId, uuid: `Scene.s.Token.${tokenId}`,
+    x: pos.x, y: pos.y, elevation: 0,
     width, height: width, radiusPx: (width * GRID) / 2,
     w: width * GRID, h: width * GRID
   };

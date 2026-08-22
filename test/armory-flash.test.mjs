@@ -79,15 +79,19 @@ function travelRuleSources() {
 
 /**
  * 把一个动作解析成 {targetTokenId → {travel, impact, aftermath}}，与 resolve.mjs 给
- * build() 的那份「前序槽视图」同构：once 规则的产出不带 tokenId、不属于任何单个目标，
- * 但对每个目标都可见。
+ * build() 的那份「前序槽视图」同构：once 规则的产出 forTarget 为 null、不属于任何单个
+ * 目标，但对每个目标都可见。
+ *
+ * 按 resolve.mjs 注入的 `forTarget` 分组，**不按 `at.tokenId` 反推**：锚点是「画在哪」，
+ * forTarget 才是「讲的是谁」。飞行物的锚点搬回施法者之后两者就不再一致（travel.mjs 的
+ * originAnchor），照旧反推会让整个 travel 槽从每个目标的视图里掉出去、双闪守卫静默失效。
  */
 function byTarget(snapshot) {
   const cues = resolve(snapshot, {assets: mk(), armory: ARMORY})?.cues ?? [];
   const out = new Map();
   for (const t of snapshot.targets) {
-    const own = c => c.at?.tokenId === t.tokenId;
-    const shared = c => c.at?.tokenId === undefined;
+    const own = c => c.forTarget === t.tokenId;
+    const shared = c => c.forTarget === null;
     const of = (slot, pick) => cues.filter(c => c.slot === slot && pick(c));
     out.set(t.tokenId, {
       travel: of("travel", c => own(c) || shared(c)),

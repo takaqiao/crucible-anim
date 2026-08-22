@@ -109,10 +109,38 @@ function coneYScale(angleDeg, ctx) {
 /**
  * 模板类特效（ray/cone）的锚点：起点在模板本身（锥尖 / 线首），不在某个目标身上，
  * 也不一定精确等于施法者 token 的中心。这两条规则都声明了 once: true，resolve.mjs
- * 因此把默认锚点给成 {ref:"origin"}；这里再把模板起点的坐标显式带上，让 stretchTo
- * 的终点与起点出自同一套几何——normalize() 写的是 `at: c.at ?? at`，规则自带 at 直接生效。
+ * 因此把默认锚点给成施法者；这里再把模板起点的坐标显式带上，让 stretchTo 的终点与
+ * 起点出自同一套几何——normalize() 写的是 `at: c.at ?? at`，规则自带 at 直接生效。
+ *
+ * **ref 用 "point" 而不是 "origin"**：这是一个冻结坐标，不是「施法者」这个身份。
+ * 播放层的 resolveRef 对 "origin"/"target" 会优先解析成真实 placeable（attachTo /
+ * copySprite 必须拿到 placeable），只有 "point" 保证原样返回 {x,y}。写成 "origin"
+ * 的话，resolve.mjs 的 originAnchor 一旦带上施法者的 tokenId，这两条 cue 的锚点就会
+ * 被换成 token 中心——而它们的 stretchTo 终点（templateEnd）与 mask
+ * （play.mjs 的 regionMaskShape(plan.region)）仍然取自 region 坐标：起点、终点、遮罩
+ * 会来自两套原点，不是「差一点」而是几何自相矛盾，且一条 warning 都不会有。
  */
-const templateAnchor = s => ({ref: "origin", x: s.region.x, y: s.region.y});
+const templateAnchor = s => ({ref: "point", x: s.region.x, y: s.region.y});
+
+/**
+ * 投射物的锚点：起点在**施法者**，不在目标身上。
+ *
+ * 每目标规则的默认锚点是目标格（resolve.mjs 的槽装配），飞行物必须显式盖掉它——否则
+ * `at` 与 `stretchTo` 是同一个坐标，Sequencer 拿到的是一条零长射线：
+ *   · `_updateCurrentFilePath`（sequencer.js:16235-16255）在 `_initialize` 里以
+ *     showDistanceWarning=true 调用（15629），distance===0 时弹一条红色
+ *     ui.notifications.error（"You are stretching over a distance of 0…"）——每射一箭一条；
+ *   · `_getDistanceScaling`（16966-16985）算出 spriteScale = 0/textureWidth = 0，
+ *     `_applyDistanceScaling`（17014-17017）于是 `sprite.scale.set(0, 0)`，飞行物整个不可见。
+ * 两条都只在真渲染时才发生，headless 测试看不见——所以另有 test/play-contract.test.mjs
+ * 的「零长拉伸」用例把它变成 commit 前就红。
+ *
+ * 与 templateAnchor 相反，这里要的是**施法者这个身份**而不是一个冻结坐标：ref 用
+ * "origin" 并带上 tokenId/uuid，让施法者 token 的中心与体型参与 Sequencer 的源点换算。
+ */
+const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
+                            uuid: s.origin?.uuid ?? null,
+                            x: s.origin?.x, y: s.origin?.y});
 
 export default [
   // ---- 高优先级规则加在这里（Task 10） ----
@@ -122,8 +150,12 @@ export default [
    *
    * jb2a.ranged.beam.001.01.blue.30ft 91 帧 @30fps=3033ms。ASSET-NOTES 实测
    * f0-9 全空（333ms）——startTime 跳过；两端真正连通是 f36-73（1200-2433ms），
-   * f74 起立刻断开进入 17 帧死尾（567ms），duration 按 startTime 之后的播放时长
-   * 算：2433-333=2100，裁掉死尾。template=[200,200,200] 非空，确认可 stretchTo。
+   * f74 起立刻断开进入 17 帧死尾（567ms），duration 按「startTime 之后还播多久」
+   * 算：2433-333=2100，裁掉死尾（口径见 resolver/resolve.mjs 的 CUE_DEFAULTS.duration）。
+   * 注意 2433 这个绝对终点才是 Sequencer 认的数——播放层把这两个字段换算成
+   * `.timeRange(333, 2433)` 下发（player/play.mjs 的 applyTimeWindow）；直接
+   * `.startTime(333).duration(2100)` 只会播 1767ms，把 f36-73 的连通段砍掉三分之一。
+   * template=[200,200,200] 非空，确认可 stretchTo。
    *
    * 一次动作只有一条光束（once: true）：模板只有一条，罩住几个人跟画几条光束无关。
    * stretchTo 打的是 line 模板末端（x+cos(rot)*length, y+sin(rot)*length）而不是某个
@@ -288,6 +320,7 @@ export default [
       if (!fx) return null;
       return {
         file: fx.file,
+        at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
         objectScale: 1 * ctx.geom.sizeScale(),
         aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y},
@@ -422,6 +455,7 @@ export default [
       if (!fx) return null;
       return {
         file: fx.file,
+        at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
         objectScale: 1 * ctx.geom.sizeScale(),
         mirrorY: ctx.geom.onLeft(target),
@@ -479,6 +513,7 @@ export default [
       if (!fx) return null;
       return {
         file: fx.file, objectScale: 1 * ctx.geom.sizeScale(),
+        at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
         aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y},
               missed: target.results.some(r => r.result === 0 || r.result === 1)},

@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {readFileSync, existsSync} from "node:fs";
+import {readFileSync, readdirSync} from "node:fs";
 import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
@@ -36,6 +36,9 @@ test("每个 persist cue 都带 persist 与非空 tieTo，否则效果移除后�
       // 再钉住绑的是「效果」而不是「token」：绑到 target.uuid 一样是真值，但那样只在
       // token 被删除时才清理，状态移除后光效照样留着。
       assert.equal(c.tieTo, e.effectUuid, `${e.statusId} 的 tieTo 不是 effectUuid`);
+      // 对称自检：target.uuid 若为空，下面那条 notEqual 就退化成「真字符串 ≠ undefined」
+      // 恒真，「绑到 token 而不是效果」这个它自称要防的回归一条都抓不住。
+      assert.ok(e.target.uuid, `fixture ${e.statusId} 的 target 没有 uuid，notEqual 会退化成恒真`);
       assert.notEqual(c.tieTo, e.target.uuid, `${e.statusId} 绑到了 token 而不是效果`);
     }
   }
@@ -127,9 +130,15 @@ test("persist 规则不得自行声明 local / worldPersist —— 这两项是�
   }
 });
 
-test("播放层把持久化契约落到实处（play.mjs 一出现就生效）", {
-  skip: existsSync(join(ROOT, "scripts/player/play.mjs")) ? false : "play.mjs 尚未实现（Task 13）"
-}, () => {
+/**
+ * 三条契约的文本守卫。**不再用 existsSync 自我 skip**：那是一个「play.mjs 一改名，三条
+ * 契约的唯一防线就无声退场、npm test 仍然退出 0」的后门。文件不在就让它硬失败。
+ *
+ * 文本守卫只是第一道防线，它证明不了「这几行真的在执行路径上」——注释、死代码、动态
+ * 属性名都能整体绕过。真正承重的是 test/play-contract.test.mjs：那边用记录型 Sequence
+ * 替身驱动真实的 playPlan()，断言的是构造链上**实际**调了什么。两者一并保留。
+ */
+test("播放层把持久化契约落到实处", () => {
   const src = readFileSync(join(ROOT, "scripts/player/play.mjs"), "utf8");
   assert.match(src, /\.temporary\(\s*cue\.worldPersist\s*!==\s*true\s*\)/,
     "persist 分支必须写成 .temporary(cue.worldPersist !== true)：用 !== true 而不是 === false，"
@@ -139,6 +148,31 @@ test("播放层把持久化契约落到实处（play.mjs 一出现就生效）",
     + "每个客户端各自向全场广播预载请求并等所有人应答");
   assert.doesNotMatch(src, /executeForOthers|remote:\s*true/,
     "本模组不使用 Sequencer socket（DESIGN §5.4）");
+});
+
+test("契约 3：整个 scripts/ 都不碰 Sequencer 的跨客户端 socket", () => {
+  // 把面从一个文件扩到整个 scripts/：行为断言只能证明 seq.play() 没带那两个开关，
+  // 证不了别处没有别的入口。这一条本来就是一条**仓库级政策**而不是某个函数的行为。
+  const files = readdirSync(join(ROOT, "scripts"), {recursive: true, withFileTypes: true})
+    .filter(d => d.isFile() && d.name.endsWith(".mjs"))
+    .map(d => join(d.parentPath ?? d.path, d.name));
+  assert.ok(files.length >= 10, `只扫到 ${files.length} 个源文件，扫描面可疑`);
+  for (const file of files) {
+    // 注释里可以谈论它（play.mjs 的 seq.play 注释就在解释为什么不用），
+    // 所以只对剥掉块注释与整行行注释之后的代码正文断言。
+    const code = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    assert.doesNotMatch(code, /executeForOthers|\bremote:\s*true/,
+      `${file} 使用了 Sequencer 的跨客户端通路（DESIGN §5.4）`);
+    // endEffects / endAllEffects 的第二个参数 push 默认 **true**，那一路就走
+    // sequencerSocket（sequencer.js:11626-11639）——契约 3 的同一条红线，只是藏在
+    // 默认参数里。Task 15 的兜底清理必须显式传 false。
+    for (const [n, line] of code.split("\n").entries()) {
+      if (!/\bend(All)?Effects\(/.test(line)) continue;
+      assert.match(line, /,\s*false\s*\)/,
+        `${file}:${n + 1} 调 end(All)Effects 未显式传 push=false，第二个参数默认 true 会走 socket`);
+    }
+  }
 });
 
 test("治疗动作产出 aftermath 辉光", () => {

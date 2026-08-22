@@ -504,3 +504,38 @@ poison 的「标志更深」、runes 的「越暗越隐形」、energy_field 与
 6. **同族关系想当然**（约 11 行）—— 「和某某是同一素材换色」（实为另一次渲染，alpha PSNR 只有
    21-26 dB）、「唯一变体」（实为 10 个色支，说的是另一条路径）、「四个变体可互换」（实为 5 个
    且其中一个离群）、同名分支帧数不等长。判据：alpha 平面逐帧 PSNR + `colorsUnder` + 逐分支 ffprobe。
+
+---
+
+## 已知未补偿：`stretchTo` 素材两端的透明留白
+
+Sequencer 的距离缩放（`_getDistanceScaling`，sequencer.js:16966-16985）算的是
+`spriteScale = distance / (贴图宽 − startPoint − endPoint)`，两端 padding 取自
+`this.template?.startPoint ?? 0`（16971-16972）。而 `template` 只在**素材库条目**上才有：
+本模组喂给 `.file()` 的是**裸文件路径**，Sequencer 走 `SequencerFileBase.make(string)` →
+`SequencerFilePlain`（6363-6399），它没有 template，两端 padding 一律按 0 算。
+
+后果：整张贴图（含透明留白）被拉成射线长度，可见光束只占 `[startPoint, W − endPoint]`
+那一段，**首尾各缩进 `padding / W · d`**。逐条（padding 取自各素材模组自己的 `_templates`
+表，贴图宽 ffprobe 实测）：
+
+| 规则 | 素材 | `_template` 来源 | `[grid, start, end]` | 贴图宽 | 实际误差 |
+| --- | --- | --- | --- | --- | --- |
+| `spell.gesture.arrow` | jb2a.ranged.01.projectile.01 | jb2a `ranged` | `[200, 200, 200]` | 1600 | 首尾**各差 12.5%·d** |
+| `spell.gesture.ray` | jb2a.ranged.beam.001.01 | jb2a `ranged` | `[200, 200, 200]` | 1600 | 同上 |
+| `strike.thrown` | blfx.weapon.range.dagger1.throw1 | blfx `ranged` | `[200, 200, 200]` | 1600 | 同上 |
+| `generic.travel` | eskie.attack.ranged.arrow.ray | eskie `ray` | `[200, 0, 100]` | 1600 | 末端短 6.25%·d |
+| `spell.gesture.cone` | jb2a.breath_weapons.fire.cone | jb2a `cone` | `[100, 0, 0]` | 600 | **无误差** |
+
+4 格（400px）距离下，前三条素材两端各空约 50px（半个 token），素材烘焙在末端的命中星爆
+也随之落在目标前方。
+
+**Task 13 有意未补偿。** 修法是给这些 cue 传 `.template({gridSize, startPoint, endPoint})`
+（`CanvasEffect._initializeVariables` 15680 的 `this._template = this.data.template` 对裸路径
+一定生效，因为 16224 的 `if (file.template)` 不成立、不会覆盖它；注意三项全为 0 时
+`.template()` 会 throw）。不做的理由：这三组数字来自**别人模组**的 `_templates` 表，跟着
+素材模组升级会变，而 `data/asset-index.json` 里没有这项元数据（索引里的 `"template"` 是
+资源树的分类名，不是 Sequencer 的 `[gridSize, startPoint, endPoint]`），直接写进兵库就是
+三个会静默过期的魔数。要修请先让 `tools/extract-db.mjs` 把 `_templates` 一起抽出来。
+
+**上机的人请注意：光束首尾各缩进一截是这条已知缺陷，不是坐标算错了。**

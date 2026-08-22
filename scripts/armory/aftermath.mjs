@@ -12,17 +12,20 @@ const r6 = v => Math.round(v * 1e6) / 1e6;
  * 区域残留的落点：cone 取轴线中点（覆盖锥形footprint 的中段），circle（blast）取
  * 区域圆心本身。与 travel.mjs 的 templateAnchor/templateEnd 同一套坐标约定
  * （region.rotation 度，从 +x 正东起、朝 +y 为正）。
+ *
+ * ref 用 "point"（理由与 travel.mjs 的 templateAnchor 完全相同）：这是一个冻结的区域
+ * 坐标，不是「施法者」这个身份，播放层不得把它升格成施法者 token 的中心。
  */
 function residueAnchor(s) {
   const r = s.region;
   if (!r) return null;
   if (r.type === "circle" && Number.isFinite(r.x) && Number.isFinite(r.y)) {
-    return {ref: "origin", x: r.x, y: r.y};
+    return {ref: "point", x: r.x, y: r.y};
   }
   if (r.type === "cone" && Number.isFinite(r.x) && Number.isFinite(r.y) && Number.isFinite(r.radius)) {
     const rot = (r.rotation ?? 0) * (Math.PI / 180);
     const mid = r.radius / 2;
-    return {ref: "origin", x: r6(r.x + Math.cos(rot) * mid), y: r6(r.y + Math.sin(rot) * mid)};
+    return {ref: "point", x: r6(r.x + Math.cos(rot) * mid), y: r6(r.y + Math.sin(rot) * mid)};
   }
   return null;
 }

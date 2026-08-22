@@ -1,11 +1,32 @@
+import {warn} from "../log.mjs";
+
+/**
+ * 超时放行时 run() 的兑现值。用一个 Symbol 而不是 undefined，是为了让调用方能把
+ * 「超时放行」与「任务正常返回 undefined」区分开——playPlan() 正常结束返回的就是
+ * undefined，从前两者完全不可分辨。
+ */
+export const TIMED_OUT = Symbol("crucible-anim:semaphore-timeout");
+
 /**
  * 串行化动画播放。
  *
  * 多个动作接连确认时（连续反击、多目标群体动作、多人同时出手），并发播放会让画面
- * 叠成一团。用一个带超时的信号量把它们排成队。取自 blfx 的 waitForSemaphore 做法，
- * 超时上限保证单条卡住的序列不会永久阻塞后续动画。
+ * 叠成一团。用一个带超时的信号量把它们排成队。取自 blfx 的 waitForSemaphore 做法。
+ *
+ * **超时只是「不再等」，不会中止已经在播的那条序列**（Promise.race 拦不住 fn 自己
+ * 那一路，而 Sequencer 也只有私有的 `Sequence._abort()`、信号量拿不到序列句柄）。
+ * 也就是说超时一旦发生，它本来要防的重叠就已经发生了——因此超时值必须给足，
+ * 不能当成常规节流手段：
+ *  · 本仓库 434 条计划按 Sequencer 的等待语义（waitUntilFinished 的负延迟 + delay +
+ *    有效播放时长，未知素材按 1000ms 估）模拟，最长的一条落在 7-8 秒量级；
+ *  · 更吃预算的是 preload：`Sequence.play()`（sequencer.js:27741-27762）先
+ *    `await Promise.allSettled(section._initialize())`、再 `await
+ *    Sequencer.Preloader.preload(...)`，两者都发生在任何一段开跑**之前**，冷缓存
+ *    首次加载 jb2a webm 走网络、秒级很常见——而这正是每条法术的第一次施放。
+ * 原来的 8000ms 对最长的那几条只剩个位数百分比的余量，超时会精准地打在画面最长、
+ * 最该被保护的那几条上，所以放宽到 15000ms 并在超时时留一条日志。
  */
-export function createSemaphore({timeoutMs = 8000} = {}) {
+export function createSemaphore({timeoutMs = 15000} = {}) {
   let tail = Promise.resolve();
   let pending = 0;
 
@@ -13,10 +34,19 @@ export function createSemaphore({timeoutMs = 8000} = {}) {
     pending++;
     const slot = tail.then(() => {
       // 单条任务最多占用 timeoutMs，超时后放行队列（任务本身继续跑完）
-      return Promise.race([
-        Promise.resolve().then(fn),
-        new Promise(resolve => setTimeout(resolve, timeoutMs))
-      ]);
+      let timer = null;
+      const task = Promise.resolve().then(fn);
+      const guard = new Promise(resolve => {
+        timer = setTimeout(() => {
+          warn(`一条动画超过 ${timeoutMs}ms 仍未播完，提前放行队列；`
+            + "后一条动画会与它重叠——超时不会中止已经在播的序列。");
+          resolve(TIMED_OUT);
+        }, timeoutMs);
+      });
+      // clearTimeout 不可省：任务提前完成后这枚定时器仍会烧满整个 timeoutMs。
+      // 浏览器里只是白留一枚活定时器（一场战斗下来每条 playPlan 各留一枚），
+      // 在 Node 里它直接吊住事件循环——测试进程会整整多挂 timeoutMs。
+      return Promise.race([task, guard]).finally(() => clearTimeout(timer));
     });
     // 队列尾部吞掉异常，否则一次失败会毒化后续所有任务
     tail = slot.then(() => {}, () => {});

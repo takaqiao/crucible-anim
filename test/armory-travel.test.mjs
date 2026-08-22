@@ -152,6 +152,12 @@ const thrownReal = () => one({
 
 /* ---- 一、once（每动作一次）机制的回归锁 ---------------------------------- */
 
+/**
+ * 锚点是**冻结的模板坐标**（travel.mjs 的 templateAnchor，ref:"point"）的规则。
+ * 其余 once 规则用 resolve.mjs 的默认施法者锚点（ref:"origin" + 施法者 tokenId/坐标）。
+ */
+const TEMPLATE_ANCHORED = new Set(["spell.gesture.ray", "spell.gesture.cone"]);
+
 /** fixture 里各姿态的代表动作。断言前先确认它们真的是多目标，否则数量断言测不出重复。 */
 const ONCE_CASES = [
   ["spell.frost.ray", "spell.gesture.ray"],
@@ -181,8 +187,20 @@ test("投射物与近战仍然每个目标一份", () => {
     assert.equal(cues.length, s.targets.length,
       `${id} 有 ${s.targets.length} 个目标就该有 ${s.targets.length} 份飞行段，实际 ${cues.length}`);
     assert.equal(cues[0].rule, ruleId);
-    assert.deepEqual(cues.map(c => c.at.tokenId), s.targets.map(t => t.tokenId),
-      "每目标规则的 cue 必须逐一锚在各自的目标上");
+    assert.deepEqual(cues.map(c => c.forTarget), s.targets.map(t => t.tokenId),
+      "每目标规则的 cue 必须逐一对应各自的目标");
+    // 飞行段的锚点在施法者、拉伸终点才是各自的目标：at 与 stretchTo 若是同一个坐标，
+    // Sequencer 的 stretchTo 就是一条零长射线（sequencer.js:16248-16252 弹红色报错、
+    // 16966-16985 把 spriteScale 算成 0 → sprite.scale.set(0,0)），箭直接看不见。
+    for (const [i, c] of cues.entries()) {
+      assert.equal(c.at.ref, "origin", `${id} 第 ${i} 条飞行段没有锚在施法者`);
+      assert.equal(c.at.tokenId, s.origin.tokenId, `${id} 第 ${i} 条飞行段的锚点不是施法者`);
+      assert.deepEqual({x: c.stretchTo.x, y: c.stretchTo.y},
+                       {x: s.targets[i].x, y: s.targets[i].y},
+                       `${id} 第 ${i} 条飞行段没有拉到各自的目标`);
+      assert.ok(Math.hypot(c.stretchTo.x - c.at.x, c.stretchTo.y - c.at.y) > 1,
+        `${id} 第 ${i} 条飞行段的起点与终点重合，是一条零长射线`);
+    }
   }
 });
 
@@ -191,7 +209,9 @@ test("自身爆发锚在施法者、不锚任何目标，且用实测过的时�
   const c = travelCues(s)[0];
   assert.equal(c.rule, "spell.gesture.surge");
   assert.equal(c.at?.ref, "origin", "自身爆发必须锚在施法者，不能锚在某个目标格");
-  assert.equal(c.at.tokenId, undefined, "施法者锚点不该带目标 token");
+  assert.equal(c.at.tokenId, s.origin.tokenId,
+    "施法者锚点必须带施法者自己的 token（而不是某个目标的，也不能是裸 ref）");
+  assert.equal(c.forTarget, null, "once 规则的 cue 不属于任何单个目标");
   assert.equal(c.aim, null,
     "锚点已在施法者，再 aim 回施法者就是 atan2(0,0) 的退化旋转，应彻底不设 aim");
   assert.equal(c.stretchTo, null, "自身爆发不飞向目标");
@@ -207,7 +227,9 @@ test("区域与自身姿态在零目标动作上照样出内容", () => {
     assert.equal(cues.length, 1,
       `${id} 零目标时仍应出 1 条 travel cue：区域法术没罩住人、自身特效本就没有目标，画面都还在`);
     assert.equal(cues[0].rule, ruleId);
-    assert.equal(cues[0].at.ref, "origin");
+    // ray/cone 的锚点是**冻结的模板坐标**（travel.mjs 的 templateAnchor），用 ref:"point"
+    // 保证播放层永不把它升格成施法者 token 的中心；其余 once 规则锚在施法者本人。
+    assert.equal(cues[0].at.ref, TEMPLATE_ANCHORED.has(ruleId) ? "point" : "origin");
   }
 });
 
@@ -330,11 +352,12 @@ test("射线拉到模板端点而不是目标身上", () => {
 
 test("模板类特效锚在模板起点而不是某个目标身上", () => {
   // 光束/锥形的起点若仍钉在 targets[0]（600,500），端点算对了起点也还在半路上。
-  // 规则自带 at 覆盖 resolve.mjs 给 once 规则的默认 {ref:"origin"}，把坐标一起带上。
+  // 规则自带 at 覆盖 resolve.mjs 给 once 规则的默认施法者锚点，把模板坐标一起带上，
+  // 并用 ref:"point" 声明「这是冻结坐标，不是施法者这个身份」。
   for (const id of ["spell.frost.ray", "spell.flame.cone"]) {
     const s = byId(id);
     const c = onlyCue(s);
-    assert.equal(c.at.ref, "origin", id);
+    assert.equal(c.at.ref, "point", id);
     assert.deepEqual({x: c.at.x, y: c.at.y}, {x: s.region.x, y: s.region.y}, id);
     assert.notEqual(c.at.x, s.targets[0].x, "不能锚在第一个目标上");
   }

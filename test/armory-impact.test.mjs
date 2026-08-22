@@ -455,6 +455,15 @@ test("fade 预算不超过 cue 有效时长的三成", () => {
       `${Math.round(life)}ms 的 ${Math.round(MAX_FADE_RATIO * 100)}%——主体会被吃掉`);
     assert.ok(c.fadeIn <= life / 2,
       `${tag}: 单是 fadeIn ${c.fadeIn}ms 就吃掉了 ${Math.round(life)}ms 里的一半以上`);
+    // duration 的语义是「startTime 之后还要播多久」，不是「相对素材 0 点的绝对终点」
+    // ——见 resolver/resolve.mjs 的 CUE_DEFAULTS.duration 与 player/play.mjs 的
+    // applyTimeWindow()。两者相加超过素材总长，只可能是有人照着 Sequencer `.duration()`
+    // 的表面行为把这张表改成了绝对终点：那样每一条的和都会正好多出一个 startTime。
+    if (c.duration !== null && c.startTime > 0) {
+      assert.ok(c.startTime + c.duration <= assetMs + 1,
+        `${tag}: startTime ${c.startTime} + duration ${c.duration} = ${c.startTime + c.duration}ms ` +
+        `超过素材总长 ${assetMs}ms——duration 是「startTime 之后还播多久」，不是绝对终点`);
+    }
     // 在素材自然结束之前硬切的 cue，必须自己收尾，否则末帧是一刀切
     if (c.duration !== null && c.duration + 1 < natural) {
       assert.ok(c.fadeOut > 0, `${tag}: duration ${c.duration}ms 把 ${Math.round(natural)}ms 的素材` +

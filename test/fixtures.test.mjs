@@ -50,3 +50,18 @@ test("状态 fixture 覆盖全部 46 个状态", () => {
   assert.ok(!effects.some(e => e.statusId === "flanked"), "flanked 不应出现在状态 fixture 里");
   assert.ok(effects.every(e => e.statusId && typeof e.target.x === "number"));
 });
+
+test("每个 token 几何都带 uuid —— 缺了它一批断言会退化成同义反复", () => {
+  // 生产环境 trigger/snapshot.mjs 的 tokenGeom() 恒写 uuid；语料缺它会让
+  // armory-persist 的 `notEqual(c.tieTo, e.target.uuid)` 变成「真字符串 ≠ undefined」
+  // 恒真，也让 Task 14 resolveRefIn 的 fromUuidSync 主路径一次都行使不到。
+  const geoms = [
+    ...actions.flatMap(a => [a.origin, ...a.targets]),
+    ...effects.map(e => e.target)
+  ];
+  assert.ok(geoms.length > 1000, `只有 ${geoms.length} 个 token 几何，扫描面可疑`);
+  for (const g of geoms) {
+    assert.equal(typeof g.uuid, "string", `${g.tokenId} 缺 uuid`);
+    assert.ok(g.uuid.includes(g.tokenId), `${g.uuid} 与 tokenId ${g.tokenId} 对不上`);
+  }
+});

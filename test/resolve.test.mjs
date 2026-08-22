@@ -155,7 +155,12 @@ test("rule.once 让 build 每动作只调一次，并默认锚在施法者", () 
   assert.equal(calls.length, 1, `once 规则的 build 每动作只该调 1 次，实际 ${calls.length} 次`);
   assert.equal(cues.length, 1);
   assert.equal(calls[0], strike.targets[0], "once 规则应收到 targets[0] 作代表目标");
-  assert.deepEqual(cues[0].at, {ref: "origin"}, "once 规则默认锚在施法者");
+  assert.deepEqual(cues[0].at,
+    {ref: "origin", tokenId: strike.origin.tokenId, uuid: strike.origin.uuid ?? null,
+     x: strike.origin.x, y: strike.origin.y},
+    "once 规则默认锚在施法者，且锚点必须自带身份与坐标——裸 {ref:\"origin\"} 在播放层解不出"
+    + "任何位置，整槽 cue 会被 play.mjs 的 `if (!target) continue` 静默吞掉");
+  assert.equal(cues[0].forTarget, null, "once 规则的 cue 不属于任何单个目标");
 });
 
 test("rule.once 在零目标动作上仍出内容，代表目标为 null", () => {
@@ -174,6 +179,9 @@ test("不带 once 的规则仍是每目标一次并锚在各自目标", () => {
   assert.equal(calls.length, strike.targets.length);
   assert.equal(cues.length, strike.targets.length);
   assert.deepEqual(cues.map(c => c.at.tokenId), strike.targets.map(t => t.tokenId));
+  // forTarget 是「这条 cue 讲的是谁」，与「画在哪」解耦：锚点将来搬家（飞行物锚回
+  // 施法者就是一例）时，按 at.tokenId 反推目标归属会静默失效。
+  assert.deepEqual(cues.map(c => c.forTarget), strike.targets.map(t => t.tokenId));
 });
 
 test("once 规则自带的 at 覆盖默认的施法者锚点", () => {

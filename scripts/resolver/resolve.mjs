@@ -10,7 +10,31 @@ const CUE_DEFAULTS = {
   filter: null, tint: null, opacity: 1,
   fadeIn: 200, fadeOut: 300, fadeInEase: "easeOutQuad", fadeOutEase: "easeInQuad",
   belowTokens: false, zIndex: 50, elevation: null, mask: null,
-  delay: 0, duration: null, playbackRate: 1, startTime: 0, waitUntilFinished: null,
+  delay: 0, playbackRate: 1, waitUntilFinished: null,
+  /**
+   * 播放窗口，单位 ms，两个数都相对**素材自身的第 0 帧**：
+   *   startTime = 从素材的第几毫秒开始播（默认 0 = 从头）
+   *   duration  = 从 startTime 起**还要播多久**（默认 null = 一直播到素材自然结束）
+   *
+   * 「还要播多久」而不是「绝对终点」是本仓库的选择，改之前先读完这三条：
+   *   1. 兵库里 20+ 处数值、`trimFlash()`（armory/flash.mjs 的 `duration <= from`）、
+   *      以及 armory-impact.test.mjs 的 fade 预算（`life = duration ?? (assetMs - startTime)`）
+   *      全按这个口径算；
+   *   2. Sequencer 自己的 SoundSection 就是这个口径——`duration = data.duration === false ?
+   *      endTime - startTime : data.duration`（sequencer.js:10387），换成绝对终点会让同一个
+   *      字段在 effect 与 sound 上含义相反；
+   *   3. 与 `duration: null` 的含义连续：把 duration 补到 `assetMs - startTime` 与省略它等价
+   *      （8 支 eskie 正是这么写的：234+266=500、267+233=500，素材 501ms）。
+   *
+   * 代价是它与 Sequencer `EffectSection.duration()` 的表面行为**相反**：那边
+   * `.startTime(s)` + `.duration(d)` 实际只播 `clamp(d - s, 0, d)`（sequencer.js:16052 →
+   * 16097 → 16106），d ≤ s 时归零。换算集中在 player/play.mjs 的 applyTimeWindow() 一处，
+   * 由 test/play-contract.test.mjs 逐条钉住。
+   *
+   * 硬约束：**startTime + duration ≤ 素材总长**。超了只可能是有人按绝对终点填了表
+   * （每条都会正好多出一个 startTime），armory-impact.test.mjs 的「fade 预算」用例里有守卫。
+   */
+  duration: null, startTime: 0,
   persist: false, tieTo: null, extraEndDuration: 0, volume: 1,
   /**
    * 允许 Sequencer 把这条 cue 写进世界存档吗？默认 **false**，V1 没有任何一条 cue
@@ -33,10 +57,14 @@ const CUE_DEFAULTS = {
    * JournalEntry `sequencerDatabase` 的 `flags.sequencer.effects`；去重键 `_id` 是
    * randomID，不会合并。
    *
-   * 后果：场景重载时 `initializePersistentEffects()` 回放全部记录，而 `shouldPlay`
-   * 的用户过滤第一项就是 `game.user.isGM ||`——GM 绕过过滤，N 份全播，光环层层叠加、
-   * opacity 复合越叠越亮；反过来中途进场的玩家一条属于自己的记录都没有，一个光环都
-   * 看不到。**这类问题离线测试测不出，只有多客户端上机才暴露。**
+   * 后果：世界文档的 `flags.sequencer.effects` 无界堆进 N 条记录，其中只有本人那条能被
+   * 本人清掉——别人那 N-1 条谁也清不动，只剩 GM 手动 `endAllEffects()`；反过来中途进场
+   * 的玩家一条属于自己的记录都没有，一个光环都看不到。
+   * 注意它**不会**表现成「GM 重载后叠 N 层」：`get shouldPlay()` 的第三个子句
+   * `(!data.local || data.creatorUserId === game.user.id)`（sequencer.js:15145）在
+   * local:true 时把回放限回自己那一条。别拿「上机看了没叠层」当契约可以放松的证据——
+   * 损害是世界存档脏数据与他人不可见，不是叠层。
+   * **这类问题离线测试测不出，只有多客户端上机才暴露。**
    *
    * 播放层据此调 `.temporary(cue.worldPersist !== true)`。Sequencer 对 `.temporary()`
    * 的文档原话是「will not be stored in the flags of any object, even if .persist()
@@ -77,11 +105,23 @@ function firstMatch(rules, s, ctx, slot) {
   return null;
 }
 
-/** 规则可以返回单个 cue、cue 数组或 null；统一成数组并补默认值。 */
-function normalize(out, slot, ruleId, at) {
+/**
+ * 规则可以返回单个 cue、cue 数组或 null；统一成数组并补默认值。
+ *
+ * `forTarget` 与 slot/rule 一样是**注入字段**（不进 CUE_DEFAULTS，规则不许自己写）：
+ * 这条 cue 是「关于哪个目标」的，null = 不属于任何单个目标（cast 槽与 once 规则）。
+ * 从前这条信息只能从 `at.tokenId` 反推——那是把「锚点摆在哪」当成「讲的是谁」，两者
+ * 只是碰巧一致：飞行物锚在施法者、近战挥击带 offset、震屏另挑锚点，任何一个锚点搬家
+ * 都会让反推失效（test/armory-flash.test.mjs 的 byTarget 正是这么反推的）。
+ *
+ * 写在 `...c` **之前**：默认值由槽装配给（每目标规则 = 当前目标，cast/once = null），
+ * 但 once 规则内部自己按目标铺开时（impact.layered）必须能逐条盖掉这个 null。
+ */
+function normalize(out, slot, ruleId, at, forTarget = null) {
   if (!out) return [];
   const arr = Array.isArray(out) ? out : [out];
-  return arr.filter(Boolean).map(c => ({...CUE_DEFAULTS, ...c, slot, rule: ruleId, at: c.at ?? at}));
+  return arr.filter(Boolean)
+    .map(c => ({...CUE_DEFAULTS, forTarget, ...c, slot, rule: ruleId, at: c.at ?? at}));
 }
 
 /**
@@ -90,7 +130,7 @@ function normalize(out, slot, ruleId, at) {
  * 抛出的 TypeError 会顺着调用栈把整个 resolve() 带崩，该动作五个槽的 cue 全没了。
  * 正常代码路径上一条 warning 都不该有，test/coverage.test.mjs 用全量 fixture 守着。
  */
-function runBuild(rule, snapshot, ctx, target, built, slot, at) {
+function runBuild(rule, snapshot, ctx, target, built, slot, at, forTarget = null) {
   let out = null;
   try {
     out = rule.build(snapshot, ctx, target, built);
@@ -98,8 +138,19 @@ function runBuild(rule, snapshot, ctx, target, built, slot, at) {
     ctx.warn(`[${slot}] 规则 "${rule.id}" 的 build() 抛出异常：${err?.message ?? err}`);
     return [];
   }
-  return normalize(out, slot, rule.id, at);
+  return normalize(out, slot, rule.id, at, forTarget);
 }
+
+/**
+ * 施法者锚点。带上 tokenId/uuid/x/y 而不是只写 `{ref:"origin"}`——裸 ref 里既没有身份
+ * 也没有坐标，播放层的 resolveRef（Task 14 的 resolveRefIn）除了返回 null 无事可做，
+ * 整槽 cue 会被 play.mjs 的 `if (!target) continue` 静默吞掉。`ref` 仍留着，它决定的是
+ * 「允不允许把这个锚点升格成一个真的 placeable」（见 docs/DESIGN.md §6.2 的 at 词表）：
+ * origin/target 优先解析成 token，"point" 是冻结坐标、永不升格。
+ */
+const originAnchor = s => ({ref: "origin", tokenId: s?.origin?.tokenId ?? null,
+                            uuid: s?.origin?.uuid ?? null,
+                            x: s?.origin?.x, y: s?.origin?.y});
 
 /**
  * 五槽装配。
@@ -129,7 +180,7 @@ export function resolve(snapshot, {assets, armory}) {
   // S1 cast：整个动作一次，锚在施法者
   const castRule = firstMatch(armory.cast, snapshot, ctx, "cast");
   if (castRule) {
-    cues.push(...runBuild(castRule, snapshot, ctx, null, viewFor(0), "cast", {ref: "origin"}));
+    cues.push(...runBuild(castRule, snapshot, ctx, null, viewFor(0), "cast", originAnchor(snapshot)));
   }
 
   // S2–S4：选规则只看 snapshot，与具体目标无关，所以每槽只选一次——从前 firstMatch 写在
@@ -137,7 +188,7 @@ export function resolve(snapshot, {assets, armory}) {
   //
   //  · 默认（rule.once 未置位）：每个目标各调一次 build，锚在该目标。投射物、近战挥击、
   //    投掷都属这类——两个目标就是两支箭、两记刀光。
-  //  · rule.once === true：整个动作只调一次 build，默认锚在施法者（{ref:"origin"}）。
+  //  · rule.once === true：整个动作只调一次 build，默认锚在施法者（originAnchor）。
   //    区域与自身特效属这类——锥形、射线、脉冲、自身爆发一次动作只该有一份，
   //    锥形打中 5 个人不该叠 5 份各带 stretchTo 与模板遮罩的锥形。规则仍可自带 at
   //    覆盖这个默认锚点（normalize 的 `at: c.at ?? at`），模板类特效就靠这一条把锚点
@@ -148,7 +199,8 @@ export function resolve(snapshot, {assets, armory}) {
     const rule = firstMatch(armory[slot], snapshot, ctx, slot);
     if (!rule) continue;
     if (rule.once === true) {
-      const out = runBuild(rule, snapshot, ctx, targets[0] ?? null, viewFor(0), slot, {ref: "origin"});
+      const out = runBuild(rule, snapshot, ctx, targets[0] ?? null, viewFor(0), slot,
+                           originAnchor(snapshot));
       shared[slot].push(...out);
       cues.push(...out);
       continue;
@@ -157,7 +209,7 @@ export function resolve(snapshot, {assets, armory}) {
       const target = targets[i];
       const at = {ref: "target", tokenId: target.tokenId, uuid: target.uuid,
                   x: target.x, y: target.y};
-      const out = runBuild(rule, snapshot, ctx, target, viewFor(i), slot, at);
+      const out = runBuild(rule, snapshot, ctx, target, viewFor(i), slot, at, target.tokenId);
       perTarget[i][slot].push(...out);
       cues.push(...out);
     }
@@ -227,7 +279,8 @@ export function resolveEffect(effectSnapshot, {assets, armory}) {
   const at = {ref: "target", tokenId: target.tokenId, uuid: target.uuid, x: target.x, y: target.y};
   // 第三个入参与 cast 槽一致传 null：persist 规则的签名是 (e, ctx)，目标几何已经在
   // e.target 里，不再另给一份免得两处不同步。
-  const cues = runBuild(rule, effectSnapshot, ctx, null, NO_PRIOR_SLOTS, "persist", at)
+  const cues = runBuild(rule, effectSnapshot, ctx, null, NO_PRIOR_SLOTS, "persist", at,
+                        target.tokenId)
     .filter(c => keepTied(c, ctx, rule.id));
   if (!cues.length) return null;
   return {

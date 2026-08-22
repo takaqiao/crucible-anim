@@ -65,8 +65,16 @@ const weightOf = result => RESULT_WEIGHT[result] ?? RESULT_WEIGHT[RESULT.HIT];
  * MAX_FADE_RATIO 两套守卫、以及上一次提交的「掠过缩放」定义一起重新推导，须由 impact
  * 槽负责人在同一轮里做。persist 槽已按新语义改过，见 armory/persist.mjs 的 burning 条。
  *
- * startTime/duration 单位 ms，语义与 travel.mjs 一致：duration 是「startTime 之后
- * 还要播多久」，不是绝对终点。省略即保留素材原长（CUE_DEFAULTS 的 duration:null）。
+ * startTime/duration 单位 ms，两个数都相对素材自身第 0 帧，语义与 travel.mjs 一致：
+ * duration 是「startTime 之后还要播多久」，不是绝对终点。省略即保留素材原长
+ * （口径的完整说明见 resolver/resolve.mjs 的 CUE_DEFAULTS.duration）。
+ *
+ * ⚠ 这与 Sequencer `EffectSection.duration()` 的表面行为**相反**：那边
+ * `.startTime(s)+.duration(d)` 实际只播 clamp(d-s, 0, d)（sequencer.js:16106），d ≤ s
+ * 时一帧都不出。播放层因此用 `.timeRange(s, s+d)` 换算，见 player/play.mjs 的
+ * applyTimeWindow()——**照抄本表的数字直接调 Sequencer 的 .duration() 会静默削掉一截**。
+ * 硬约束 startTime + duration ≤ 素材总长：本表最紧的三条是 ARMOR 467+266=733≤1100、
+ * BLOCK 267+1233=1500≤1500、8 支 eskie 一律正好补到 500≤501，下方「fade 预算」用例有守卫。
  *
  * fadeIn/fadeOut 两列必填、一条都不许省。CUE_DEFAULTS 给的 200/300 合计 500ms 是按
  * 「1-2 秒的施法/持续类素材」定的，套到 impact 槽上是灾难：本表 8 条结果层里有 3 条的
@@ -461,7 +469,7 @@ export default [
           const base = ctx.pick(spec.path);
           if (base) {
             cues.push({
-              layer: "result", file: base.file, playIf: name, at, aim,
+              layer: "result", file: base.file, playIf: name, at, aim, forTarget: t.tokenId,
               objectScale: r6(weight * spec.canvas * ctx.geom.sizeScale()),
               zIndex: 60, elevation: t.elevation,
               startTime: spec.startTime ?? 0,
@@ -479,7 +487,7 @@ export default [
         // 暴击震屏：与结果层 cue 是否被双闪抑制无关——震的是「暴击命中」这件事本身，
         // 不是某条装饰性素材有没有播出来。只记第一个满足条件的目标，实现「每动作
         // 一次」。
-        if (spec.shake && hit.critical && !shakeAt) shakeAt = at;
+        if (spec.shake && hit.critical && !shakeAt) shakeAt = {at, forTarget: t.tokenId};
 
         if (isHitLike) {
           // 伤害类型的三级回退与「查不到就留痕」都在 elementFor 里，见其注释。
@@ -494,6 +502,7 @@ export default [
               // slashing 三键共用同一条血溅素材，光看 file 分不出走了哪一支，
               // test/coverage.test.mjs 的 12 键覆盖断言要靠这个字段才量得到。
               layer: "element", element: key, file: fx.file, playIf: name, at, aim,
+              forTarget: t.tokenId,
               objectScale: r6(el.scale * weight * ctx.geom.sizeScale()),
               // delay：落在结果层自带闪爆熄灭之后（HIT→200ms，GLANCE→233ms）。旧值是
               // 写死的 60ms，恰好把元素层自带的 f5 白闪推到 227ms、结果层星芒在 133ms，
@@ -520,7 +529,12 @@ export default [
         // copySprite，不震全屏），锚点必须是目标而不是 origin——once 规则的默认锚点
         // 是 {ref:"origin"}，这里显式覆盖成命中的那个目标。
         cues.push({
-          kind: "shake", layer: "shake", playIf: "always", at: shakeAt,
+          kind: "shake", layer: "shake", playIf: "always",
+          at: shakeAt.at, forTarget: shakeAt.forTarget,
+          // zIndex 显式写 0：播放层从前在 shake 分支里硬编码 .zIndex(0)，cue 上的字段
+          // 因此被静默丢弃。数值一字未变（渲染结果逐像素相同），只是把这个决定搬回
+          // 规则层，让 cue 说的话与画面真正发生的事一致。
+          zIndex: 0,
           intensity: 0.08, duration: 400, delay: 40
         });
       }

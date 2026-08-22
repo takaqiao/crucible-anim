@@ -320,11 +320,23 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
     layer?: "result" | "element" | "shake",  // impact 槽的分层标记，见 §6.5
     element?: string,                        // layer === "element" 时选中的伤害类型键（12 选 1）
     playIf: "always" | "hit" | "glance" | "armor" | "block" | "parry"
-        | "resist" | "dodge" | "miss" | "critical" | "hitOrGlance" | "defended",
-        // 与 AttackRoll.RESULT_TYPES 一一对应，另加三个聚合值；见 §6.5
+        | "resist" | "dodge" | "miss",
+        // 与 AttackRoll.RESULT_TYPES 一一对应；见 §6.5。
+        // **没有**聚合值（critical / hitOrGlance / defended）：cue 是针对**已发生的真实
+        // 结果**构造出来的，没有东西可以聚合；播放层对词表外的取值一律 warn + 不播放。
+    forTarget: tokenId|null,                // 注入字段：这条 cue「讲的是谁」（null = 不属于
+                                            // 任何单个目标）。与 at 解耦——at 是「画在哪」
     file,                                   // 已经 bestFit 解析过的 DB 路径或绝对路径
     // 定位
-    at: {ref: "origin"|"target"|"region", tokenId?, x?, y?},
+    // ref 决定播放层的 resolveRef 允不允许把这个锚点换成一个真的 placeable：
+    //   "origin" / "target" —— **身份**锚点。优先解析成 token（attachTo / copySprite
+    //       必须拿到真 placeable），解析不到才退回 x/y 裸点。锚点必须自带
+    //       tokenId/uuid/x/y，裸 {ref:"origin"} 在播放层解不出任何位置。
+    //   "point" —— **冻结坐标**。永远原样返回 {x,y}，绝不升格成 placeable。
+    //       模板类锚点（travel 的 ray/cone 锥尖、aftermath 的区域残留）必须用它：
+    //       这些 cue 的 stretchTo 终点与 mask 都取自 plan.region，起点一旦被换成
+    //       施法者 token 中心，起点/终点/遮罩就来自两套原点，几何自相矛盾。
+    at: {ref: "origin"|"target"|"point", tokenId?, uuid?, x?, y?},
     attachTo: bool, bindScale: bool, local: bool,
     aim: null | {towards: {...}, missed: bool, offset?, rotationOffset?},
     stretchTo: null | {...},
@@ -338,6 +350,10 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
     belowTokens: bool, zIndex: number, elevation: number|null,
     mask: null | "region",
     // 时序
+    // startTime / duration 都相对**素材自身第 0 帧**，duration 是「startTime 之后**还要
+    // 播多久**」而不是绝对终点（权威定义见 resolver/resolve.mjs 的 CUE_DEFAULTS.duration）。
+    // 这与 Sequencer EffectSection.duration() 的表面行为相反，换算集中在
+    // player/play.mjs 的 applyTimeWindow()（下发 .timeRange(s, s+d) + .duration(d)）。
     delay, duration, playbackRate, startTime,
     waitUntilFinished: number|null,         // 负值 = 重叠
     // 持久化（仅 persist 槽）
