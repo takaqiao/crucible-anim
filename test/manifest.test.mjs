@@ -71,7 +71,16 @@ test("resolver 与 armory 不得引用 Foundry 全局或 Math.random", async () 
   ];
   // 随机性必须经 ctx.rng()（mulberry32，seed 确定）：Math.random 会让同 seed 的两次
   // resolve() 结果不同，多客户端画面不同步，且测试不可复现——这是最难靠人工发现的一类回归。
-  const banned = /\b(game|canvas|Hooks|Sequencer|ui|CONFIG)\s*\.|Math\.random\s*\(/;
+  //
+  // 第一个分支用 (?<![\w.]) 取代 \b：\b 只看「是不是标识符边界」，不看边界前到底是
+  // 字母还是点号，于是 DB 路径字面量里的 "jb2a.ui.miss.white" 会在 "ui" 前的那个
+  // `.` 处被误判成 `ui.` 全局引用（`.` 是非单词字符，"ui" 是单词字符，\b 照样成立）。
+  // 真正引用 Foundry 全局时，这几个标识符前面绝不会是字母/数字/下划线或点号（要么是
+  // 语句开头，要么前面是空格/括号/等号之类），所以要求「前一个字符不是单词字符也不是
+  // 点号」才收紧到刚好排除「作为某个路径的一段被点出来」这一种情况，不影响真正的全局
+  // 引用照样被抓——见 test/armory-assets.test.mjs 里 "const x = ui.notifications" /
+  // "const y = game.actors" 两个红例。Math.random 那半段不受影响，原样保留。
+  const banned = /(?<![\w.])(game|canvas|Hooks|Sequencer|ui|CONFIG)\s*\.|Math\.random\s*\(/;
 
   // 剥离注释的辅助函数
   function stripComments(src) {

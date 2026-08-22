@@ -99,11 +99,12 @@ const RESULT_LAYER = {
    * 200x200（JB2A 基准的一半），「铺到一格 token 上字号偏小需要放大」，语义权重 0.7
    * 乘以 2（补偿画布比）取 1.4。missed:true。
    */
-  // 路径拆成两段字面量拼接：写成一整个字符串会让 test/manifest.test.mjs 的 Foundry
-  // 全局扫描器把 DB 路径段 "ui." 误判成 `ui.` 全局引用（它对整份剥注释后的源码做纯文本
-  // 正则扫描，不理解字符串边界）。拆开只是为了绕过这个已知的纯文本匹配假阳性，运行时
-  // 拼出来仍是同一条 jb2a.ui.miss.white。
-  [RESULT.MISS]: {path: "jb2a.ui" + ".miss.white", scale: 1.4, missed: true, shake: false, duration: 1467}
+  // test/manifest.test.mjs 的 Foundry 全局扫描器原先用 \b 判定边界，会把这条路径里
+  // "ui" 前面那个点误判成 `ui.` 全局引用，逼得上一版把字符串拆成两段字面量拼接来绕开
+  // 假阳性——但这既没修真正的误报，又让 test/armory-assets.test.mjs 的路径扫描器看
+  // 不到完整路径（见该文件「DB 路径不得以字符串拼接的形式出现」断言）。现在扫描器已改
+  // 用 (?<![\w.]) 收紧边界判定，不再需要这种绕法，直接写完整字面量。
+  [RESULT.MISS]: {path: "jb2a.ui.miss.white", scale: 1.4, missed: true, shake: false, duration: 1467}
 };
 
 /**
