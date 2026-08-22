@@ -14,6 +14,9 @@
       "Debug": {"Name": "调试日志", "Hint": "在控制台打印动作快照、解析结果与素材降级警告。"}
     },
     "Replay": "重放动画",
-    "Preview": {"Title": "动画预览", "NoToken": "请先选中一个 token。"}
+    "Preview": {
+      "Title": "动画预览", "NoToken": "请先选中一个 token。",
+      "Disabled": "动画已被设置关闭，预览宏不会播放任何内容。"
+    }
   }
 }

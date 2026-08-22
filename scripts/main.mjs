@@ -57,13 +57,16 @@ Hooks.once("ready", async () => {
     const {installWrap} = await import("./trigger/wrap.mjs");
     const {installDispatch} = await import("./trigger/dispatch.mjs");
     const {installEffectTriggers} = await import("./trigger/effects.mjs");
+    const {installPreview, installReplayMenu} = await import("./player/preview.mjs");
 
     const deps = {assets: createAssets(runtimeBackend()), armory: ARMORY};
     installWrap(deps);
     installDispatch();
     installEffectTriggers(deps);
+    installPreview(deps);
+    installReplayMenu();
     state.active = true;
-    log("触发层已挂载");
+    log("触发层、预览宏与重放菜单已挂载");
   } catch (err) {
     state.reason = `挂载失败：${err?.message ?? err}`;
     error("触发层挂载失败，模组已自我禁用", err);

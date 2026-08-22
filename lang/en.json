@@ -14,6 +14,9 @@
       "Debug": {"Name": "Debug logging", "Hint": "Print action snapshots, resolved plans and asset fallback warnings to the console."}
     },
     "Replay": "Replay animation",
-    "Preview": {"Title": "Animation preview", "NoToken": "Select a token first."}
+    "Preview": {
+      "Title": "Animation preview", "NoToken": "Select a token first.",
+      "Disabled": "Animations are turned off in settings; the preview macro will not play anything."
+    }
   }
 }
