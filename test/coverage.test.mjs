@@ -7,6 +7,7 @@ import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {resolve, resolveEffect} from "../scripts/resolver/resolve.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 import {RESULT} from "../scripts/const.mjs";
+import {ELEMENT_LAYER} from "../scripts/armory/impact.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FOUNDRY_DATA = "/root/fvtt14-data/Data";
@@ -96,4 +97,58 @@ test("兵库规则不抛异常：全量 fixture 的 plan.warnings 恒为空", ()
     for (const w of plan?.warnings ?? []) noisy.push(`${s.id}: ${w}`);
   }
   assert.deepEqual(noisy.slice(0, 10), [], `${noisy.length} 条规则告警`);
+});
+
+test("覆盖率：12 种伤害类型的元素层都被全量语料行使过", () => {
+  // 这条断言守的是「12 种伤害类型分层」这个交付物本身在**真实语料**上的回归网，而不是
+  // 手写用例上的。判据是 impact 元素层 cue 自带的 `element` 字段（选中的 ELEMENT_LAYER
+  // 键），不能用 cue.file 代替——bludgeoning/piercing/slashing 三键共用同一条血溅素材，
+  // 按 file 统计这三支永远只看得见一支，测出来的「覆盖」是假的。
+  //
+  // 阈值取全等（12/12）而不是「至少 N 种」：
+  //   · 语料现在真的能跑满 12 支——9 支来自法术矩阵（符文的 damageType，见
+  //     tools/dump-fixtures.mjs 的 RUNE_DAMAGE，其中 kinesis 的 "physical" 经
+  //     impact.mjs 的 DAMAGE_ALIAS 落到 bludgeoning）、slashing/piercing 来自 strike 与
+  //     reactiveStrike 两个默认动作的武器（走 elementFor 的第 3 级回退），bludgeoning
+  //     另有 throw/overrun 等带伤害标签的动作，所以全等是可达的，不需要为了让测试变绿
+  //     而放宽；
+  //   · 「至少 N 种」放过的正是这条测试要抓的那类回归：某一支符文/某一把武器的伤害类型
+  //     断掉，整支元素静默退回血溅，而计数仍然 ≥ N。
+  const seen = new Set();
+  for (const s of actions) {
+    const plan = resolve(s, {assets: mk(), armory: ARMORY});
+    for (const c of plan?.cues ?? []) {
+      if (c.slot !== "impact" || c.layer !== "element") continue;
+      assert.ok(c.element, `${s.id} 的元素层 cue 没有 element 标注`);
+      seen.add(c.element);
+    }
+  }
+  const expected = Object.keys(ELEMENT_LAYER).sort();
+  const missing = expected.filter(k => !seen.has(k));
+  assert.deepEqual(missing, [],
+    `${missing.length} 种伤害类型的元素层从未被语料跑到：${missing.join("、")}——` +
+    "要么 tools/dump-fixtures.mjs 不再产出这些伤害类型，要么 impact.mjs 的回退链把它们吃掉了");
+  assert.deepEqual([...seen].sort(), expected, "语料跑出了 ELEMENT_LAYER 之外的元素键");
+});
+
+test("元素层 cue 的 element 标注与实际素材路径一致", () => {
+  // element 是给上一条覆盖断言当判据用的标注字段。标注和真正播出去的 file 一旦脱节，
+  // 覆盖率就成了自说自话，所以这里逐条回查：file 必须属于该键在 ELEMENT_LAYER 里
+  // 登记的那条路径解析出的文件集合。
+  const assets = mk();
+  const filesFor = new Map();
+  for (const [key, spec] of Object.entries(ELEMENT_LAYER)) {
+    const r = assets.resolve(spec.path);
+    assert.ok(r, `ELEMENT_LAYER.${key} 的路径 ${spec.path} 解析不到`);
+    filesFor.set(key, new Set(r.files));
+  }
+  const bad = [];
+  for (const s of actions) {
+    const plan = resolve(s, {assets: mk(), armory: ARMORY});
+    for (const c of plan?.cues ?? []) {
+      if (c.slot !== "impact" || c.layer !== "element") continue;
+      if (!filesFor.get(c.element)?.has(c.file)) bad.push(`${s.id}: ${c.element} → ${c.file}`);
+    }
+  }
+  assert.deepEqual(bad.slice(0, 5), [], `${bad.length} 条元素层 cue 的标注与素材不符`);
 });

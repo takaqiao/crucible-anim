@@ -21,6 +21,7 @@ import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {resolve} from "../scripts/resolver/resolve.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 import {RESULT, HIT_RESULTS} from "../scripts/const.mjs";
+import {RESULT_LAYER, ELEMENT_LAYER} from "../scripts/armory/impact.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const md = readFileSync(join(ROOT, "docs/ASSET-NOTES.md"), "utf8");
@@ -242,4 +243,95 @@ test("T3 交棒点必须锚在自带闪爆那一段上（两个数都来自同�
   }
   assert.ok(seen.size >= 3, `只检查了 ${seen.size} 条带 selfFlash 的规则`);
   assert.deepEqual(bad, [], `${bad.length} 条规则的交棒点没有锚在自带闪爆上`);
+});
+
+/* ------------------------------------------------------------------ *
+ *  T4-T6：impact 槽内部的双闪（结果层 vs 元素层）
+ *
+ *  T1 守的是「travel → impact」跨槽让位，管不到 impact 槽自己叠出来的两层。实测过的
+ *  病灶：元素层 8 支 eskie 素材自带的 f5 满帧白爆闪被 delay:60 推到 227ms，而结果层
+ *  HIT 的白光段在 0-200ms，两次白闪相距不到 100ms 且第二次更亮——ASSET-NOTES 第 27 行
+ *  「凡标『是』的，S3 再叠通用 impact 闪光层就是双闪，两者必须二选一」说的正是这个，
+ *  但那条通则此前只对 travel 生效（T2 只扫 travel.mjs），impact 槽 20 条选材完全在
+ *  守卫视野之外。
+ *
+ *  三条断言同样遵守本文件头部的三条纪律：T4 拿 ASSET-NOTES 当唯一真相来源，T5 是纯静态
+ *  算术且两个数都取自同一条表项自己，T6 是全量语料的结构性兜底、不含任何毫秒常量。
+ * ------------------------------------------------------------------ */
+
+test("T4 impact 两张表的 flash 窗口必须与 ASSET-NOTES 的「自带闪爆」列一致", () => {
+  // 与 T2 同一口径：ASSET-NOTES 是唯一真相来源，规则表只能忠实抄录，不能自行判定
+  // 「这条其实不算闪」。区别只在 travel 走源码扫描、impact 直接读导出的表——表项
+  // 本来就是数据，没必要再正则一遍。
+  const flashOf = notesFlashByPath();
+  const entries = [
+    ...Object.entries(RESULT_LAYER).map(([k, e]) => [`结果层[${k}]`, e]),
+    ...Object.entries(ELEMENT_LAYER).map(([k, e]) => [`元素层[${k}]`, e])
+  ];
+  assert.ok(entries.length >= 20, `只扫到 ${entries.length} 条表项`);
+  const bad = [];
+  for (const [label, e] of entries) {
+    const noted = flashOf(e.path);
+    if (noted === undefined) { bad.push(`${label} ${e.path}：ASSET-NOTES 主表里查不到依据`); continue; }
+    if (noted && !e.flash) {
+      bad.push(`${label} ${e.path}：表里标「自带闪爆＝是」，表项却没给 flash 窗口——`
+             + `这一层的闪爆不会被 selfFlash 申报出来，双闪守卫直接失明`);
+    }
+    if (!noted && e.flash) {
+      bad.push(`${label} ${e.path}：表里标「否」，表项却申报了 flash 窗口`);
+    }
+    if (e.flash) {
+      assert.ok(Number.isFinite(e.flash.from) && Number.isFinite(e.flash.at)
+                && Number.isFinite(e.flash.to)
+                && e.flash.from <= e.flash.at && e.flash.at <= e.flash.to,
+        `${label} ${e.path}：flash 窗口不自洽 ${JSON.stringify(e.flash)}`);
+    }
+  }
+  assert.deepEqual(bad.slice(0, 10), [], `${bad.length} 条表项与 ASSET-NOTES 不一致`);
+});
+
+test("T5 元素层不许自带闪爆：标「是」的素材必须用 startTime 把整段闪爆裁掉", () => {
+  // 两个数都取自同一条表项自己（它申报的闪爆熄灭时刻 vs 它自己设的 startTime），
+  // 测试里没有任何毫秒常量——换素材、改实测数字都不会误红，只有「叠了闪爆」才红。
+  // 这是 T6 的静态版：T6 要跑全量语料才发现问题，这一条改表当场就红。
+  const bad = [];
+  let trimmed = 0;
+  for (const [type, e] of Object.entries(ELEMENT_LAYER)) {
+    if (!e.flash) continue;
+    const start = e.startTime ?? 0;
+    if (start < e.flash.to) {
+      bad.push(`${type} ${e.path}：startTime=${start} 没有越过自带闪爆的熄灭时刻 ${e.flash.to}，`
+             + `元素层会在结果层之外再闪一次`);
+    } else trimmed++;
+  }
+  assert.ok(trimmed >= 8, `只有 ${trimmed} 条元素层素材被裁过，8 支 eskie.damage 模板都该在内`);
+  assert.deepEqual(bad, [], `${bad.length} 条元素层仍自带闪爆`);
+});
+
+test("T6 同一个目标、同一个锚点上，至多只有一条 cue 申报自带闪爆", () => {
+  // 结构性断言，不含任何毫秒：travel 与 impact 一起数。
+  // ——「两次闪相距多少毫秒才算双闪」是个连续量、任何阈值都是拍脑袋的（见文件头的
+  //   取舍说明）；真正要守的性质是「同一处只许有一层负责闪」。
+  const bad = [];
+  let exactlyOne = 0, none = 0;
+  for (const a of actions) {
+    if (!a.targets?.length) continue;
+    for (const result of HIT_RESULTS) {
+      for (const [key, slots] of byTarget(asResult(a, result))) {
+        const flashes = [...slots.travel, ...slots.impact]
+          .filter(c => c.selfFlash && (c.selfFlash.anchor ?? "target") === "target");
+        if (flashes.length > 1) {
+          bad.push(`${a.id} 结果${result} 目标${key}：${flashes.length} 层同时在目标身上闪——`
+                 + flashes.map(c => `${c.slot}/${c.rule}/${c.layer ?? "-"}`).join(" + "));
+        }
+        if (flashes.length === 1) exactlyOne++; else if (!flashes.length) none++;
+      }
+    }
+  }
+  assert.deepEqual(bad.slice(0, 10), [], `${bad.length} 处双闪`);
+  // 反向：命中类目标必须**恰好**闪一次。上界防双闪，下界防「把 selfFlash 删光 /
+  // 把闪光层整个删掉」这种把测试改绿的反向作弊——实测全量语料 1284 个命中类目标全部
+  // 恰好一次，所以这里可以断言 0 而不是拍一个阈值。
+  assert.equal(none, 0, `${none} 个命中类目标一次都不闪，命中反馈丢了`);
+  assert.ok(exactlyOne > 500, `只检查到 ${exactlyOne} 个目标，样本太小`);
 });

@@ -2,12 +2,15 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 
-import {GESTURE_TARGET, STATUSES, TARGET_REGION} from "../tools/dump-fixtures.mjs";
+import {GESTURE_TARGET, STATUSES, TARGET_REGION, RUNE_DAMAGE,
+        RUNE_RESOURCE} from "../tools/dump-fixtures.mjs";
+import {ELEMENT_LAYER, DAMAGE_ALIAS} from "../scripts/armory/impact.mjs";
 
 const FOUNDRY_DATA = "/root/fvtt14-data/Data";
 const SPELLCRAFT = `${FOUNDRY_DATA}/systems/crucible/module/const/spellcraft.mjs`;
 const STATUSES_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/statuses.mjs`;
 const ACTION_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/action.mjs`;
+const ATTRIBUTES_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/attributes.mjs`;
 
 /**
  * 括号配对提取：从 src[openIdx]（必须是 "{"）开始找到匹配的闭括号下标，跳过字符串内容。
@@ -144,4 +147,86 @@ test("STATUSES 与 statuses.mjs 源码的 statusEffects 键集合一致（46 个
   assert.deepEqual([...STATUSES].sort(), [...real].sort(),
     "STATUSES 与源码 statusEffects 键集合不一致");
   assert.ok(!STATUSES.includes("flanked"), "STATUSES 不应包含 flanked（不可赋予的派生状态）");
+});
+
+/**
+ * 解析 spellcraft.mjs 的 `export const RUNES = { <rune>: {..., damageType, resource,
+ * restoration}, ... }`，返回 `{符文: {damageType, resource, restoration}}`。与
+ * parseGestureTargets 同构：括号配对切块 + 正则取字段，不手抄。tools/dump-fixtures.mjs
+ * 的符文表靠它锁定——那些表决定了法术语料写进 target.damage.type 的是什么，一旦 Crucible
+ * 改了某个符文的伤害类型，元素层覆盖断言会连带失真，必须先在这里报警。
+ */
+function parseRunes() {
+  const src = readFileSync(SPELLCRAFT, "utf8");
+  const declStart = src.indexOf("export const RUNES");
+  assert.ok(declStart > -1, "spellcraft.mjs 里找不到 export const RUNES");
+  const openBrace = src.indexOf("{", declStart);
+  const closeBrace = matchBrace(src, openBrace);
+  const runes = parseTopLevelBlocks(src.slice(openBrace, closeBrace + 1));
+  const out = {};
+  for (const [rune, block] of Object.entries(runes)) {
+    out[rune] = {
+      damageType: /damageType\s*:\s*"(\w+)"/.exec(block)?.[1] ?? null,
+      resource: /resource\s*:\s*"(\w+)"/.exec(block)?.[1] ?? null,
+      restoration: /restoration\s*:\s*true/.test(block)
+    };
+  }
+  return out;
+}
+
+/** 解析 attributes.mjs 的 DAMAGE_TYPES / DAMAGE_CATEGORIES 键集合。 */
+function parseDamageEnum(name) {
+  const src = readFileSync(ATTRIBUTES_SRC, "utf8");
+  const declStart = src.indexOf(`export const ${name}`);
+  assert.ok(declStart > -1, `attributes.mjs 里找不到 export const ${name}`);
+  const openBrace = src.indexOf("{", src.indexOf("defineEnum(", declStart));
+  const closeBrace = matchBrace(src, openBrace);
+  return Object.keys(parseTopLevelBlocks(src.slice(openBrace, closeBrace + 1)));
+}
+
+test("RUNE_DAMAGE / RUNE_RESOURCE 与 spellcraft.mjs 的 RUNES 逐项一致", () => {
+  const real = parseRunes();
+  const realKeys = Object.keys(real);
+  assert.equal(realKeys.length, 12, `源码解析出 ${realKeys.length} 个符文，应为 12`);
+  assert.deepEqual(Object.keys(RUNE_DAMAGE).sort(), [...realKeys].sort(), "RUNE_DAMAGE 键集合与源码不一致");
+  assert.deepEqual(Object.keys(RUNE_RESOURCE).sort(), [...realKeys].sort(), "RUNE_RESOURCE 键集合与源码不一致");
+
+  const badDmg = realKeys.filter(k => RUNE_DAMAGE[k] !== real[k].damageType);
+  assert.deepEqual(badDmg, [], `伤害类型不一致：${badDmg.map(k =>
+    `${k}(表=${RUNE_DAMAGE[k]} 源=${real[k].damageType})`).join(", ")}`);
+  const badRes = realKeys.filter(k => RUNE_RESOURCE[k] !== real[k].resource);
+  assert.deepEqual(badRes, [], `资源池不一致：${badRes.map(k =>
+    `${k}(表=${RUNE_RESOURCE[k]} 源=${real[k].resource})`).join(", ")}`);
+
+  // restoration 符文的结算方向（正 delta → healed）目前是 tools/dump-fixtures.mjs 明写的
+  // 已知简化，见那里 RUNE_DAMAGE 下方的说明。源码新增/去掉 restoration 符文时这里先红，
+  // 逼着复核那段简化还成不成立（以及元素层覆盖会不会因此掉一支）。
+  assert.deepEqual(realKeys.filter(k => real[k].restoration).sort(), ["life", "soul"],
+    "源码 restoration:true 的符文集合变了，dump-fixtures.mjs 的已知简化需要复核");
+
+  // kinesis 的 damageType 是伤害「类别」而不是类型——这正是 impact.mjs 的 DAMAGE_ALIAS
+  // 存在的理由。源码哪天把它改成真正的伤害类型，这里要先红。
+  assert.equal(real.kinesis.damageType, "physical",
+    "kinesis 的 damageType 不再是 physical，impact.mjs 的 DAMAGE_ALIAS 需要复核");
+});
+
+test("ELEMENT_LAYER 的键集合等于 attributes.mjs 的 DAMAGE_TYPES，DAMAGE_ALIAS 只收类别名", () => {
+  // 12/12 的覆盖断言只有在「12 到底是哪 12 个」也被源码钉住时才有意义：如果 Crucible 加了
+  // 第 13 种伤害类型，光看覆盖断言是全绿的（12 个都跑到了），只有这条会红。
+  const types = parseDamageEnum("DAMAGE_TYPES");
+  const categories = parseDamageEnum("DAMAGE_CATEGORIES");
+  assert.equal(types.length, 12, `源码 DAMAGE_TYPES 解析出 ${types.length} 个，应为 12`);
+  assert.deepEqual(Object.keys(ELEMENT_LAYER).sort(), [...types].sort(),
+    "ELEMENT_LAYER 的键集合必须与 crucible 的 DAMAGE_TYPES 完全相同——多一个键是死代码，" +
+    "少一个键就是一整类伤害悄悄退回血溅");
+
+  // 别名的定义域必须是「伤害类别」，值域必须落在 DAMAGE_TYPES 里。
+  for (const [from, to] of Object.entries(DAMAGE_ALIAS)) {
+    assert.ok(categories.includes(from),
+      `DAMAGE_ALIAS 的键 "${from}" 不是 DAMAGE_CATEGORIES 里的类别（源码类别：${categories.join("/")}）`);
+    assert.ok(types.includes(to), `DAMAGE_ALIAS["${from}"] = "${to}" 不是合法伤害类型`);
+    assert.ok(!types.includes(from), `"${from}" 已经是合法伤害类型，不该再走别名`);
+  }
+  // kinesis 用的那一个必须在表里，否则 spell.kinesis.* 全系静默退回血溅。
+  assert.ok(DAMAGE_ALIAS.physical, "DAMAGE_ALIAS 必须覆盖 physical（kinesis 符文的 damageType）");
 });

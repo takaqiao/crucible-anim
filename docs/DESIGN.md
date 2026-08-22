@@ -317,6 +317,8 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
   cues: [{
     slot: "cast" | "travel" | "impact" | "aftermath" | "persist",
     kind: "effect" | "sound" | "shake",
+    layer?: "result" | "element" | "shake",  // impact 槽的分层标记，见 §6.5
+    element?: string,                        // layer === "element" 时选中的伤害类型键（12 选 1）
     playIf: "always" | "hit" | "glance" | "armor" | "block" | "parry"
         | "resist" | "dodge" | "miss" | "critical" | "hitOrGlance" | "defended",
         // 与 AttackRoll.RESULT_TYPES 一一对应，另加三个聚合值；见 §6.5

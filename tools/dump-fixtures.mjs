@@ -36,6 +36,73 @@ const GESTURES = ["arrow", "aspect", "aura", "blast", "cone", "conjure", "create
                   "influence", "pulse", "ray", "sense", "step", "strike", "surge", "touch", "ward"];
 
 /**
+ * 12 个符文的伤害类型与资源池，取自 crucible/module/const/spellcraft.mjs 的
+ * RUNES.<rune>.damageType / RUNES.<rune>.resource，由 test/source-tables.test.mjs
+ * 解析源码逐项核对锁定（与 GESTURE_TARGET 同法，不是手抄）。
+ *
+ * 为什么法术语料必须带上伤害类型：组合法术的伤害类型由符文决定，
+ * models/spell-action.mjs 的 #prepareDamage 写的是
+ * `type: this.damageType ?? this.rune.damageType`，一路经 resolveDamage →
+ * event.resources[].damageType 落进 trigger/snapshot.mjs 的 target.damage.type。
+ * 从前这份语料的 204 条法术全部 damage:null，直接后果是 impact 元素层的 12 条支路
+ * 只有 3 条被全量语料跑到过（其余 9 条只有手写用例覆盖），见 test/coverage.test.mjs 的
+ * 「12 种伤害类型的元素层都被全量语料行使过」。
+ *
+ * kinesis 的取值 "physical" 原样保留：它是 DAMAGE_CATEGORIES 的顶层**类别**、
+ * 不在 DAMAGE_TYPES 的 12 键里（schema 见 models/spellcraft-rune.mjs 的
+ * `choices: ["physical"].concat(...)`），语料带上它才能真正跑到 impact.mjs 的
+ * DAMAGE_ALIAS 那条路——把它在这里就换成 bludgeoning 等于把要测的东西提前测掉了。
+ */
+export const RUNE_DAMAGE = {
+  control: "psychic", death: "corruption", earth: "acid", flame: "fire",
+  frost: "cold", illumination: "radiant", illusion: "psychic", kinesis: "physical",
+  life: "poison", oblivion: "void", soul: "psychic", storm: "electricity"
+};
+
+/** RUNES.<rune>.resource：control/illusion/oblivion/soul 打 morale，其余打 health。 */
+export const RUNE_RESOURCE = {
+  control: "morale", death: "health", earth: "health", flame: "health",
+  frost: "health", illumination: "health", illusion: "morale", kinesis: "health",
+  life: "health", oblivion: "morale", soul: "morale", storm: "health"
+};
+
+/**
+ * 【已知简化】life 与 soul 两个符文的 RUNES.<rune>.restoration 是 true，实战里
+ * action.mjs 的 _resolveEventStream 会把它们的 delta 取正号（`restoration ? 1 : -1`），
+ * 结算结果落进快照的 healed 而不是 damage。这份语料仍然按「造成伤害」生成这两支，
+ * 是有意为之：
+ *   · 语料的 results 一律写死 result:7、damage.total 一律 8，本来就是合成值而非真实
+ *     结算，restoration 只影响 damage / healed 落在哪一格，不影响 damage.type 本身
+ *     ——rune.damageType 对 life 就是 poison（#prepareDamage 照样返回 type:"poison"）；
+ *   · 真按 restoration 建模会让 poison 失去语料里唯一的攻击侧来源（元素层覆盖从
+ *     12/12 掉到 11/12），而唯一能补回来的 noxiousSpit / noxiousSpray 现在被 isAttack
+ *     判据挡在门外——那条判据漏了 crucible 的标签传播（melee/natural → strike →
+ *     isAttack），是另一个独立缺陷，应当与本次改动分开处理。
+ * 两件事一起做才是完整解；先做 restoration 会让覆盖网倒退。
+ */
+
+/**
+ * 挥击类默认动作的合成武器。crucible const/action.mjs 的 DEFAULT_ACTIONS 里 strike 与
+ * reactiveStrike 的 target 都是 `{type: "single", number: 1, scope: 3}`（reactiveStrike
+ * 见第 1496 行起那条，tags 写着 `["reaction"] // Added to in #prepareDefaultActions`），
+ * 且 models/actor-base.mjs 的 #prepareDefaultActions 会给这两个 id 补上 "melee"/"ranged"
+ * 标签——melee 标签 `propagate: ["strike"]`，strike.prepare() 于是把手上的武器塞进
+ * usage.strikes 并置 usage.isAttack。原先这份 fixture 只给 id === "strike" 一个目标、
+ * 其余默认动作一律 target:self，reactiveStrike 因此既没有目标也没有武器，与源码不符。
+ *
+ * 两把武器的 damageType 分别取 slashing / piercing：item-weapon.mjs 的 damageType 字段
+ * 在 12 种伤害类型里自由取值（initial 为 bludgeoning），语料里必须至少各有一条走
+ * 「命中后由武器决定伤害类型」这条路（impact.mjs elementFor 的第 3 级），否则
+ * ELEMENT_LAYER 的 piercing/slashing 两支永远只能靠手写用例覆盖。
+ * 这两条动作的 targets[].damage 仍保持 null（tags 里没有伤害类型词），正是为了让第 3 级
+ * 回退在真实语料上被行使到，而不是被第 1 级抢先。
+ */
+const DEFAULT_STRIKES = {
+  strike: [{category: "balanced1", damageType: "slashing"}],
+  reactiveStrike: [{category: "light1", damageType: "piercing"}]
+};
+
+/**
  * 法术姿态 → 目标形态与模板形状，取自 crucible/module/const/spellcraft.mjs 的
  * GESTURES.<gesture>.target.type。由 test/source-tables.test.mjs 直接解析该源文件逐项
  * 核对锁定——Crucible 升级改动姿态定义时测试会自己报警，不会再次悄悄漂移。
@@ -79,32 +146,37 @@ function makeToken(pos, {width = 1} = {}) {
   };
 }
 
-function makeTarget(pos, {adjacent, damageType, width = 1}) {
+function makeTarget(pos, {adjacent, damageType, resource = "health", width = 1}) {
   const t = makeToken(pos, {width});
   return {
     ...t, adjacent, onLeft: pos.x < ORIGIN.x,
     results: [{result: 7, critical: false}],
-    damage: damageType ? {total: 8, type: damageType, resource: "health"} : null,
+    damage: damageType ? {total: 8, type: damageType, resource} : null,
     healed: 0, effects: []
   };
 }
 
 function baseSnapshot(id, {tags = [], target, range, cost, spell = null, region = null,
-                          strikes = [], usage = {}}) {
+                          strikes = [], usage = {}, dealt = null}) {
   const dmg = tags.find(t => ["bludgeoning", "corruption", "piercing", "slashing", "poison",
     "acid", "fire", "cold", "electricity", "psychic", "radiant", "void"].includes(t)) ?? null;
   const wantsTargets = target?.type && !["none", "self", "summon"].includes(target.type);
+  const resource = usage.resource ?? "health";
+  // 结算后写回目标身上的伤害类型：dealt 显式给出时以它为准（法术走符文的
+  // RUNES.<rune>.damageType，见 RUNE_DAMAGE），否则退回 tags 里的伤害类型词
+  // （TAGS[<damageType>].initialize 写的那个 usage.damageType ??= id）。
+  const hitType = dealt?.type ?? dmg;
   return {
     id, name: id, actorType: "hero",
     tags, target, range, cost, spell, region, strikes,
     origin: makeToken(ORIGIN),
     targets: wantsTargets
-      ? [makeTarget(ADJACENT, {adjacent: true, damageType: dmg}),
-         makeTarget(DISTANT, {adjacent: false, damageType: dmg})]
+      ? [makeTarget(ADJACENT, {adjacent: true, damageType: hitType, resource}),
+         makeTarget(DISTANT, {adjacent: false, damageType: hitType, resource})]
       : [],
     usage: {
       damageType: dmg, isAttack: !!usage.isAttack, isRanged: !!usage.isRanged,
-      skillId: usage.skillId ?? null, resource: usage.resource ?? "health"
+      skillId: usage.skillId ?? null, resource
     },
     seed: hashSeed(id)
   };
@@ -172,13 +244,14 @@ if (isMain) {
     if (seen.has(id)) continue;
     seen.add(id);
     out.push(baseSnapshot(id, {
-      tags: id === "strike" ? ["strike", "melee"] : [id === "move" ? "movement" : "generic"],
-      target: id === "strike" ? {type: "single", number: 1, distance: 1, scope: 2}
-                              : {type: "self", number: 0, distance: 0, scope: 1},
+      tags: DEFAULT_STRIKES[id] ? [id === "reactiveStrike" ? "reaction" : "strike", "melee"]
+                                : [id === "move" ? "movement" : "generic"],
+      target: DEFAULT_STRIKES[id] ? {type: "single", number: 1, distance: 1, scope: 3}
+                                  : {type: "self", number: 0, distance: 0, scope: 1},
       range: {minimum: 0, maximum: 1},
       cost: {action: 1, focus: 0, heroism: 0, health: 0},
-      strikes: id === "strike" ? [{category: "balanced1", damageType: "slashing"}] : [],
-      usage: {isAttack: id === "strike"}
+      strikes: DEFAULT_STRIKES[id] ?? [],
+      usage: {isAttack: !!DEFAULT_STRIKES[id]}
     }));
   }
 
@@ -193,7 +266,11 @@ if (isMain) {
         cost: {action: 1, focus: 1, heroism: 0, health: 0},
         spell: {rune, gesture, inflection: null},
         region: TARGET_REGION[tt] ?? null,
-        usage: {isAttack: true, isRanged: tt !== "self"}
+        // 组合法术的伤害类型只写在 targets[].damage 上、不写 usage.damageType——
+        // crucible 的 CrucibleSpellAction#prepareDamage 只产出 action.damage.type，
+        // usage.damageType 对法术恒为 undefined（见 models/spell-action.mjs）。
+        dealt: {type: RUNE_DAMAGE[rune]},
+        usage: {isAttack: true, isRanged: tt !== "self", resource: RUNE_RESOURCE[rune]}
       }));
     }
   }

@@ -46,3 +46,27 @@ export function coveringFlash(built, anchor = "target") {
   }
   return null;
 }
+
+/**
+ * 把素材自带的闪爆窗口按本条 cue 实际播出的片段裁剪一遍。
+ *
+ * 规则表里的 `flash` 毫秒数一律相对**素材自身第 0 帧**（逐帧实测的原始坐标，与这条 cue
+ * 怎么播无关）；cue 上申报的 `selfFlash` 则相对**本 cue 的播放起点**（已扣掉 startTime，
+ * 见本文件顶部的字段说明）。两者的换算只此一处，规则表里不许再手写第二份数字——
+ * 于是「用 startTime 把自带闪爆裁掉」这件事有了唯一、机器可查的表达：裁干净了就返回
+ * null，cue 不再申报闪爆；有人删掉 startTime，闪爆立刻重新申报出来，双闪守卫随之变红。
+ *
+ * @param {{from:number, at:number, to:number, sustained?:boolean}|null} flash
+ *        素材自带闪爆的原始窗口，null = 该素材不自带闪爆（ASSET-NOTES 标「否」）
+ * @param {{startTime?:number, duration?:number|null, anchor?:string}} [play]
+ * @returns {{from:number, at:number, to:number, anchor:string, sustained?:boolean}|null}
+ */
+export function trimFlash(flash, {startTime = 0, duration = null, anchor = "target"} = {}) {
+  if (!flash) return null;
+  if (startTime >= flash.to) return null;                 // 闪爆整段落在起点之前，被裁掉了
+  const from = Math.max(0, flash.from - startTime);
+  if (duration !== null && duration <= from) return null; // 还没闪到这条 cue 就收了
+  const out = {from, at: Math.max(0, flash.at - startTime), to: flash.to - startTime, anchor};
+  if (flash.sustained) out.sustained = true;
+  return out;
+}
