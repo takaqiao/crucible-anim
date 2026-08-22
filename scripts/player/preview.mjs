@@ -19,7 +19,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  * 空格分隔 key:value 参数，见 parsePreviewArgs）。
  *
  * @param {{slot?: string, filter?: string, gap?: number}} [opts]
- *   slot   只播某个槽（cast/travel/impact/aftermath/persist）；不给则全播
+ *   slot   只播某个槽（cast/travel/impact/aftermath/persist/death）；不给则全播
  *   filter 只播 rule id 含此子串的规则
  *   gap    每条之间的间隔毫秒，默认 1200
  * @param {{assets: object, armory: object}} deps
@@ -52,20 +52,23 @@ async function runPreview({slot = null, filter = null, gap = 1200} = {}, deps) {
     for (const rule of deps.armory[s] ?? []) {
       if (filter && !rule.id.includes(filter)) continue;
       const key = `${s}/${rule.id}`;
-      // fixture 只盖掉默认快照满足不了的那几条守卫，其余规则照旧吃默认的近战快照。
-      const plan = s === "persist"
-        ? previewEffectPlan(rule, target, env, deps)
+      // persist 与 death 两槽吃的是 EffectSnapshot（见 resolver/resolve.mjs 的
+      // resolveEffect），走同一个合成器、只差槽名；其余四槽走动作快照 + fixture，
+      // fixture 只盖掉默认快照满足不了的那几条守卫。
+      const plan = EFFECT_SLOTS.includes(s)
+        ? previewEffectPlan(rule, target, env, deps, s)
         : previewActionPlan(rule, s, origin, target, env, deps, PREVIEW_FIXTURES[key] ?? {});
       if (!plan) { skipped.push(key); continue; }
 
       ui.notifications.info(game.i18n.format("CANIM.Preview.Playing", {slot: s, rule: rule.id}));
-      if (s === "persist") {
-        // 走 runPersistAnimation 而不是裸 playPlan：这是持久特效唯一的播放通道
-        // （Task 14 的 Critical-2），预览也不例外——playPlan() 对带 persist cue 的
-        // 计划只 await 到序列交给 Sequencer 为止，直接调它虽然不会挂住（这一点已经
-        // 在 play.mjs 里改过），但绕开 runPersistAnimation 会破坏"新增播放点只有
-        // 一条入口"这个约束，未来这条通道再长出新逻辑（比如真的排队让路）预览宏会
-        // 悄悄漏掉。
+      if (EFFECT_SLOTS.includes(s)) {
+        // 走 runPersistAnimation 而不是裸 playPlan：这是由 ActiveEffect 驱动的两条
+        // 通道在生产侧共用的播放入口（persist 是 Task 14 的 Critical-2，death 用它
+        // 是为了同一个让路时序，见 trigger/effects.mjs 的 playDeath）。playPlan() 对
+        // 带 persist cue 的计划只 await 到序列交给 Sequencer 为止，直接调它虽然不会
+        // 挂住（这一点已经在 play.mjs 里改过），但绕开 runPersistAnimation 会破坏
+        // "新增播放点只有一条入口"这个约束，未来这条通道再长出新逻辑（比如真的排队
+        // 让路）预览宏会悄悄漏掉。
         await runPersistAnimation(`预览 ${rule.id}`, () =>
           playPlan(plan, {volume: 0.5, shake: true, resolveRef}));
       } else {
@@ -91,6 +94,13 @@ async function runPreview({slot = null, filter = null, gap = 1200} = {}, deps) {
     ? game.i18n.format("CANIM.Preview.DoneSkipped", {played, skipped: skipped.length})
     : game.i18n.format("CANIM.Preview.Done", {played}));
 }
+
+/**
+ * 由 ActiveEffect 驱动的两个槽：吃 EffectSnapshot、经 runPersistAnimation 播出，
+ * 与生产侧的两条通道（trigger/effects.mjs 的 playPersist / playDeath）保持同一条入口。
+ * 只有 persist 需要预览后主动收尾（它是持久特效；death 是一次性的，自己会播完）。
+ */
+const EFFECT_SLOTS = ["persist", "death"];
 
 /**
  * 预览用的模板几何。数值与 tools/dump-fixtures.mjs 的 `TARGET_REGION` 逐字段相同
@@ -188,7 +198,6 @@ function syntheticAction(rule, origin, target, fixture) {
  *   travel/spell.gesture.cone  `templateEnd(s.region)` + `coneYScale(s.region.angle)`
  *   travel/generic.travel      `if (!s.usage.isRanged) return null`
  *   aftermath/aftermath.healing    `if (!(target?.healed > 0)) return null`
- *   aftermath/aftermath.kill       `if (!target?.effects?.includes("dead")) return null`
  *   aftermath/aftermath.morale     `if (!target?.damage) return null`（且 damage 只在
  *                                   `r.resource === usage.resource` 时才成形）
  *   aftermath/aftermath.groundResidue  `residueAnchor(s)`（cone 或 circle 区域）
@@ -215,7 +224,6 @@ export const PREVIEW_FIXTURES = Object.freeze({
   "aftermath/aftermath.healing": Object.freeze({
     isAttack: false, tags: ["healing"], healed: 6
   }),
-  "aftermath/aftermath.kill": Object.freeze({damage: 12, effects: ["dead"]}),
   "aftermath/aftermath.morale": Object.freeze({resource: "morale", damage: 6}),
   "aftermath/aftermath.groundResidue": Object.freeze({
     gesture: "cone", targetType: "cone", region: PREVIEW_REGION.cone, tags: ["spell"]
@@ -277,9 +285,9 @@ export function previewActionPlan(rule, slot, origin, target, env, deps, fixture
 }
 
 /**
- * persist 槽的预览版本，同样强制 `when()` 恒真（12 个分组的 when 精确按 statusId
- * 等值匹配，合成的 `__preview__.<rule.id>` 永远不会等于任何真实状态名，不强制的话
- * 12 组会全部落空——见交接约束 (5)）。
+ * persist / death 两槽的预览版本，同样强制 `when()` 恒真（12 个分组的 when 精确按
+ * statusId 等值匹配、death 槽的 when 精确匹配 "dead"，而合成的 `__preview__.<rule.id>`
+ * 永远不会等于任何真实状态名，不强制的话它们会全部落空——见交接约束 (5)）。
  *
  * `effectUuid` 钉在目标 token 自己的 uuid 上，而不是 null：resolveEffect() 末尾的
  * keepTied() 会把 `persist:true` 但 `tieTo` 为空的 cue 直接丢弃（宁可这次没有状态
@@ -291,9 +299,10 @@ export function previewActionPlan(rule, slot, origin, target, env, deps, fixture
  * @param {Token} target
  * @param {{gridSize: number}} env
  * @param {{assets: object, armory: object}} deps
+ * @param {"persist"|"death"} [slot]
  * @returns {FXPlan|null}
  */
-export function previewEffectPlan(rule, target, env, deps) {
+export function previewEffectPlan(rule, target, env, deps, slot = "persist") {
   const snapshot = {
     statusId: `__preview__.${rule.id}`,
     effectUuid: target.document.uuid,
@@ -303,7 +312,8 @@ export function previewEffectPlan(rule, target, env, deps) {
     seed: 1
   };
   const forced = {...rule, when: () => true};
-  const plan = resolveEffect(snapshot, {assets: deps.assets, armory: {...deps.armory, persist: [forced]}});
+  const plan = resolveEffect(snapshot, {assets: deps.assets, armory: {...deps.armory, [slot]: [forced]}},
+                             slot);
   return plan?.cues?.some(c => c.rule === rule.id) ? plan : null;
 }
 

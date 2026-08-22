@@ -56,7 +56,10 @@ test("两份语言文件键集合完全一致", () => {
 
 test("常量自洽", async () => {
   const C = await import("../scripts/const.mjs");
-  assert.deepEqual([...C.SLOTS], ["cast", "travel", "impact", "aftermath", "persist"]);
+  // death 是 Task 15b 新增的一次性槽（击杀爆发）：它由 createActiveEffect 驱动、
+  // 不挂在动作时间轴上，所以排在 persist 之后。见 armory/death.mjs 的文件头。
+  assert.deepEqual([...C.SLOTS],
+                   ["cast", "travel", "impact", "aftermath", "persist", "death"]);
   assert.deepEqual(C.RESULT, {
     MISS: 0, DODGE: 1, PARRY: 2, BLOCK: 3, ARMOR: 4, RESIST: 5, GLANCE: 6, HIT: 7
   });

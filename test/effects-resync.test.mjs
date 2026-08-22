@@ -24,8 +24,8 @@ import {installFakeSequencer} from "../tools/fake-sequencer.mjs";
 import {tokenPlaceable} from "../tools/token-mocks.mjs";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
-import {installEffectTriggers, installPersistResync, flushPersistResync, resyncPersist}
-  from "../scripts/trigger/effects.mjs";
+import {installEffectTriggers, installPersistResync, flushPersistResync, resyncPersist,
+        awaitPersistVisible, resetPersistInFlight} from "../scripts/trigger/effects.mjs";
 import {queueDepth} from "../scripts/trigger/dispatch.mjs";
 import {PERSIST_LEAD_MS} from "../scripts/const.mjs";
 
@@ -52,6 +52,10 @@ const afterGrace = () => bounded(sleep(PERSIST_LEAD_MS + 150));
  */
 function stubFoundry({tokens, effectAlive = () => true, effectActive = () => true,
                      enabled = true, crucibleVFX = true} = {}) {
+  // 在途登记是模块级状态，且现在要一直挂到「特效可被观察到 / 有界超时」为止（E1 修复
+  // 轮 2）。本文件每条用例都用 t1 + 同名状态，键完全相同——不清零的话，上一条用例留下
+  // 的登记会让下一条用例的播放被静默挡掉（断 0 的假绿、断 1 的假红）。
+  resetPersistInFlight();
   const prev = {
     Hooks: globalThis.Hooks, Actor: globalThis.Actor, game: globalThis.game,
     canvas: globalThis.canvas, fromUuidSync: globalThis.fromUuidSync,
@@ -417,6 +421,95 @@ test("E1：在途登记必须销账——第一份放弃播放之后，同一份
     assert.equal(fake.sequences.length, 1,
       "在途登记没有销账——这一份光环在本次会话里再也补不回来了");
   } finally { world.restore(); fake.restore(); }
+});
+
+/**
+ * 【E1 修复轮 2】上面那条用例的三次调用**全部**落在 500ms 让路期内，行使不到真正出
+ * 问题的那一段：`playPlan()` 对 persist 计划在 `seq.play()` 之后就返回（不 await，
+ * play.mjs 的 Critical），而真 Sequencer 的 `Sequence.play()` 还要先 await 初始化、
+ * 再 await `Preloader.preload`（冷缓存下拉一段 jb2a webm 是秒级），之后才
+ * `section._execute()` → `_playEffect` → `VisibleEffects.add`（sequencer.js:11826）。
+ * 让路期结束到那一刻之间，`isPlayingPersist` 仍然恒假。
+ *
+ * 这个桩把那段延迟显式化：`play()` 之后 N 毫秒才把这一份登记进 `getEffects`。
+ *
+ * @param {ReturnType<typeof installFakeSequencer>} fake
+ * @param {ReturnType<typeof stubFoundry>} world
+ * @param {number} ms       play() 之后多久才登记（模拟 preload 耗时）
+ * @param {{origin: string, object: object}} entry
+ */
+function registerAfter(fake, world, ms, entry) {
+  const Base = globalThis.Sequence;
+  globalThis.Sequence = class extends Base {
+    play(opts) {
+      const p = super.play(opts);
+      setTimeout(() => world.markPlaying(entry.origin, entry.object), ms);
+      return p;
+    }
+  };
+  // fake.restore() 会把全局换回真身，这里不需要单独收尾。
+}
+
+test("E1：让路期结束、特效尚未登记进 Sequencer 的那段窗口里，第二个入口不会叠出第二份", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  const world = stubFoundry({tokens: [t]});
+  // preload 400ms：play() 在 T≈500（让路期满）发出，特效要到 T≈900 才看得见。
+  registerAfter(fake, world, 400, {origin: activeEffect(t).uuid, object: t});
+  try {
+    await resyncPersist(deps(), ENV);                       // T=0
+    await afterGrace();                                     // T≈650：已 play()，尚未登记
+    assert.equal(fake.sequences.length, 1, "前提：第一份已经交给 Sequencer");
+    assert.equal(world.playing.length, 0,
+      "前提：这一刻特效还没进 VisibleEffects——正是要测的那段空窗");
+
+    await resyncPersist(deps(), ENV);                       // 空窗里的第二个入口
+    await bounded(sleep(PERSIST_LEAD_MS + 500));
+    assert.equal(fake.sequences.length, 1,
+      "「让路期之后、登记之前」这段空窗里叠出了第二圈光环");
+    assert.equal(world.playing.length, 1, "前提：这时候特效确实已经登记进去了");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("E1：特效一登记进 Sequencer 就销账，不是死等超时", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  const world = stubFoundry({tokens: [t]});
+  registerAfter(fake, world, 100, {origin: activeEffect(t).uuid, object: t});
+  try {
+    await resyncPersist(deps(), ENV);
+    await bounded(sleep(PERSIST_LEAD_MS + 400));            // 登记 + 轮询发现它
+    assert.equal(world.playing.length, 1, "前提：这一份已经登记进 Sequencer");
+
+    // 光环没了（tie 清理 / 别人调了 endEffects），但状态本身仍在——下一次 resync 必须
+    // 能补回来。如果销账改成「一律等满 PERSIST_VISIBLE_TIMEOUT_MS」，这里就补不回来。
+    world.playing.length = 0;
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(fake.sequences.length, 2,
+      "特效已经可以被观察到之后，在途登记仍然占着——这份光环要白等一个超时才补得回来");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("E1：特效始终没登记时，在途登记在有界超时后放行（不许永久泄漏）", async () => {
+  // 直接单测 awaitPersistVisible 的「有界」这一半：整合用例只能行使「观察到就提前
+  // 放行」，超时那一支要靠注入一个小 timeoutMs 才测得动（默认 15s）。
+  const world = stubFoundry({tokens: []});                  // getEffects 恒空
+  // 轮询用的是 unref 定时器（见 effects.mjs 的 idleSleep）：它不该成为「进程还有事要
+  // 做」的理由，所以这里自己拿一枚 ref 定时器把事件循环撑住，否则 node --test 会在
+  // await 还没兑现时就判定无事可做而退出（用例会被 cancel 掉）。
+  const keepAlive = setInterval(() => {}, 25);
+  try {
+    const t0 = Date.now();
+    const observed = await awaitPersistVisible("Scene.s.Token.t1.ActiveEffect.burning", null,
+                                               {timeoutMs: 250, pollMs: 50});
+    const dt = Date.now() - t0;
+    assert.equal(observed, false, "从未登记过却报告「已观察到」");
+    assert.ok(dt >= 240, `只等了 ${dt}ms 就放行，比给定的超时还短`);
+    assert.ok(dt < 1500, `等了 ${dt}ms，超时没有生效（在途登记会一直挂着）`);
+  } finally { clearInterval(keepAlive); world.restore(); }
 });
 
 /* -------------------------------------------- */

@@ -383,10 +383,14 @@ test("installPreviewCommand：ChatLog.CHAT_COMMANDS 不可用时优雅退化，�
 /*  F 组：全兵库预览覆盖率                        */
 /* -------------------------------------------- */
 
-/** 与 runPreview 里的取用方式逐字一致：persist 走 previewEffectPlan，其余走 fixture。 */
+/**
+ * 与 runPreview 里的取用方式逐字一致：由 ActiveEffect 驱动的两槽（persist / death）
+ * 走 previewEffectPlan，其余四槽走动作快照 + fixture。
+ */
+const EFFECT_SLOTS = ["persist", "death"];
 function previewOf(slot, rule) {
-  return slot === "persist"
-    ? previewEffectPlan(rule, target(), ENV, deps())
+  return EFFECT_SLOTS.includes(slot)
+    ? previewEffectPlan(rule, target(), ENV, deps(), slot)
     : previewActionPlan(rule, slot, origin(), target(), ENV, deps(),
                         PREVIEW_FIXTURES[`${slot}/${rule.id}`] ?? {});
 }
@@ -478,12 +482,13 @@ test("F：PREVIEW_FIXTURES 的模板几何与 TARGET_REGION 逐字段一致（�
 });
 
 /**
- * 【F 组 · 逐条】aftermath 四条各自要的信号必须真的经 snapshotAction 推导出来，
+ * 【F 组 · 逐条】aftermath 三条各自要的信号必须真的经 snapshotAction 推导出来，
  * 而不是被直接塞进快照。断言落在**产出的 cue 与它依赖的字段**上。
+ * （原来的第四条 `aftermath.kill` 已迁去 death 槽，见 armory/death.mjs 与
+ * test/effects-death.test.mjs——它要的信号根本不在动作快照里。）
  */
-test("F：aftermath 四条各自被自己的 fixture 命中，且 cue 落在 aftermath 槽", () => {
-  for (const id of ["aftermath.healing", "aftermath.kill", "aftermath.morale",
-                    "aftermath.groundResidue"]) {
+test("F：aftermath 三条各自被自己的 fixture 命中，且 cue 落在 aftermath 槽", () => {
+  for (const id of ["aftermath.healing", "aftermath.morale", "aftermath.groundResidue"]) {
     const rule = ruleIn("aftermath", id);
     const plan = previewOf("aftermath", rule);
     assert.ok(plan, `${id} 预览不出来`);
@@ -503,9 +508,9 @@ test("F：fixture 走的是动作层而不是直接改快照——healed/damage/
   assert.equal(s.targets[0].damage, null, "前提：默认快照没有伤害");
   assert.deepEqual(s.targets[0].effects, [], "前提：默认快照没有状态");
 
-  // 反过来，配了 fixture 的三条必须真的走通 snapshotAction 的推导，
-  // 表现为 build() 里那三个守卫（healed>0 / effects.includes("dead") / damage 非空）放行。
-  for (const id of ["aftermath.healing", "aftermath.kill", "aftermath.morale"]) {
+  // 反过来，配了 fixture 的两条必须真的走通 snapshotAction 的推导，
+  // 表现为 build() 里那两个守卫（healed>0 / damage 非空）放行。
+  for (const id of ["aftermath.healing", "aftermath.morale"]) {
     assert.ok(previewOf("aftermath", ruleIn("aftermath", id)),
       `${id} 的信号没能经事件流推导出来`);
   }

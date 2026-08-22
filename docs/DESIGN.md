@@ -164,7 +164,7 @@ rotateTowards 22 | animateProperty 18 | repeats 14 | thenDo 12 | randomizeMirror
 
 blfx 的三槽（ON SOURCE / SOURCE→TARGET / ON TARGET）、trove 的 location + aim 分离、
 crucible 原生的 S1–S4 声音分类法（charge / passive / damage / impact），三套独立系统
-收敛到同一个「阶段化槽位」模型。本设计沿用该模型并补充第五槽。
+收敛到同一个「阶段化槽位」模型。本设计沿用该模型并补充两个不挂在动作上的槽（见 §6.3）。
 
 ## 4. 渲染层选型
 
@@ -189,14 +189,14 @@ crucible-anim/
 │   ├── trigger/                   ← 懂 crucible，不懂 Sequencer
 │   │   ├── wrap.mjs               CrucibleAction#configureVFXEffect 原型包装
 │   │   ├── snapshot.mjs           CrucibleAction → ActionSnapshot
-│   │   ├── effects.mjs            ActiveEffect 创建/删除 → persist 槽
+│   │   ├── effects.mjs            ActiveEffect 创建/删除 → persist 槽 / death 槽
 │   │   └── dispatch.mjs           updateChatMessage → 播放
 │   ├── resolver/                  ← 纯函数，可在 Node 中直接测试
-│   │   ├── resolve.mjs            五槽装配 + 优先级
+│   │   ├── resolve.mjs            槽装配 + 优先级
 │   │   ├── palette.mjs            符文/伤害类型 → 颜色 + 色相补偿
 │   │   └── assets.mjs             bestFit 降级解析（离线索引 / 运行时 DB 双后端）
 │   ├── armory/                    ← 纯数据 + 构建函数
-│   │   ├── cast.mjs  travel.mjs  impact.mjs  aftermath.mjs  persist.mjs
+│   │   ├── cast.mjs  travel.mjs  impact.mjs  aftermath.mjs  persist.mjs  death.mjs
 │   └── player/
 │       ├── play.mjs               FXPlan → Sequencer
 │       └── semaphore.mjs          并发序列化
@@ -396,7 +396,7 @@ Crucible 源码上，上游漂移会先让测试变红。判据用**真值**而�
 }
 ```
 
-### 6.3 五槽
+### 6.3 六槽
 
 | 槽 | 时刻 | 锚点 | 主决定维度 | 对应 |
 | --- | --- | --- | --- | --- |
@@ -405,9 +405,20 @@ Crucible 源码上，上游漂移会先让测试变红。判据用**真值**而�
 | **S3 `impact`** | travel 末，每目标一次 | 目标 | 攻击结果 + 伤害类型 | blfx 槽 3 / crucible S4 impact |
 | **S4 `aftermath`** | impact 后 | 目标 / 地面 | 效果与资源变化 | — |
 | **S5 `persist`** | ActiveEffect 创建 → 删除 | 目标 | 状态 id | AA `aefx` / trove Conditions |
+| **S6 `death`** | `dead` 落地那一次 | 目标脚下 | 有没有死 | — |
 
-**S5 不挂在动作上**，由 `createActiveEffect` / `deleteActiveEffect` 独立驱动，
-使用 `.persist().name(id).tieToDocuments(effect)`，效果移除时动画自动清理。
+**S5 / S6 都不挂在动作上**，由 ActiveEffect 的钩子独立驱动，共用同一份
+`EffectSnapshot`（`resolveEffect(snapshot, deps, slot)`）：
+
+* S5 由 `createActiveEffect` / `deleteActiveEffect` 成对驱动，cue 用
+  `.persist().tieToDocuments(effect)`，效果移除时动画自动清理；
+* S6 **只**由 `createActiveEffect` 驱动，产出一次性 cue（不 persist、无 tieTo、
+  没有「结束」语义），并且绝不能接到 `resyncPersist` / `createToken` 上——那两条是
+  「把该有的稳态补齐」，接上去等于每次切场景、每具尸体都重放一遍击杀爆发。
+  它之所以不能留在 S4：S4 的快照冻结于**建卡时刻**（`configureVFXEffect()` 在
+  `_prepareMessage()` 里跑），那一刻伤害还没结算，死亡信息不存在；`dead` 是 Crucible
+  在资源结算之后单独 `toggleStatusEffect("dead", …)` 打上的。完整依据见
+  `scripts/armory/death.mjs` 的文件头。
 
 每槽独立解析一次，各约 10 条规则。40–50 条规则组合出的空间足以覆盖全部动作，
 这是「一套规则盖住 218 个动作」的机制。
@@ -477,7 +488,7 @@ ColorMatrix 色相旋转补足差值（学自 pf2e-jb2a-macros）。
 
 ### 6.7 persist 为何不落 Sequencer 的盘
 
-`persist` 是五个槽里唯一会让 Sequencer 往世界写数据的开关，而本模组的传输模型是
+`persist` 是全部槽里唯一会让 Sequencer 往世界写数据的开关，而本模组的传输模型是
 「各客户端本地播同一份 plan」（§5.1 / §5.4）。两者相乘的后果是 N 个在线客户端把同一个
 状态写成 N 条记录：Sequencer 4.2.3 的落盘判据
 
@@ -691,7 +702,7 @@ DEFAULT_ACTIONS                     13
 
 1. 模组可加载，自检通过，不影响任何现有功能（关闭时零副作用）
 2. `tools/extract-db.mjs` 产出 `data/asset-index.json`
-3. 五槽兵库，40–50 条规则，覆盖：11 个缺失姿态、8 个缺失符文、全部近战武器类别、
+3. 分槽兵库，40–50 条规则，覆盖：11 个缺失姿态、8 个缺失符文、全部近战武器类别、
    13 个默认动作中有动画价值的部分、状态效果持续特效
 4. headless 测试全绿，1500+ 断言样本
 5. `/canim-preview` 宏可用

@@ -21,6 +21,7 @@ globalThis.Hooks = {
 };
 
 const main = await import("../scripts/main.mjs");
+const {resetPersistInFlight} = await import("../scripts/trigger/effects.mjs");
 
 const fireInit = () => { for (const fn of HOOKS.once.init ?? []) fn(); };
 const fireReady = async () => { for (const fn of HOOKS.once.ready ?? []) await fn(); };
@@ -77,6 +78,10 @@ function stubWorld({crucibleOk = true, freezeProto = false, tokens = []} = {}) {
 
 /** 每条用例都从「模组还没挂载」的干净状态出发。 */
 function reset() {
+  // 在途登记是 trigger/effects.mjs 的模块级状态，且要一直挂到「特效可被观察到 /
+  // 有界超时」为止（E1 修复轮 2）。本文件的观测点正是 `getEffects` 有没有被调用过，
+  // 而它排在 inFlight 那道闸**之后**——上一条用例留下的登记会让这条观测直接落空。
+  resetPersistInFlight();
   HOOKS.once.init = HOOKS.once.init ?? [];
   HOOKS.once.ready = HOOKS.once.ready ?? [];
   HOOKS.on = {};

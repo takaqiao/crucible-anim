@@ -62,45 +62,23 @@ export default [
   },
 
   /**
-   * 击杀——目标身上带上 "dead" 状态（snapshot.mjs 的 target.effects 是这次事件
-   * 实际写回的状态 id 数组，"dead" 就是 HP 归零时系统自己加的那个），在其脚下铺一摊
-   * 血泊，pri 430（高于治疗：同一动作里既杀又救的边界场景，死亡应盖过治疗辉光）。
+   * 【击杀规则已迁出本槽，见 armory/death.mjs 的 `death.kill`（Task 15b）】
    *
-   * 快照没有绝对 HP 值（只有 damage.total 这个增量），因此「damage.total 使其归零」
-   * 在这里落地为「target.effects 里出现 dead」——这是快照唯一能确认「这一下真的打死
-   * 了」的信号，比拍脑袋的伤害阈值可靠。
+   * 原来这里有一条 `aftermath.kill`，判据是 `target.effects.includes("dead")`——它在
+   * 实战中**永远不命中**：`target.effects` 来自动作自带的 `ev.effects`，而 `dead` 是
+   * Crucible 在资源结算后单独 `toggleStatusEffect("dead", …)` 打上的
+   * （documents/actor.mjs:2926）；何况 `configureVFXEffect()` 是在 `_prepareMessage()`
+   * 里跑的（models/action.mjs:3286），比 `confirm()` 的 `#applyEvents()`（:2670）早得多，
+   * 建计划那一刻伤害根本还没结算。完整依据与新通道写在 armory/death.mjs 的文件头。
    *
-   * blfx.spell.template.circle.wave2.blood1.splatter.red：56 帧 @30fps=1867ms，
-   * 1200x1200（blfx 基准，是 JB2A 400 的 3 倍，objectScale 取 1/3 归一化）。ASSET-NOTES
-   * 最大的坑：「结尾不是淡出而是整摊血向中心收缩回去，帧 44→48 迅速缩成一点」——不能
-   * 播完整段，必须在收缩开始前用 duration 硬切再靠 fadeOut 收尾（与 impact.mjs
-   * RESULT_LAYER.ARMOR 同一手法：duration 提前截断 + fadeOut 接住最后一帧）。裁到
-   * 1167ms（约 f35，仍在「约帧 24 达到满幅」之后的平台段，早于 f44 的收缩起点），
-   * fadeOut 给足 700ms 让血泊看起来是自然消退而不是被吸回去。fadeIn:0：素材本来就是
-   * 从中心向外炸开的过程，天然渐显。belowTokens:true——地面血泊应压在 token 之下。
+   * **不要在本槽里重新加任何按「目标死没死」判断的规则**：S4 是动作时间轴上的一段，
+   * 拿到的快照冻结于建卡时刻，那一刻的死亡信息不存在。
    */
-  {
-    id: "aftermath.kill", pri: 430,
-    when: s => (s.targets ?? []).some(t => t.effects?.includes("dead")),
-    build: (s, ctx, target) => {
-      if (!target?.effects?.includes("dead")) return null;
-      const fx = ctx.pick("blfx.spell.template.circle.wave2.blood1.splatter.red");
-      if (!fx) return null;
-      return {
-        // objectScale 1/3 同样按「blfx 1200x1200 是 JB2A 400x400 的 3 倍」推出，
-        // 而该前提在 Task 12 被推翻（见 armory/impact.mjs 结果层 canvas 一段）：
-        // scaleToObject 下源画幅像素不参与定尺寸，这摊血实际只画到约 0.28 个格宽。
-        // 与 impact 两处同源，须一并重新推导，本轮只记录不改。
-        file: fx.file, objectScale: r6(1 / 3), attachTo: true, bindScale: true,
-        belowTokens: true, zIndex: 15, elevation: target.elevation,
-        duration: 1167, fadeIn: 0, fadeOut: 700
-      };
-    }
-  },
 
   /**
-   * 士气变化——`usage.resource === "morale"` 的动作，pri 380（低于治疗/击杀：一个
-   * 同时打士气又造成生死的动作，应该优先读出「谁死了/谁被救了」而不是士气本身）。
+   * 士气变化——`usage.resource === "morale"` 的动作，pri 380（低于治疗：一个同时打
+   * 士气又救人的动作，应该优先读出「谁被救了」而不是士气本身；「谁死了」不在本槽，
+   * 见上面那条迁出说明）。
    * 落到这条规则的实际是纯粹的士气打击（rally 类回复士气的动作会先被 pri 420 的
    * 治疗规则接管，这里只服务「士气被削」那一半），逐目标看 `target.damage` 是否
    * 非空来判断这个目标是否真的挨了这一下（多目标动作里有人没中就不该出特效）。
@@ -168,13 +146,13 @@ export default [
   },
 
   /**
-   * 终极兜底：pri 10、when 恒真，架构上与其它四个槽保持同一层级结构（见
+   * 终极兜底：pri 10、when 恒真，架构上与其它槽保持同一层级结构（见
    * DESIGN.md §6.4「0-99 终极兜底」），但 aftermath 本身允许「这个动作没有 S4 内容」
    * 这个合法结果（不像 cast/travel/impact 需要保证 100% 覆盖率，见
-   * test/coverage.test.mjs 里没有逐动作强制 aftermath 出内容的断言）。上面四条 pri
-   * 420/430/380/300 的规则已经覆盖了当前设计要处理的全部 S4 场景（治疗/击杀/士气/
-   * 地面残留），因此这里恒返回 null，不再引用任何素材路径——原先占位用的
-   * `jb2a.healing_generic.burst`（ASSET-NOTES 验证失效，见文件头以及
+   * test/coverage.test.mjs 里没有逐动作强制 aftermath 出内容的断言）。上面三条 pri
+   * 420/380/300 的规则已经覆盖了当前设计要处理的全部 S4 场景（治疗/士气/地面残留；
+   * 击杀走 armory/death.mjs 的一次性通道），因此这里恒返回 null，不再引用任何素材
+   * 路径——原先占位用的 `jb2a.healing_generic.burst`（ASSET-NOTES 验证失效，见
    * test/armory-assets.test.mjs 的 LEGACY_UNVERIFIED）已随之整条移除。
    */
   {

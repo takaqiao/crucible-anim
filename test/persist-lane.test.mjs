@@ -28,7 +28,8 @@ import {playPlan} from "../scripts/player/play.mjs";
 import {createSemaphore} from "../scripts/player/semaphore.mjs";
 import {buildPlanFor} from "../scripts/trigger/wrap.mjs";
 import {queueDepth, runAnimation, runPersistAnimation} from "../scripts/trigger/dispatch.mjs";
-import {installEffectTriggers, planForEffect} from "../scripts/trigger/effects.mjs";
+import {installEffectTriggers, planForEffect, resetPersistInFlight}
+  from "../scripts/trigger/effects.mjs";
 import {PERSIST_LEAD_MS} from "../scripts/const.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -266,6 +267,10 @@ test("whenBusy 在任务入队的那一刻兑现，且不留活定时器吊住�
 
 /** 最小 Foundry 桩：只装 installEffectTriggers 那条路径真正会碰的全局。 */
 function stubFoundry({tokens, effectAlive = () => true}) {
+  // 见 trigger/effects.mjs 的 resetPersistInFlight：在途登记要挂到「特效可被观察到 /
+  // 有界超时」为止，而本文件两条用例用的是同一个 (uuid, tokenId)——不清零，第二条会被
+  // 第一条留下的登记挡住，于是「状态已被移除时不播」变成一条什么都没验证的假绿。
+  resetPersistInFlight();
   const prev = {
     Hooks: globalThis.Hooks, Actor: globalThis.Actor, game: globalThis.game,
     canvas: globalThis.canvas, fromUuidSync: globalThis.fromUuidSync,

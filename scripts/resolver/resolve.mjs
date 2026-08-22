@@ -180,7 +180,8 @@ const originAnchor = s => ({ref: "origin", tokenId: s?.origin?.tokenId ?? null,
                             x: s?.origin?.x, y: s?.origin?.y});
 
 /**
- * 五槽装配。
+ * 动作四槽装配（cast/travel/impact/aftermath）。由 ActiveEffect 驱动的 persist / death
+ * 两槽不在这里，见下面的 resolveEffect()。
  * @param {ActionSnapshot} snapshot
  * @param {{assets: object, armory: object}} deps
  * @returns {FXPlan|null}
@@ -264,16 +265,18 @@ function drainWarnings(ctx, onWarn) {
 }
 
 /**
- * persist 槽的 build() 收不到前序槽视图——它不属于任何动作的时间轴，没有「前面已经
- * 画过什么」可查。给一份冻结的空视图而不是 null，是为了让将来某条 persist 规则误写
- * `built.impact` 时拿到空数组而不是 TypeError。
+ * persist / death 两槽的 build() 收不到前序槽视图——它们不属于任何动作的时间轴，
+ * 没有「前面已经画过什么」可查。给一份冻结的空视图而不是 null，是为了让将来某条规则
+ * 误写 `built.impact` 时拿到空数组而不是 TypeError。
  */
 const NO_PRIOR_SLOTS = Object.freeze({
   travel: Object.freeze([]), impact: Object.freeze([]), aftermath: Object.freeze([])
 });
 
 /**
- * persist 槽的最后一道闸：`persist:true` 但 `tieTo` 为空的 cue 一律丢弃并留痕。
+ * 由 ActiveEffect 驱动的两个槽的最后一道闸：`persist:true` 但 `tieTo` 为空的 cue
+ * 一律丢弃并留痕。death 槽的 cue 不带 persist，这道闸对它是空过（留着不做例外，
+ * 免得将来往 death 槽里加持久 cue 时绕开了唯一的防线）。
  *
  * Sequencer 4.2.3 清理持久化特效只有两条链路，两条都要求 tiedDocuments 能解析：
  * (a) CanvasEffect 初始化时对 `data.tiedDocuments` 逐条 `fromUuidSync`，解析得到才
@@ -297,30 +300,39 @@ function keepTied(cue, ctx, ruleId) {
 }
 
 /**
- * persist 槽：由 ActiveEffect 增删驱动，不经过动作。
+ * 由 ActiveEffect 驱动的槽：不经过动作，吃 EffectSnapshot。
+ *
+ * 两个槽共用本函数，靠 `slot` 参数选兵库（两者的规则签名与快照形状完全相同）：
+ *  · `persist`（默认）—— 状态的持续光环，由创建/删除成对驱动；
+ *  · `death`         —— 击杀那一刻的一次性爆发，只由 `dead` 落地驱动（见
+ *                       armory/death.mjs 的文件头）。
  *
  * 与 resolve() 一样，本函数对任何输入都不得外抛——它挂在 createActiveEffect 钩子上，
- * 一个未捕获异常会连带打断状态上身的整条处理。三层防护：
+ * 一个未捕获异常会连带打断状态上身的整条处理。四层防护：
  *  1. 残缺目标：没有 target 就没有可挂载的锚点，直接 null。ActiveEffect 挂在当前场景
  *     没有 token 的 actor 上（离场角色、跨场景、未链接 token 尚未渲染）是完全正常的
  *     情形，不是错误，所以不留 warning，静默不画。
- *  2. 规则 when()/build() 抛异常：分别由 firstMatch 与 runBuild 降级成一条 warning。
- *  3. persist 但无 tieTo：由 keepTied 丢弃并留痕，见其注释。
+ *  2. 槽名写错/兵库没有这个槽：直接 null，不让 firstMatch 去展开 undefined。
+ *  3. 规则 when()/build() 抛异常：分别由 firstMatch 与 runBuild 降级成一条 warning。
+ *  4. persist 但无 tieTo：由 keepTied 丢弃并留痕，见其注释。
  *
  * @param {EffectSnapshot|null} effectSnapshot
  * @param {{assets: object, armory: object}} deps
+ * @param {"persist"|"death"} [slot]
  * @returns {FXPlan|null}
  */
-export function resolveEffect(effectSnapshot, {assets, armory, onWarn}) {
+export function resolveEffect(effectSnapshot, {assets, armory, onWarn}, slot = "persist") {
   const target = effectSnapshot?.target;
   if (!target) return null;
+  const rules = armory?.[slot];
+  if (!rules?.length) return null;
   const ctx = createContext({assets, snapshot: effectSnapshot, seed: effectSnapshot.seed});
-  const rule = firstMatch(armory.persist, effectSnapshot, ctx, "persist");
+  const rule = firstMatch(rules, effectSnapshot, ctx, slot);
   if (!rule) return null;
   const at = {ref: "target", tokenId: target.tokenId, uuid: target.uuid, x: target.x, y: target.y};
-  // 第三个入参与 cast 槽一致传 null：persist 规则的签名是 (e, ctx)，目标几何已经在
+  // 第三个入参与 cast 槽一致传 null：这两个槽的规则签名是 (e, ctx)，目标几何已经在
   // e.target 里，不再另给一份免得两处不同步。
-  const cues = runBuild(rule, effectSnapshot, ctx, null, NO_PRIOR_SLOTS, "persist", at,
+  const cues = runBuild(rule, effectSnapshot, ctx, null, NO_PRIOR_SLOTS, slot, at,
                         target.tokenId)
     .filter(c => keepTied(c, ctx, rule.id));
   if (!cues.length) return drainWarnings(ctx, onWarn);
