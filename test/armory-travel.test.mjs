@@ -257,24 +257,61 @@ test("锥形端点在整圈上都等于 origin + dir(rotation)*radius", () => {
   }
 });
 
-test("锥形张角按半宽之比撑 scale.y", () => {
+test("锥形张角按半宽之比撑 scale.y（60°/120° 在贴图可撑范围内，不触发截断告警）", () => {
   // 贴图是 53.13° 的 5e 锥（600x600 画幅 / _template=[100,0,0] / 抽帧实测斜率 0.49-0.53）。
   // 倍率 = tan(区域半角) / tan(26.565°) = tan(A/2) / 0.5。
-  const c60 = onlyCue(withRegion("spell.flame.cone", {angle: 60}));
+  const p60 = planOf(withRegion("spell.flame.cone", {angle: 60}));
+  const c60 = p60.cues.filter(x => x.slot === "travel")[0];
   assert.equal(c60.scale.x, 1, "scale.x 必须留 1：Sequencer 会拿它去除距离");
   assert.equal(c60.scale.y, 1.154701, "60° 模板要把 53.13° 的贴图撑宽 15%");
-  const c120 = onlyCue(withRegion("spell.flame.cone", {angle: 120}));
+  assert.deepEqual(p60.warnings, [], "60° 在贴图可撑范围内，不该有截断告警");
+
+  const p120 = planOf(withRegion("spell.flame.cone", {angle: 120}));
+  const c120 = p120.cues.filter(x => x.slot === "travel")[0];
   assert.equal(c120.scale.y, 3.464102, "120° 要 tan60/0.5=3.46，角度比 120/60=2 只能撑到 90°");
+  assert.deepEqual(p120.warnings, [], "120° 仍在 CONE_YSCALE_MAX=4 以内，不该有截断告警");
+
   // 贴图自身张角 2·atan(0.5) = 53.130102°，写字面量 53.13 会差到 0.999998，直接算给它
   const cNative = onlyCue(withRegion("spell.flame.cone", {angle: (2 * Math.atan(0.5) * 180) / Math.PI}));
   assert.equal(cNative.scale.y, 1, "正好等于贴图自身张角时不该拉伸");
 });
 
-test("张角超出单张贴图能撑的范围时截断并留痕", () => {
-  const plan = planOf(withRegion("spell.flame.cone", {angle: 210}));  // Crucible 的 fan 张角
-  const c = plan.cues.filter(x => x.slot === "travel")[0];
-  assert.equal(c.scale.y, 4);
-  assert.ok(plan.warnings.some(w => w.includes("210")), `截断必须留痕：${JSON.stringify(plan.warnings)}`);
+/**
+ * ≥180° 防护五点行为锁。tan(A/2) 在 A=180° 处发散为 Infinity、A>180° 时 A/2>90° 使 tan
+ * 转负——两者都不能流进 scale.y（Sequencer 拿负/无穷缩放会把贴图翻转或直接崩）。
+ * coneYScale 把参与三角函数运算的角度先钳制到 [1°,179°]（179° 是浮点安全上界），
+ * 再交给 CONE_YSCALE_MAX=4 的硬上限接管，所以 180°/210°（Crucible 的 fan 张角，见
+ * const/action.mjs 的 TARGET_TYPES.fan.region.angle）/360° 都截到同一个安全值 4 并
+ * ctx.warn 留痕——180° 起就不再是几何意义上的锥形（半张角达到或超过 90°），钳制上界
+ * 是在诚实表达"这份素材只能撑到 179°"，不是伪造一个更宽的画面。
+ */
+test("张角 60/120/180/210/360 五点锁：scale.y 恒为有限正数，≥180° 截断留痕", () => {
+  const cases = [
+    {angle: 60, y: 1.154701, warns: false},
+    {angle: 120, y: 3.464102, warns: false},
+    {angle: 180, y: 4, warns: true},
+    {angle: 210, y: 4, warns: true},  // Crucible 的 fan 张角
+    {angle: 360, y: 4, warns: true}
+  ];
+  for (const {angle, y, warns} of cases) {
+    const plan = planOf(withRegion("spell.flame.cone", {angle}));
+    const c = plan.cues.filter(x => x.slot === "travel")[0];
+    assert.equal(c.scale.x, 1, `angle=${angle} scale.x 必须为 1`);
+    assert.ok(Number.isFinite(c.scale.y), `angle=${angle} scale.y 不能是 NaN/Infinity，实际 ${c.scale.y}`);
+    assert.ok(c.scale.y > 0, `angle=${angle} scale.y 不能是负数或 0，实际 ${c.scale.y}`);
+    assert.equal(c.scale.y, y, `angle=${angle} scale.y 应为 ${y}`);
+    const hasWarn = plan.warnings.some(w => w.includes(String(angle)));
+    assert.equal(hasWarn, warns, `angle=${angle} 告警状态应为 ${warns}：${JSON.stringify(plan.warnings)}`);
+  }
+});
+
+test("张角输入非有限数字（NaN/Infinity/坏字符串）时退回默认 60°，不产生 NaN", () => {
+  for (const bad of [NaN, Infinity, -Infinity, "not-a-number"]) {
+    const plan = planOf(withRegion("spell.flame.cone", {angle: bad}));
+    const c = plan.cues.filter(x => x.slot === "travel")[0];
+    assert.ok(Number.isFinite(c.scale.y), `angle=${bad} scale.y 不能是 NaN/Infinity，实际 ${c.scale.y}`);
+    assert.equal(c.scale.y, 1.154701, `angle=${bad} 应退回默认 60° 的倍率`);
+  }
 });
 
 test("射线拉到模板端点而不是目标身上", () => {

@@ -79,12 +79,28 @@ const CONE_YSCALE_MAX = 4;
  * 裁掉，撑不够却是实打实的漏画）。
  * scale.x 必须保持 1：Sequencer 会先用 scale.x 去除 ray.distance，非 1 会连带改掉
  * 按距离挑 ft 分支的判定。
+ *
+ * **≥180° 防护**（Crucible 的 fan target type 张角 210°，见 TARGET_TYPES.fan.region.angle）：
+ * `tan(A/2)` 在 A=180° 处是 `tan(90°)` = Infinity，A>180° 时 `A/2>90°` 使 tan 转负——
+ * 两者都不能流进 `scale.y`（Sequencer 拿负/无穷缩放会把贴图翻转或直接崩）。此处先把参与
+ * 三角函数运算的角度钳制到 `[1°,179°]`（179° 是浮点安全上界，91.5° 半角的 tan≈114.6 是有限
+ * 大数，不是无穷），再让 `CONE_YSCALE_MAX` 的硬上限接管——所以 179° 和 210°/360° 算出的
+ * `raw` 都远超 4，最终都截到同一个安全值 4 并 `ctx.warn`。这不是"凑巧没崩"：180° 本来就已经
+ * 不是几何意义上的锥形（半张角达到或超过 90°，两条边不再收敛于锥尖），钳制上界本质上是在说
+ * "这份素材只能诚实地表达到 179° 的锥，再宽的张角只能截断+留痕，不伪造一个更宽的画面"。
+ * 若未来要给 fan 专属规则用这份贴图（当前 fan 还落在 generic.travel 兜底，见文件头），
+ * 截断后的画面会比模板窄，这条 warn 就是留给那条新规则的信号，不是本函数该解决的。
+ * 输入本身也做了有限性防护：`angleDeg` 若不是有限数字（`null`/`undefined`/`NaN`/坏字符串），
+ * 一律退回默认 60°，不让 `NaN` 顺着 `tan()` 一路流到 `scale.y`。
  */
 function coneYScale(angleDeg, ctx) {
-  const a = Math.min(Math.max(Number(angleDeg ?? 60), 1), 179);
+  const parsed = Number(angleDeg ?? 60);
+  const safeDeg = Number.isFinite(parsed) ? parsed : 60;
+  const a = Math.min(Math.max(safeDeg, 1), 179);
   const raw = Math.tan((a / 2) * DEG) / CONE_SPRITE_HALF_TAN;
   if (raw > CONE_YSCALE_MAX) {
-    ctx.warn(`[travel] 区域张角 ${angleDeg}° 超出单张锥形贴图的拉伸上限，scale.y 截到 ${CONE_YSCALE_MAX}`);
+    const note = safeDeg >= 180 ? "（≥180° 已超出锥形的几何定义，钳制到 179° 处理）" : "";
+    ctx.warn(`[travel] 区域张角 ${angleDeg}° 超出单张锥形贴图的拉伸上限${note}，scale.y 截到 ${CONE_YSCALE_MAX}`);
     return CONE_YSCALE_MAX;
   }
   return r6(raw);

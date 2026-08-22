@@ -47,16 +47,18 @@ export const GESTURE_TARGET = {
   touch: "single", ward: "self"
 };
 /**
- * 每种 target.type 一个规范摆位。**注意 rotation 一律为 0、cone 的 angle 只有 60/120**：
+ * 每种 target.type 一个规范摆位。**注意 rotation 一律为 0、cone 的 angle 取自
+ * crucible/module/const/action.mjs 的 TARGET_TYPES.<key>.region.angle（cone=60、
+ * fan=210，由 test/source-tables.test.mjs 逐项解析源码核对锁定，不是手抄）**：
  * 真实放置时 rotation 由玩家鼠标现算（crucible 的 dice/action-use-dialog.mjs 按
  * directionDelta 吸附后写进 shape.rotation），compendium 里没有「真值」可抽，
  * 这份语料天然覆盖不到旋转。任何依赖模板朝向/张角的规则都不能靠这里证伪，
  * 必须在 test/armory-travel.test.mjs 的「模板几何」一组里就地合成旋转过的 region。
  */
-const TARGET_REGION = {
+export const TARGET_REGION = {
   blast: {type: "circle", x: 900, y: 500, radius: 200},
   cone: {type: "cone", x: 500, y: 500, radius: 300, angle: 60, rotation: 0},
-  fan: {type: "cone", x: 500, y: 500, radius: 200, angle: 120, rotation: 0},
+  fan: {type: "cone", x: 500, y: 500, radius: 200, angle: 210, rotation: 0},
   ray: {type: "line", x: 500, y: 500, length: 400, width: 100, rotation: 0},
   pulse: {type: "circle", x: 500, y: 500, radius: 200},
   aura: {type: "circle", x: 500, y: 500, radius: 150}
