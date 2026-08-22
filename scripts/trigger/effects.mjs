@@ -434,7 +434,26 @@ function playPersist(effect, token, deps, env) {
     // 只走完了让路期，`seq.play()` 内部的 preload 还没跑完，特效尚未进 VisibleEffects
     // （见 inFlight 的注释）。这一步是 E1 的第二半：少了它，空窗只是从「500ms 让路期」
     // 缩短成「preload 那几秒」，并没有关掉。
-    .then(() => (dispatched ? awaitPersistVisible(effect.uuid, token) : undefined))
+    .then(async () => {
+      if (!dispatched) return;
+      if (!await awaitPersistVisible(effect.uuid, token)) return;
+      // 【E1 的镜像】同一个 preload 空窗，一个漏在播、一个漏在收：状态在「已送出、
+      // 尚未登记」这段里被移除/停用时，`deleteActiveEffect`（或 `updateActiveEffect`）
+      // 那条 `endPersist` 早就扫过一遍了，而那一刻 VisibleEffects 里还没有这枚特效，
+      // 一条都匹配不到（endEffects 只按当下的 `_filterEffects` 扫一次，不会等）；等它
+      // 登记完成，就再也没有人来收——只能靠 GM 手动 endAllEffects 或重载。
+      // Sequencer 自己的 tiedDocuments 兜底在这条路径上同样失效：CanvasEffect 初始化时
+      // `fromUuidSync(uuid)` 解析不到就不注册 delete 钩子（sequencer.js:16932-16943），
+      // 而文档此刻已经没了。
+      //
+      // 现在有了「特效何时可被观察」这个点，补收一次即可，判据与播出前的存活复检逐字
+      // 相同（`!live?.active` 同时覆盖「被删掉」与「被停用」两种）。这里**不需要**第二
+      // 套等待机械：等待就是 E1 那一套，收尾就是同一个 `endPersist`。
+      const live = fromUuidSync(effect.uuid);
+      if (live?.active) return;
+      debug(`状态 ${plan.source} 在登记完成前就没了，补收一次（否则这枚光环只能靠重载消掉）`);
+      endPersist(effect.uuid);
+    })
     // runPersistAnimation 自带 try/catch、从不 reject，awaitPersistVisible 里的
     // isPlayingPersist 也自带 catch，所以这条 catch 只是兜住将来可能长出来的新失败——
     // 它必须在 finally 之前，否则一个异常会变成挂在 finally 返回值上的未处理 rejection。
@@ -495,6 +514,13 @@ function playDeath(effect, token, deps, env) {
 
 /**
  * 收尾一份持久特效播放。origin 为空（effect 缺 uuid）时直接跳过。
+ *
+ * **它只按调用那一刻的画面扫一次**：`endEffects` 里是
+ * `const effectsToEnd = this._getEffectsByFilter(inFilter); if (!effectsToEnd.length) return;`
+ * （sequencer.js:11633-11634），没有任何等待或重试。所以「状态在特效还卡在
+ * `Preloader.preload` 里时就被移除」这条路径上，本函数必然扫空——补收由 `playPersist`
+ * 在特效登记完成那一刻做（见那里 `.then()` 里的「E1 的镜像」一段）。两处共用同一个
+ * 出口，别在这里另加等待。
  *
  * endEffects 是 `static async`（sequencer.js:11626）：_validateFilters 的
  * custom_error（11748-11761）与 _endManyEffects 的失败**全部**发生在异步函数体内，

@@ -91,6 +91,11 @@ export async function runAnimation(label, fn) {
 /**
  * persist 计划的专用通道：**不进**共享串行队列，但主动给动作动画让路。
  *
+ * 【名字与用途】它服务的共性是「由 ActiveEffect 驱动、因此天然早于造成它的那个动作，
+ * 需要给动作动画让路」——不是「持久」。所以 trigger/effects.mjs 的一次性击杀爆发
+ * （playDeath，Task 15b）也走这里：同样是 ActiveEffect 落地驱动，同样会撞上顺序倒置。
+ * 名字保留是为了不夹带无关重构，别据此以为只有 persist cue 能用它。
+ *
  * 为什么不能走 runAnimation（Critical-2）：`playPlan()` 对带 persist cue 的计划
  * 在把序列交给 Sequencer 之后就返回（见 player/play.mjs 末尾），但即便如此，把状态动画
  * 塞进串行队列在语义上也是错的——

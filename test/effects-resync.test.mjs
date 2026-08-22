@@ -62,7 +62,8 @@ function stubFoundry({tokens, effectAlive = () => true, effectActive = () => tru
     Sequencer: globalThis.Sequencer
   };
   const handlers = {};
-  const playing = [];               // {origin, object} 一旦"播出"就记进这里
+  const playing = [];               // {origin, object} 一旦真的**登记进 Sequencer** 就记进这里
+  const endCalls = [];              // endEffects 收到过的 filter，按调用顺序
   globalThis.Hooks = {on: (n, fn) => { (handlers[n] ??= []).push(fn); }};
   globalThis.Actor = class FakeActor {};
   // animationsEnabled() 读两个键：crucible 的 enableVFX 与本模组的 enabled。
@@ -83,13 +84,23 @@ function stubFoundry({tokens, effectAlive = () => true, effectActive = () => tru
     : {uuid, object: (tokens ?? [])[0]});
   globalThis.Sequencer = {
     EffectManager: {
-      endEffects: async () => {},
+      // 真的把匹配到的那几条从 playing 里摘掉：`endEffects` 在真环境里就是「按当下的
+      // 画面扫一次、扫到就结束掉」（sequencer.js:11633-11634 的
+      // `_getEffectsByFilter` + `if (!effectsToEnd.length) return`）。桩里不摘的话，
+      // 「这枚光环到底收掉没有」就没有观测点，只能退回去断言「endEffects 被调用过」
+      // ——那正是收不掉的那个 bug 里也成立的断言。
+      endEffects: async filter => {
+        endCalls.push(filter);
+        for (let i = playing.length - 1; i >= 0; i--) {
+          if (playing[i].origin === filter?.origin) playing.splice(i, 1);
+        }
+      },
       getEffects: ({origin, object}) => playing.filter(p => p.origin === origin && p.object === object)
     }
   };
   const actor = Object.assign(new globalThis.Actor(), {getActiveTokens: () => tokens ?? []});
   return {
-    handlers, actor, playing,
+    handlers, actor, playing, endCalls,
     /** 让 isPlayingPersist 认为这一份光环已经在放。 */
     markPlaying: (origin, object) => playing.push({origin, object}),
     fire: (name, ...args) => { for (const fn of handlers[name] ?? []) fn(...args); },
@@ -439,15 +450,17 @@ test("E1：在途登记必须销账——第一份放弃播放之后，同一份
  * @param {{origin: string, object: object}} entry
  */
 function registerAfter(fake, world, ms, entry) {
+  const state = {registered: 0};        // 真的登记过几次——用例拿它排除「压根没登记」
   const Base = globalThis.Sequence;
   globalThis.Sequence = class extends Base {
     play(opts) {
       const p = super.play(opts);
-      setTimeout(() => world.markPlaying(entry.origin, entry.object), ms);
+      setTimeout(() => { state.registered++; world.markPlaying(entry.origin, entry.object); }, ms);
       return p;
     }
   };
   // fake.restore() 会把全局换回真身，这里不需要单独收尾。
+  return state;
 }
 
 test("E1：让路期结束、特效尚未登记进 Sequencer 的那段窗口里，第二个入口不会叠出第二份", async () => {
@@ -510,6 +523,103 @@ test("E1：特效始终没登记时，在途登记在有界超时后放行（不
     assert.ok(dt >= 240, `只等了 ${dt}ms 就放行，比给定的超时还短`);
     assert.ok(dt < 1500, `等了 ${dt}ms，超时没有生效（在途登记会一直挂着）`);
   } finally { clearInterval(keepAlive); world.restore(); }
+});
+
+/* -------------------------------------------- */
+/*  E1 的镜像：登记之前就被移除，谁来收            */
+/* -------------------------------------------- */
+
+/**
+ * 【E1 镜像】同一个 preload 空窗，一个漏在播、一个漏在收。
+ *
+ * `endPersist` 走的 `Sequencer.EffectManager.endEffects()` 只按调用那一刻的画面扫一次
+ * （`_getEffectsByFilter` 之后 `if (!effectsToEnd.length) return`，sequencer.js:11633-
+ * 11634），不等待也不重试。状态在「已 `seq.play()`、特效尚未进 VisibleEffects」这段里
+ * 被移除时，`deleteActiveEffect` 那条兜底扫的是空气；等特效登记完成，就再没有人来收。
+ * Sequencer 自己的 tiedDocuments 兜底在这条路径上也失效——CanvasEffect 初始化时
+ * `fromUuidSync(uuid)` 解析不到就不注册 delete 钩子（sequencer.js:16932-16943），
+ * 而文档此刻已经没了。结果是一枚只能靠 endAllEffects / 重载才消得掉的光环。
+ *
+ * 修法复用 E1 那套等待：特效可被观察到的那一刻回头复检一次存活，没了就补收一次。
+ */
+test("E1 镜像：让路期之后、登记之前被移除时，登记完成后要补收一次", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  let alive = true;
+  const world = stubFoundry({tokens: [t], effectAlive: () => alive});
+  const uuid = activeEffect(t).uuid;
+  // preload 400ms：play() 在 T≈500 发出，特效要到 T≈900 才进 VisibleEffects。
+  const reg = registerAfter(fake, world, 400, {origin: uuid, object: t});
+  try {
+    installEffectTriggers(deps());
+    await resyncPersist(deps(), ENV);                       // T=0
+    await afterGrace();                                     // T≈650：已 play、未登记
+    assert.equal(fake.sequences.length, 1, "前提：这一份已经交给 Sequencer");
+    assert.equal(reg.registered, 0, "前提：此刻特效还没登记——正是要测的那段空窗");
+
+    alive = false;                                          // 状态被移除
+    world.fire("deleteActiveEffect", {uuid});               // 兜底清理：此刻扫空气
+    // endPersist 把 endEffects 包在 Promise.resolve().then() 里（同步 try/catch 接不住
+    // 异步体内的失败，见它的注释），所以那次调用要等一个微任务才发生出去。
+    await bounded(sleep(10));
+    assert.equal(world.endCalls.length, 1, "前提：兜底清理确实扫了一次");
+    assert.deepEqual(world.playing, [], "前提：那一次扫描什么都没扫到");
+
+    await bounded(sleep(600));                              // 等登记 + 轮询发现
+    assert.equal(reg.registered, 1, "前提：特效确实登记进去了（否则下面那条恒真）");
+    assert.deepEqual(world.playing, [],
+      "特效登记之后没人来收——这枚光环只能靠 endAllEffects 或重载才消得掉");
+    assert.equal(world.endCalls.length, 2, "补收那一次没有发生");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("E1 镜像：让路期之后、登记之前被**停用**（文档还在）时同样补收", async () => {
+  // 走的是角色卡效果页那条 update 路径：文档还在，Sequencer 的 tiedDocuments 更不会
+  // 触发（它只认 delete），`updateActiveEffect` 的 endPersist 同样扫在登记之前。
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  let stillActive = true;
+  const world = stubFoundry({tokens: [t], effectActive: () => stillActive});
+  const uuid = activeEffect(t).uuid;
+  const reg = registerAfter(fake, world, 400, {origin: uuid, object: t});
+  try {
+    installEffectTriggers(deps());
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(reg.registered, 0, "前提：此刻还没登记");
+
+    stillActive = false;
+    world.fire("updateActiveEffect", {uuid, active: false}, {disabled: true});
+    await bounded(sleep(10));                               // 同上，endPersist 是异步发出的
+    assert.equal(world.endCalls.length, 1, "前提：停用那一下确实扫了一次");
+    assert.deepEqual(world.playing, [], "前提：那一次扫描什么都没扫到");
+
+    await bounded(sleep(600));
+    assert.equal(reg.registered, 1, "前提：特效确实登记进去了");
+    assert.deepEqual(world.playing, [],
+      "停用之后那枚光环还在转，而且只能靠删除这条效果才清得掉");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("E1 镜像 · 对照组：登记时状态仍在，不得顺手把刚播出的光环收掉", async () => {
+  // 反向守卫。少了它，「补收」写成无条件收尾照样全绿——那等于每一枚持久光环刚画上
+  // 就被自己收掉。
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  const world = stubFoundry({tokens: [t]});
+  const reg = registerAfter(fake, world, 200, {origin: activeEffect(t).uuid, object: t});
+  try {
+    installEffectTriggers(deps());
+    await resyncPersist(deps(), ENV);
+    await bounded(sleep(PERSIST_LEAD_MS + 500));
+    assert.equal(reg.registered, 1, "前提：特效登记进去了");
+    assert.equal(world.playing.length, 1,
+      "状态还好端端挂着，刚播出的光环却被补收掉了");
+    assert.deepEqual(world.endCalls, [], "根本不该调 endEffects");
+  } finally { world.restore(); fake.restore(); }
 });
 
 /* -------------------------------------------- */
