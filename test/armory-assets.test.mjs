@@ -74,17 +74,19 @@ function pickedPaths(src) {
  * 已知的历史欠账：travel/impact/aftermath/persist 四个槽各自唯一的 pri:10 兜底规则，
  * 写于 ASSET-NOTES 存在之前（与本轮修掉的 jb2a.cast_generic.03 同源问题），分属
  * Task 10/11/12 尚未开始的迁移范围，不在本轮 Task 9 修复范围内。这里显式白名单，
- * 避免把不属于本轮的技术债务当成本轮的回归——但白名单只覆盖这 4 条已知路径，
+ * 避免把不属于本轮的技术债务当成本轮的回归——但白名单只覆盖这些已知路径，
  * 这几个文件里任何其它新路径仍会被下面的判定正常拦截。
  *
  * 这是一个只能变小、不能变大的逃生舱，靠下面两条测试钉死：
- *   1. 「不许新增」——条目数与内容都锁死成当前这 4 条，想加第 5 条测试立刻红。
+ *   1. 「不许新增」——条目数与内容都锁死成当前已知的这几条，想加新条目测试立刻红。
  *   2. 「自动失效」——每条都必须仍被某个兵库文件实际引用；一旦 Task 10/11/12 把某条
  *      路径迁移到 ASSET-NOTES 认可的路径，白名单里那一条就成了无人引用的僵尸条目，
  *      测试会红，强制它被删掉。白名单因此会自我清算，不需要谁记得回来打扫。
+ *
+ * Task 11 把 impact.mjs 的 generic.impact 迁到了 jb2a.impact.005.white（ASSET-NOTES
+ * 已验证条目），原来的 "jb2a.impact.004" 条目已从这里删除——见下一条「自动失效」测试。
  */
 const LEGACY_UNVERIFIED = new Set([
-  "jb2a.impact.004",                 // impact.mjs generic.impact，待 Task 11 迁移
   "jb2a.healing_generic.burst",      // aftermath.mjs generic.aftermath，待 Task 12 迁移
   "jb2a.extras.tmfx.outflow.circle.01" // persist.mjs generic.persist，待 Task 12 迁移
 ]);
@@ -123,18 +125,19 @@ test("兵库规则引用的每条 DB 路径都能在 ASSET-NOTES 主表里查到
   assert.deepEqual(bad, [], `${bad.length} 条兵库路径没有 ASSET-NOTES 依据或已被否决：\n${bad.join("\n")}`);
 });
 
-test("LEGACY_UNVERIFIED 白名单不许新增：条目数与内容锁死为当前已知的 3 条", () => {
-  // Task 10 把 travel.mjs 的 generic.travel 迁到了 ASSET-NOTES 认可的路径，
-  // 原来的 "jb2a.magic_missile" 条目已从这里删除——见下一条「自动失效」测试。
+test("LEGACY_UNVERIFIED 白名单不许新增：条目数与内容锁死为当前已知的 2 条", () => {
+  // Task 10 把 travel.mjs 的 generic.travel 迁到了 ASSET-NOTES 认可的路径，原来的
+  // "jb2a.magic_missile" 条目已从这里删除；Task 11 把 impact.mjs 的 generic.impact
+  // 迁到了 jb2a.impact.005.white，原来的 "jb2a.impact.004" 条目同样已删除——
+  // 均见下一条「自动失效」测试。
   const KNOWN = [
     "jb2a.extras.tmfx.outflow.circle.01",
-    "jb2a.healing_generic.burst",
-    "jb2a.impact.004"
+    "jb2a.healing_generic.burst"
   ];
-  assert.ok(LEGACY_UNVERIFIED.size <= 3,
-    `LEGACY_UNVERIFIED 有 ${LEGACY_UNVERIFIED.size} 条，超过已知的 3 条——新增白名单项需要走评审，不能随手加`);
+  assert.ok(LEGACY_UNVERIFIED.size <= 2,
+    `LEGACY_UNVERIFIED 有 ${LEGACY_UNVERIFIED.size} 条，超过已知的 2 条——新增白名单项需要走评审，不能随手加`);
   assert.deepEqual([...LEGACY_UNVERIFIED].sort(), KNOWN,
-    "LEGACY_UNVERIFIED 的内容与已知的 3 条不完全一致（可能被新增或替换了未经评审的条目）");
+    "LEGACY_UNVERIFIED 的内容与已知的 2 条不完全一致（可能被新增或替换了未经评审的条目）");
 });
 
 test("LEGACY_UNVERIFIED 白名单里每一条都仍被某个兵库文件实际引用（否则应删除）", () => {

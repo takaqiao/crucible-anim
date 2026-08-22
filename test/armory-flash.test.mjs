@@ -106,6 +106,11 @@ function asResult(a, result = RESULT.HIT) {
 }
 
 test("T1 同一个锚点上不许出现两层命中闪光：travel 自带闪爆 ⇒ impact 不再出通用冲击层", () => {
+  // Task 11 把 impact 槽拆成「结果层 + 元素层」（impact.layered，pri 500，isAttack
+  // 动作接管原来 generic.impact 的位置），双闪抑制因此只作用于结果层（layer:"result"）
+  // ——元素层携带的是「打中了什么属性」这条新信息，不是通用冲击闪光的重复，见
+  // scripts/armory/impact.mjs 里 ELEMENT_LAYER 上方的注释与 task-11-report.md。
+  // 非攻击动作仍落在 generic.impact 兜底（rule 名不变），两条规则都要查。
   const bad = [];
   for (const a of actions) {
     if (!a.targets?.length) continue;
@@ -113,7 +118,8 @@ test("T1 同一个锚点上不许出现两层命中闪光：travel 自带闪爆 
       for (const [key, slots] of byTarget(asResult(a, result))) {
         const flash = targetFlash(slots);
         if (!flash) continue;
-        const stacked = slots.impact.filter(c => c.rule === "generic.impact");
+        const stacked = slots.impact.filter(c =>
+          c.rule === "generic.impact" || (c.rule === "impact.layered" && c.layer === "result"));
         if (stacked.length) {
           bad.push(`${a.id} 结果${result} 目标${key}：travel "${flash.rule}" 自带闪爆，`
                  + `impact 仍叠了 ${stacked.map(c => `"${c.rule}"`).join("/")}`);
@@ -170,7 +176,11 @@ test("T1d 射线的星爆记在模板末端，不替沿途每个目标的命中�
   assert.equal(beam[0].selfFlash?.anchor, "region",
     "射线的自带星爆必须记在模板末端（region），记成 target 会连坐沿途所有目标");
   for (const [key, slots] of byTarget(s)) {
-    assert.equal(slots.impact.length, 1, `${key} 的命中闪光被射线的星爆误抑制了`);
+    // Task 11 之后 HIT 结果会叠「结果层 + 元素层」两条 cue（见 impact.mjs），
+    // 这条测试原本要守的是「结果层没被误抑制」，因此只数结果层（非攻击兜底的
+    // generic.impact 不设 layer 字段，同样算作结果层）而不是笼统数总条数。
+    const resultCues = slots.impact.filter(c => c.layer === "result" || c.rule === "generic.impact");
+    assert.equal(resultCues.length, 1, `${key} 的命中闪光被射线的星爆误抑制了`);
   }
 });
 
