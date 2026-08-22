@@ -8,6 +8,7 @@ import {resolve, resolveEffect} from "../scripts/resolver/resolve.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 import {RESULT} from "../scripts/const.mjs";
 import {ELEMENT_LAYER} from "../scripts/armory/impact.mjs";
+import {NO_PERSIST} from "../scripts/armory/persist.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FOUNDRY_DATA = "/root/fvtt14-data/Data";
@@ -54,13 +55,16 @@ test("覆盖率：8 种攻击结果各自都能解析", () => {
   }
 });
 
-test("覆盖率：46 个状态都解析出持续特效", () => {
+test("覆盖率：除 NO_PERSIST 外的状态都解析出持续特效", () => {
   const empty = [];
   for (const e of effects) {
+    if (NO_PERSIST.includes(e.statusId)) continue;   // dead 刻意静默，见 armory/persist.mjs
     const plan = resolveEffect(e, {assets: mk(), armory: ARMORY});
     if (!plan || !plan.cues.length) empty.push(e.statusId);
   }
   assert.deepEqual(empty, [], `${empty.length} 个状态没有动画`);
+  // 正向的「静默」断言在 test/armory-persist.test.mjs，两边合起来仍是全覆盖。
+  assert.equal(effects.length, 46, "状态语料条数变了，NO_PERSIST 的豁免范围需要复核");
 });
 
 test("路径存在性：所有 cue 引用的文件在磁盘上真实存在", () => {
@@ -95,6 +99,12 @@ test("兵库规则不抛异常：全量 fixture 的 plan.warnings 恒为空", ()
   for (const s of actions) {
     const plan = resolve(s, {assets: mk(), armory: ARMORY});
     for (const w of plan?.warnings ?? []) noisy.push(`${s.id}: ${w}`);
+  }
+  // effects 侧同样要走一遍：persist 槽的 warning 通道（规则抛异常、persist cue 缺 tieTo
+  // 被丢弃）从前完全没有被断言过，规则里的编程错误会一路静默到游戏里。
+  for (const e of effects) {
+    const plan = resolveEffect(e, {assets: mk(), armory: ARMORY});
+    for (const w of plan?.warnings ?? []) noisy.push(`${e.statusId}: ${w}`);
   }
   assert.deepEqual(noisy.slice(0, 10), [], `${noisy.length} 条规则告警`);
 });

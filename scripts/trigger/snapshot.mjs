@@ -29,6 +29,54 @@ export function hashSeed(s) {
   return h >>> 0;
 }
 
+/**
+ * Crucible 的 5 个 DoT generator 返回的 ActiveEffectData **没有 `statuses` 字段**：
+ * `crucible/module/const/effects.mjs` 的 corroding / decay / irradiated / mending /
+ * inspired（实测解析该文件的 18 个 export function，只有这 5 个缺 statuses）。
+ *
+ * 只有从 token HUD 或 `actor.toggleStatusEffect()` 走 core 的
+ * `ActiveEffect.fromStatusEffect()` 时，core 先写好 `statuses:[id]`，Crucible 的
+ * `_fromStatusEffect` 再 `mergeObject(effectData, generated, {overwrite:true})`——因为
+ * generator 没给 statuses，这个键才得以幸存。战斗里走的是另一条路：talent/action 钩子
+ * `event.effects.push(SYSTEM.EFFECTS.corroding(...))`，经 `actor#_applyActionEffects`
+ * 原样 createEmbeddedDocuments，statuses 全程为空。落地的 ActiveEffect 于是不带任何
+ * 状态，statusId 退化成 `effect.id`——也就是 generator 里写死的
+ * `_id: getEffectId("Corroding")`，即 crucible 的 generateId 把标签截到 16 位再用 "0"
+ * 补齐得到的 "corroding0000000"。不翻译的话这 5 个状态在战斗路径上会全部掉进
+ * generic.persist 兜底，播一颗无 tint 的白泡。
+ *
+ * 这张表把那 5 个固定 _id 翻回规范状态 id。两侧都由 test/source-tables.test.mjs 解析
+ * Crucible 源码核对，不是手抄——源码给某个 generator 补上 statuses、或者改掉 _id 的
+ * 标签，那条守卫会先红。
+ */
+export const GENERATED_EFFECT_STATUS = {
+  corroding0000000: "corroding",
+  decaying00000000: "decaying",
+  irradiated000000: "irradiated",
+  mending000000000: "mending",
+  inspired00000000: "inspired"
+};
+
+/**
+ * 从一个 ActiveEffect 文档（`statuses` 是 Set）或一条 ActionEffect 原始数据
+ * （`statuses` 是数组、id 在 `_id` 上）取规范状态 id。
+ *
+ * 优先取 `statuses[0]`：那是效果**实际**赋予的状态，即使与它的来源状态 id 不同也一样
+ * ——entropy 的 generator 产出 `statuses:["frightened"]`，取到 frightened 才是对的，
+ * 强行还原成 entropy 反而会让画面与角色身上真正挂着的状态对不上。
+ * statuses 为空时才退回 _id，并过一遍 GENERATED_EFFECT_STATUS。
+ *
+ * @param {ActiveEffect|{statuses?: string[]|Set<string>, _id?: string, id?: string}} effect
+ * @returns {string|null}
+ */
+export function statusIdOf(effect) {
+  if (!effect) return null;
+  const first = [...(effect.statuses ?? [])][0];
+  if (first) return first;
+  const id = effect.id ?? effect._id ?? null;
+  return id ? (GENERATED_EFFECT_STATUS[id] ?? id) : null;
+}
+
 /** 从一个 Token 对象取出快照所需的几何。 */
 function tokenGeom(token, gridSize) {
   const w = (token.document?.width ?? 1) * gridSize;
@@ -108,7 +156,7 @@ export function snapshotAction(action, env) {
       adjacent: edgesIntersect(origin, g),
       onLeft: isOnLeft(origin, g),
       results, damage, healed,
-      effects: (group?.all ?? []).flatMap(ev => (ev?.effects ?? []).map(e => e.statuses?.[0] ?? e._id).filter(Boolean))
+      effects: (group?.all ?? []).flatMap(ev => (ev?.effects ?? []).map(statusIdOf).filter(Boolean))
     });
   }
 
@@ -146,13 +194,27 @@ export function snapshotAction(action, env) {
 
 /**
  * 状态效果快照，驱动 persist 槽。
+ *
+ * 没有 token 时返回 null，而**不是**照搬 snapshotAction 的 (0,0) 兜底几何：动作特效
+ * 退化到原点只是画错位置，持续标记退化到原点是在地图左上角挂一枚绑着不存在 token
+ * 的光环（cue 带 attachTo:true，附着目标解析不到）。ActiveEffect 挂在当前场景没有
+ * token 的 actor 上——离场角色、跨场景、未链接 token 尚未渲染——是完全正常的情形，
+ * 正确答案是「不画」，交由调用方按 null 处理。
+ *
+ * statusId 走 statusIdOf（见其注释）：战斗直调落地的 DoT 效果不带 statuses，裸取
+ * `effect.id` 会得到 16 位补零 _id 而不是状态名。
+ *
+ * effectUuid 保持 `?? null` 的如实记录，不在这里替它编一个：能不能凭它清理动画是
+ * resolveEffect 的判断（见 resolver/resolve.mjs 的 keepTied），快照层只负责转写。
+ *
  * @param {ActiveEffect} effect
- * @param {Token} token
+ * @param {Token|null} token
  * @param {{gridSize: number}} env
- * @returns {EffectSnapshot}
+ * @returns {EffectSnapshot|null}
  */
 export function snapshotEffect(effect, token, env) {
-  const statusId = [...(effect.statuses ?? [])][0] ?? effect.id ?? null;
+  if (!token) return null;
+  const statusId = statusIdOf(effect);
   return {
     statusId,
     effectUuid: effect.uuid ?? null,

@@ -55,6 +55,16 @@ const weightOf = result => RESULT_WEIGHT[result] ?? RESULT_WEIGHT[RESULT.HIT];
  * 同一个 objectScale 数字混排会差 2-3 倍）。语义权重不在这里，在上面的
  * RESULT_WEIGHT；下发的 objectScale = weight × canvas × sizeScale()。
  *
+ * ⚠ **这个前提在 Task 12 被推翻，本槽尚未跟进（已知欠账，不属于本轮范围）。**
+ * 播放层走 `e.scaleToObject(cue.objectScale)`（IMPLEMENTATION-PLAN Task 13），而
+ * Sequencer 4.2.3 的 `_applyScaleToObject` 是 `sprite.width = 目标宽 × scale × baseScale`
+ * ——「目标宽」来自被附着对象的尺寸，源文件的像素尺寸只经宽高比参与，**不参与定尺寸**。
+ * 全兵库没有任何一条 cue 设过绝对 `scale`（CUE_DEFAULTS.scale 恒 null），所以画布归一化
+ * 在本仓库是一个死系数：真正决定观感尺寸的是「内容占画幅比 × objectScale」，而内容占比
+ * 与画布像素毫无关系（下面元素层那一行有逐条实测）。修它要连 element-distinct 与
+ * MAX_FADE_RATIO 两套守卫、以及上一次提交的「掠过缩放」定义一起重新推导，须由 impact
+ * 槽负责人在同一轮里做。persist 槽已按新语义改过，见 armory/persist.mjs 的 burning 条。
+ *
  * startTime/duration 单位 ms，语义与 travel.mjs 一致：duration 是「startTime 之后
  * 还要播多久」，不是绝对终点。省略即保留素材原长（CUE_DEFAULTS 的 duration:null）。
  *
@@ -241,6 +251,14 @@ const ESKIE_FLASH = Object.freeze({from: 167, at: 167, to: 234});
  * scale 里只含画布归一化：eskie.damage.* 家族原生 800x800，是 jb2a 400x400 基准的
  * 2 倍（ASSET-NOTES 通用结论「同一个 .scale() 值在三家之间差 2-3 倍」），所以 eskie 系
  * 给 0.45、jb2a 系给 0.9。语义权重与结果层共用 RESULT_WEIGHT，在 build() 里相乘。
+ *
+ * ⚠ 同上（见结果层 canvas 一段）：objectScale 走 scaleToObject，画布像素不参与定尺寸。
+ * Task 12 逐条量了各支「内容占画幅比」（alpha>=25 的 bbox，按各自 startTime 之后的帧段）：
+ * 800x800 的 eskie 系是 0.741-0.910，400x400 的 jb2a 系是 0.718-0.930——两家的填充率
+ * 根本没有 2 倍关系。0.45/0.9 这个二分因此把 eskie 系整整砍半：实际观感尺寸
+ * eskie 0.334-0.410 个格宽，jb2a 0.646-0.837 个格宽，与「把两家调到同一量级」的设计目标
+ * 正好相反。修正方向是按内容占比逐条给（基线取 physical 那条），但会改动本槽全部元素层
+ * 的尺寸，须由 impact 槽负责人连守卫一起过，本轮只记录不改。
  *
  * **这一层不许贡献爆闪。** 它存在的全部理由是回答「打中了什么属性」，而那条信息在自带
  * 白闪**之后**的残留段（翻滚火球 / 冰晶簇 / 蓝白电弧 / 腐蚀裂纹 / 粉紫触须）。f5 那一帧

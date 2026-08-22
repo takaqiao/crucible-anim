@@ -84,6 +84,10 @@ export default [
       const fx = ctx.pick("blfx.spell.template.circle.wave2.blood1.splatter.red");
       if (!fx) return null;
       return {
+        // objectScale 1/3 同样按「blfx 1200x1200 是 JB2A 400x400 的 3 倍」推出，
+        // 而该前提在 Task 12 被推翻（见 armory/impact.mjs 结果层 canvas 一段）：
+        // scaleToObject 下源画幅像素不参与定尺寸，这摊血实际只画到约 0.28 个格宽。
+        // 与 impact 两处同源，须一并重新推导，本轮只记录不改。
         file: fx.file, objectScale: r6(1 / 3), attachTo: true, bindScale: true,
         belowTokens: true, zIndex: 15, elevation: target.elevation,
         duration: 1167, fadeIn: 0, fadeOut: 700

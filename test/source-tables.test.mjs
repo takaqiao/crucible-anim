@@ -5,12 +5,15 @@ import {readFileSync} from "node:fs";
 import {GESTURE_TARGET, STATUSES, TARGET_REGION, RUNE_DAMAGE,
         RUNE_RESOURCE} from "../tools/dump-fixtures.mjs";
 import {ELEMENT_LAYER, DAMAGE_ALIAS} from "../scripts/armory/impact.mjs";
+import {STATUS_GROUP, UNREACHABLE_STATUSES} from "../scripts/armory/persist.mjs";
+import {GENERATED_EFFECT_STATUS} from "../scripts/trigger/snapshot.mjs";
 
 const FOUNDRY_DATA = "/root/fvtt14-data/Data";
 const SPELLCRAFT = `${FOUNDRY_DATA}/systems/crucible/module/const/spellcraft.mjs`;
 const STATUSES_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/statuses.mjs`;
 const ACTION_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/action.mjs`;
 const ATTRIBUTES_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/attributes.mjs`;
+const EFFECTS_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/effects.mjs`;
 
 /**
  * 括号配对提取：从 src[openIdx]（必须是 "{"）开始找到匹配的闭括号下标，跳过字符串内容。
@@ -229,4 +232,134 @@ test("ELEMENT_LAYER 的键集合等于 attributes.mjs 的 DAMAGE_TYPES，DAMAGE_
   }
   // kinesis 用的那一个必须在表里，否则 spell.kinesis.* 全系静默退回血溅。
   assert.ok(DAMAGE_ALIAS.physical, "DAMAGE_ALIAS 必须覆盖 physical（kinesis 符文的 damageType）");
+});
+
+/* -------------------------------------------- */
+/*  归并表 vs generator 产出                     */
+/* -------------------------------------------- */
+
+/**
+ * 复刻 crucible 的 `generateId(title, length)`（crucible-compiled.mjs 里的实现，
+ * `const/effects.mjs#getEffectId` 就是它加一个可选后缀）：按空格分词、每段去掉非字母
+ * 数字、首段首字母小写、其余段首字母大写，拼接后截到 length 位再用 "0" 补齐。
+ *
+ * 下面 parseEffectGenerators() 会断言每个标签都是单个纯字母数字词，所以这里的简化实现
+ * （不引 Foundry 的 String#slugify / #titleCase——测试跑在裸 node 里没有那两个原型扩展）
+ * 与源码在**当前所有标签上**逐字符等价；哪天 Crucible 把某个标签换成 "Acid Burn" 这种
+ * 多词或带标点的写法，那条断言会先红，而不是静默算错 _id。
+ */
+function crucibleGenerateId(title, length) {
+  const id = title.split(" ").map((w, i) => {
+    const p = w.replace(/[^A-Za-z0-9]/g, "");
+    return i ? (p.charAt(0).toUpperCase() + p.slice(1)) : (p.charAt(0).toLowerCase() + p.slice(1));
+  }).join("");
+  return id.slice(0, length).padEnd(length, "0");
+}
+
+/**
+ * 解析 `const/effects.mjs` 的每一个 `export function`，取它返回的 ActiveEffectData 里的
+ * `statuses: [...]` 与 `_id: getEffectId("<标签>")`。
+ * 返回 `{函数名: {statuses: string[]|null, effectId: string}}`；`statuses: null` 表示这个
+ * generator **压根没有 statuses 字段**（与 `statuses: []` 不是一回事）。
+ */
+function parseEffectGenerators() {
+  const src = readFileSync(EFFECTS_SRC, "utf8");
+  const fns = [];
+  const fnRe = /export function (\w+)\s*\(/g;
+  let m;
+  while ((m = fnRe.exec(src))) fns.push({name: m[1], at: m.index});
+  assert.ok(fns.length > 5, `effects.mjs 只解析出 ${fns.length} 个 export function，解析器可能失效了`);
+
+  const out = {};
+  for (let i = 0; i < fns.length; i++) {
+    const body = src.slice(fns[i].at, i + 1 < fns.length ? fns[i + 1].at : src.length);
+    const idMatch = /_id\s*:\s*getEffectId\(\s*"([^"]+)"/.exec(body);
+    if (!idMatch) continue;                       // getEffectId 自身等辅助函数，不是 generator
+    assert.match(idMatch[1], /^[A-Za-z0-9]+$/,
+      `effects.mjs 的 getEffectId("${idMatch[1]}") 不再是单个纯字母数字词，`
+      + "crucibleGenerateId 的简化实现需要复核");
+    const stMatch = /\bstatuses\s*:\s*\[([^\]]*)\]/.exec(body);
+    out[fns[i].name] = {
+      effectId: crucibleGenerateId(idMatch[1], 16),
+      statuses: stMatch
+        ? stMatch[1].split(",").map(x => x.trim().replace(/^["'`]|["'`]$/g, "")).filter(Boolean)
+        : null
+    };
+  }
+  return out;
+}
+
+/** 解析 statuses.mjs 里 `<statusId>: { ..., generator: EFFECTS.<fn>, ... }`，返回 {statusId: fn名}。 */
+function parseStatusGenerators() {
+  const src = readFileSync(STATUSES_SRC, "utf8");
+  const openBrace = src.indexOf("{", src.indexOf("export const statusEffects"));
+  const blocks = parseTopLevelBlocks(src.slice(openBrace, matchBrace(src, openBrace) + 1));
+  const out = {};
+  for (const [id, block] of Object.entries(blocks)) {
+    const g = /generator\s*:\s*EFFECTS\.(\w+)/.exec(block);
+    if (g) out[id] = g[1];
+  }
+  return out;
+}
+
+/**
+ * STATUS_GROUP 是按 `CONFIG.statusEffects` 的键抄的，但真正决定 `snapshotEffect` 取到什么
+ * statusId 的是 generator 产出的 `statuses` 数组——两者会脱节，`entropy` 就是被这么漏掉的
+ * （generator 产出 `statuses:["frightened"]`，`entropy: "decay"` 于是永远命不中，是一条
+ * 纯死代码；而 fear 与 decay 的素材当时 ΔE00 只有 3.1，肉眼看不出差别，所以一直没被发现）。
+ * 这条测试把「键抄自哪张表」换成「运行时到底会出现哪个 id」，逐 generator 核对。
+ *
+ * 三类情形，各有各的断言：
+ *  1. generator 有 statuses 且首元素 === 自身 id ——正常，只要该 id 在 STATUS_GROUP 里；
+ *  2. generator 有 statuses 但首元素 ≠ 自身 id ——自身 id 不可达，必须登记进
+ *     UNREACHABLE_STATUSES，且它在表里的分组必须与真身相同（否则表还是在说谎）；
+ *  3. generator 没有 statuses 字段 ——双入口：HUD/toggle 走 core 会补上自身 id；战斗直调
+ *     则 statuses 全空、statusId 退化成 generator 写死的 `_id`，必须由 trigger/snapshot.mjs
+ *     的 GENERATED_EFFECT_STATUS 翻译回来。
+ */
+test("STATUS_GROUP / GENERATED_EFFECT_STATUS 与 const/effects.mjs 的 generator 产出一致", () => {
+  const gens = parseEffectGenerators();
+  const byStatus = parseStatusGenerators();
+  assert.ok(Object.keys(byStatus).length >= 16,
+    `statuses.mjs 只解析出 ${Object.keys(byStatus).length} 个带 generator 的状态，应至少 16 个`);
+
+  const unreachable = [];        // 情形 2
+  const aliases = {};            // 情形 3：_id → 规范状态 id
+  const problems = [];
+
+  for (const [statusId, fnName] of Object.entries(byStatus)) {
+    const gen = gens[fnName];
+    assert.ok(gen, `statuses.mjs 的 ${statusId} 引用了 EFFECTS.${fnName}，但 effects.mjs 里找不到它`);
+
+    if (gen.statuses === null) {
+      aliases[gen.effectId] = statusId;
+      if (!STATUS_GROUP[statusId]) problems.push(`${statusId}: 不在 STATUS_GROUP 里`);
+      continue;
+    }
+    const landed = gen.statuses[0];
+    if (!landed) { problems.push(`${statusId}: generator 的 statuses 是空数组`); continue; }
+    // generator 顺带附加的状态（freezing→slowed / confused→disoriented / suffocating→silenced）
+    // 也可能单独出现在别的效果上，同样必须归了组。
+    for (const st of gen.statuses) {
+      if (!STATUS_GROUP[st]) problems.push(`${statusId} 的 generator 产出的 "${st}" 不在 STATUS_GROUP 里`);
+    }
+    if (landed !== statusId) {
+      unreachable.push(statusId);
+      if (STATUS_GROUP[statusId] !== STATUS_GROUP[landed]) {
+        problems.push(`${statusId}: generator 实际赋予 "${landed}"（→ ${STATUS_GROUP[landed]} 组），`
+          + `但 STATUS_GROUP["${statusId}"] = "${STATUS_GROUP[statusId]}"——这是一条永远命不中的死映射`);
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], problems.join("\n"));
+
+  // 不可达清单必须与源码算出来的完全一致：少一条是漏核（下一个 entropy），多一条是过期条目。
+  assert.deepEqual([...UNREACHABLE_STATUSES].sort(), unreachable.sort(),
+    "UNREACHABLE_STATUSES 与源码算出的不可达状态集合不一致");
+
+  // _id 别名表同理：generator 补上 statuses 后这里会多出条目，删掉别名表条目则会少。
+  assert.deepEqual(GENERATED_EFFECT_STATUS, aliases,
+    "GENERATED_EFFECT_STATUS 与「没有 statuses 字段的 generator 的 _id」对不上——"
+    + "这些效果在战斗直调路径上落地时不带任何状态，statusId 会退化成这些 _id");
 });

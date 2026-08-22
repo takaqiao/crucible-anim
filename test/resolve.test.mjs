@@ -5,7 +5,7 @@ import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {createContext} from "../scripts/resolver/context.mjs";
-import {resolve} from "../scripts/resolver/resolve.mjs";
+import {resolve, resolveEffect} from "../scripts/resolver/resolve.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -211,4 +211,65 @@ test("build() 抛异常时降级成一条 warning，不带崩整个 resolve", ()
   assert.ok(plan.cues.some(c => c.slot === "impact"), "其余槽必须照常装配");
   assert.ok(plan.warnings.some(w => String(w).includes("会抛的") && String(w).includes("travel")),
     `降级必须留痕并点名规则与槽位：${JSON.stringify(plan.warnings)}`);
+});
+
+/* ---- resolveEffect：persist 槽的入口加固 ---- */
+
+const effects = JSON.parse(readFileSync(join(ROOT, "test/fixtures/effects.json"), "utf8"));
+const burning = effects.find(e => e.statusId === "burning");
+
+test("resolveEffect 对残缺目标返回 null 而不外抛", () => {
+  // ActiveEffect 挂在当前场景没有 token 的 actor 上（离场角色、跨场景、未链接 token
+  // 尚未渲染）是完全正常的情形。resolveEffect 挂在 createActiveEffect 钩子上，一个
+  // TypeError 会连带打断整条状态上身处理，而不只是少一枚标记。
+  for (const bad of [null, undefined]) {
+    for (const snap of [bad, {...burning, target: bad}]) {
+      let plan;
+      assert.doesNotThrow(() => { plan = resolveEffect(snap, {assets: mkAssets(), armory: ARMORY}); },
+        `残缺输入 ${JSON.stringify(snap)} 不该抛出`);
+      assert.equal(plan, null);
+    }
+  }
+});
+
+test("persist 且 tieTo 为空的 cue 一律丢弃并留痕", () => {
+  const armory = {...ARMORY, persist: [{
+    id: "探针.持久", pri: 950, when: () => true,
+    build: () => [
+      {file: "无绑定", persist: true, tieTo: null},
+      {file: "有绑定", persist: true, tieTo: "Scene.s.Token.t1.ActiveEffect.x"},
+      {file: "非持久", persist: false}
+    ]
+  }]};
+  const plan = resolveEffect({...burning, effectUuid: null}, {assets: mkAssets(), armory});
+  assert.deepEqual(plan.cues.map(c => c.file), ["有绑定", "非持久"],
+    "只有 persist 而无 tieTo 的那条该被丢掉，其余不受影响");
+  assert.ok(plan.warnings.some(w => String(w).includes("探针.持久") && String(w).includes("tieTo")),
+    `丢弃必须留痕并点名规则：${JSON.stringify(plan.warnings)}`);
+});
+
+test("persist 规则 build() 抛异常时降级成 warning，不带崩 resolveEffect", () => {
+  const armory = {...ARMORY, persist: [{
+    id: "会抛的.持久", pri: 950, when: () => true,
+    build: () => { throw new TypeError("Cannot read properties of null (reading 'x')"); }
+  }]};
+  let plan;
+  assert.doesNotThrow(() => { plan = resolveEffect(burning, {assets: mkAssets(), armory}); });
+  assert.equal(plan, null, "没有可播的 cue 时返回 null");
+});
+
+test("persist 规则拿到的前序槽视图是冻结的空视图，不是 undefined", () => {
+  // persist 不属于任何动作的时间轴，没有前序槽可查。给空数组而不是 null，是为了让将来
+  // 某条规则误写 built.impact 时拿到 []，而不是一个 TypeError。
+  let seen = null;
+  const armory = {...ARMORY, persist: [{
+    id: "探针.视图", pri: 950, when: () => true,
+    build: (e, ctx, target, built) => {
+      seen = {target, built};
+      return {file: "x", persist: true, tieTo: e.effectUuid};
+    }
+  }]};
+  resolveEffect(burning, {assets: mkAssets(), armory});
+  assert.equal(seen.target, null, "persist 规则的第三个入参与 cast 槽一致，恒为 null");
+  assert.deepEqual(seen.built, {travel: [], impact: [], aftermath: []});
 });

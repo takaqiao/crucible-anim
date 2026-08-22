@@ -32,6 +32,7 @@ import {dirname, join} from "node:path";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {resolve} from "../scripts/resolver/resolve.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
+import {ciede2000} from "../tools/element-residual-colour.mjs";
 import {RESULT} from "../scripts/const.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -137,37 +138,17 @@ const SAME_TEMPLATE_ALLOWED = Object.freeze([
 /*  CIEDE2000                                          */
 /* -------------------------------------------------- */
 
-/**
- * CIEDE2000 色差。用它而不是 HSV 色相角之差，是因为色相角在感知上远不均匀：
- * acid.green 与 poison.green 的残留主色色相差 25°、cold.blue 与 electricity.blue 差 14°，
- * 按色相角排 acid/poison 反而「更安全」，与 ASSET-NOTES 实际看图得出的结论正好相反；
- * 换成 CIEDE2000 之后 acid/poison 是 9.7、cold/electricity 是 14.3，排序才与人眼一致。
+/*
+ * CIEDE2000 从 tools/element-residual-colour.mjs import（见文件顶部），全仓只此一份实现，
+ * test/armory-persist-distinct.test.mjs 也用同一份。本文件早先内联过一份逐字相同的拷贝
+ * （已用括号配对提取后逐字符 diff 确认相同），两处各改一次就会悄悄分叉，而分叉的后果是
+ * 两条守卫对「算不算同一个颜色」给出不同答案。
+ *
+ * 用它而不是 HSV 色相角之差，是因为色相角在感知上远不均匀：acid.green 与 poison.green
+ * 的残留主色色相差 25°、cold.blue 与 electricity.blue 差 14°，按色相角排 acid/poison 反而
+ * 「更安全」，与 ASSET-NOTES 实际看图得出的结论正好相反；换成 CIEDE2000 之后 acid/poison
+ * 是 9.7、cold/electricity 是 14.3，排序才与人眼一致。
  */
-function ciede2000([L1, a1, b1], [L2, a2, b2]) {
-  const rad = Math.PI / 180;
-  const C1 = Math.hypot(a1, b1), C2 = Math.hypot(a2, b2), Cb = (C1 + C2) / 2;
-  const G = 0.5 * (1 - Math.sqrt(Cb ** 7 / (Cb ** 7 + 25 ** 7)));
-  const A1 = (1 + G) * a1, A2 = (1 + G) * a2;
-  const Cp1 = Math.hypot(A1, b1), Cp2 = Math.hypot(A2, b2);
-  const ang = (x, y) => (x === 0 && y === 0) ? 0 : ((Math.atan2(y, x) / rad) + 360) % 360;
-  const h1 = ang(A1, b1), h2 = ang(A2, b2);
-  const dL = L2 - L1, dC = Cp2 - Cp1;
-  let dh = 0;
-  if (Cp1 * Cp2 !== 0) { dh = h2 - h1; if (dh > 180) dh -= 360; if (dh < -180) dh += 360; }
-  const dH = 2 * Math.sqrt(Cp1 * Cp2) * Math.sin((dh / 2) * rad);
-  const Lb = (L1 + L2) / 2, Cbp = (Cp1 + Cp2) / 2;
-  let hb;
-  if (Cp1 * Cp2 === 0) hb = h1 + h2;
-  else { hb = (h1 + h2) / 2; if (Math.abs(h1 - h2) > 180) hb += (h1 + h2 < 360) ? 180 : -180; }
-  const T = 1 - 0.17 * Math.cos((hb - 30) * rad) + 0.24 * Math.cos(2 * hb * rad)
-              + 0.32 * Math.cos((3 * hb + 6) * rad) - 0.20 * Math.cos((4 * hb - 63) * rad);
-  const dTh = 30 * Math.exp(-(((hb - 275) / 25) ** 2));
-  const Rc = 2 * Math.sqrt(Cbp ** 7 / (Cbp ** 7 + 25 ** 7));
-  const Sl = 1 + (0.015 * (Lb - 50) ** 2) / Math.sqrt(20 + (Lb - 50) ** 2);
-  const Sc = 1 + 0.045 * Cbp, Sh = 1 + 0.015 * Cbp * T;
-  const Rt = -Math.sin(2 * dTh * rad) * Rc;
-  return Math.sqrt((dL / Sl) ** 2 + (dC / Sc) ** 2 + (dH / Sh) ** 2 + Rt * (dC / Sc) * (dH / Sh));
-}
 
 /* -------------------------------------------------- */
 /*  取样                                               */

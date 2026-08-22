@@ -3629,14 +3629,34 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
 
     if (cue.persist) {
       e.persist(true, {persistTokenPrototype: false});
-      e.name(`crucible-anim:${plan.source}:${cue.rule}`);
-      if (cue.tieTo) e.tieToDocuments([cue.tieTo]);
+
+      // 【多客户端契约】绝不让 Sequencer 把本模组的效果写进世界存档。
+      // 依据与后果见 resolver/resolve.mjs 的 CUE_DEFAULTS.worldPersist 与 DESIGN §6.7。
+      // 写 `!== true` 而不是 `=== false`：字段缺失（旧 plan、将来漏填默认值）时也落在
+      // 不写盘的安全侧。test/armory-persist.test.mjs 有一条 grep 守卫盯着这一行。
+      e.temporary(cue.worldPersist !== true);
+
+      // 身份用 origin 而不是 name，两个理由：
+      //  1. 设了 name 会让 Sequencer 额外挂一个逐帧 ticker 往 PositionContainer 写坐标，
+      //     persist 用不到；origin 不挂。
+      //  2. 原草案的 `crucible-anim:${plan.source}:${cue.rule}` 里 plan.source 是 statusId，
+      //     两个 token 同挂 burning 会撞名。origin 用 effectUuid 天然唯一。
+      // Task 15 的 deleteActiveEffect 兜底必须按 origin 过滤，见那一节。
+      if (cue.tieTo) {
+        e.origin(cue.tieTo);
+        e.tieToDocuments([cue.tieTo]);
+      }
       if (cue.extraEndDuration) e.extraEndDuration(cue.extraEndDuration);
     }
     if (cue.waitUntilFinished !== null) e.waitUntilFinished(cue.waitUntilFinished);
   }
 
-  await seq.play({preload: true});
+  // local:true 是全槽通用的，不只 persist。少了它，preload 会走
+  // Sequencer.Preloader.preloadForClients：向全场广播预载请求并**阻塞等所有客户端逐个
+  // 应答**（带 ping 超时轮询）。本模组每个客户端都各播一份，于是每个动画都变成 N 次
+  // 全场往返 + 等最慢的那台机器；role=PLAYER 还没有 permissions-preload 权限（默认 1），
+  // 会走降级警告刷控制台。
+  await seq.play({local: true, preload: true});
 }
 ```
 
@@ -3758,7 +3778,7 @@ Expected: FAIL
 import {META_KEY} from "../const.mjs";
 import {snapshotAction} from "./snapshot.mjs";
 import {resolve} from "../resolver/resolve.mjs";
-import {debug, error} from "../log.mjs";
+import {debug, warn, error} from "../log.mjs";
 
 /**
  * 纯逻辑：决定是否接管，接管则产出计划。抽出来是为了能脱离 Foundry 单测。
@@ -4008,8 +4028,18 @@ import {debug, error} from "../log.mjs";
  */
 export function planForEffect(effect, token, env, deps) {
   try {
+    // snapshotEffect 在没有 token 时返回 null（见 trigger/snapshot.mjs），必须用 ?. 取值。
     const snapshot = snapshotEffect(effect, token, env);
-    if (!snapshot.statusId) return null;
+    if (!snapshot?.statusId) return null;
+    if (!snapshot.effectUuid) {
+      // 生产路径上 createActiveEffect 一定给得出 uuid；给不出说明触发点被改到了
+      // preCreate、或收到的是未落库的合成 ActiveEffect。resolveEffect 的 keepTied 会拒绝
+      // 出 persist cue（否则光效清不掉），这里把原因说清楚，免得只表现为「没动画」。
+      // 日志放在这一层而不是解析层：只有这里同时拿得着活的 ActiveEffect 文档，而且
+      // resolver/ 受 test/manifest.test.mjs 的「不得引用 Foundry 全局」守卫约束。
+      warn(`状态 ${snapshot.statusId} 没有可绑定的 effect uuid，跳过持续特效`, effect);
+      return null;
+    }
     return resolveEffect(snapshot, deps);
   } catch (err) {
     error("为状态效果构造动画计划失败", err);
@@ -4019,33 +4049,101 @@ export function planForEffect(effect, token, env, deps) {
 
 /**
  * 状态效果的持续特效由 ActiveEffect 增删驱动，独立于动作。
- * 删除侧不需要显式处理：cue 带了 persist + tieTo，Sequencer 会在被绑定的
- * document 消失时自动清理动画。这里只补一条兜底，处理 tie 失效的边界情况。
+ *
+ * 删除侧主要不靠这里：cue 带了 persist + tieTo，Sequencer 会在被绑定的 ActiveEffect
+ * 消失时自动清理动画；下面的 deleteActiveEffect 只是 tie 失效时的兜底。
+ *
+ * ── persist 槽的持久化契约（与 resolve.mjs 的 CUE_DEFAULTS.worldPersist 配套）──
+ * cue 带 worldPersist:false ⇒ 播放层调 .temporary(true) ⇒ Sequencer 一条记录都不落盘
+ * （见 DESIGN §6.7）。代价是「重载 / 中途进场 / 切场景回来」该有的光环得本模组自己补，
+ * 补法就是下面的 sequencerEffectManagerReady / createToken 两个钩子。
+ *
+ * 这样换来的是更强的性质：真相只有一份（ActiveEffect 文档本身），任何时刻都能从它重新
+ * 推出该有的画面。不依赖任何 GM 在线，不存在 flag 日志与文档不同步，中途进场的玩家
+ * 照样能补齐全场光环（靠 Sequencer 的 flag 回放**做不到**这一条——记录都属于别人）。
  */
 export function installEffectTriggers(deps) {
   const env = () => ({gridSize: canvas?.dimensions?.size ?? 100});
 
-  Hooks.on("createActiveEffect", async (effect) => {
-    const actor = effect.parent;
-    if (!(actor instanceof Actor)) return;
-    const {animationsEnabled} = await import("./dispatch.mjs");
-    if (!animationsEnabled()) return;
-    for (const token of actor.getActiveTokens()) {
-      if (!token.scene?.isView) continue;
-      const plan = planForEffect(effect, token, env(), deps);
-      if (!plan) continue;
-      debug(`状态 ${plan.source} 上身`, plan);
-      const {playPlan} = await import("../player/play.mjs");
-      const {resolveRefIn} = await import("./dispatch.mjs");
-      await playPlan(plan, {volume: 1, shake: false, resolveRef: resolveRefIn(token.scene)});
-    }
+  // 状态上身
+  Hooks.on("createActiveEffect", (effect) => void syncEffect(effect, deps, env));
+
+  // 状态被停用/启用（Crucible 有些状态是 toggle 而非增删）
+  Hooks.on("updateActiveEffect", (effect, changed) => {
+    if (!("disabled" in changed)) return;
+    if (effect.active) void syncEffect(effect, deps, env);
+    else endPersist(effect.uuid);
   });
 
-  Hooks.on("deleteActiveEffect", (effect) => {
-    // 兜底：tieToDocuments 未生效时按名字收尾
-    try { Sequencer.EffectManager.endEffects({name: `crucible-anim:*`, origin: effect.uuid}); }
-    catch { /* 没有匹配的持续特效，忽略 */ }
+  Hooks.on("deleteActiveEffect", (effect) => endPersist(effect.uuid));
+
+  // 重载 / 切场景 / 中途进场 —— 见下面的时序坑
+  //
+  // ⚠ **不能挂 canvasReady**。Sequencer 自己的 canvasReady 处理是延时调 setupModule，
+  // 其中 initializePersistentEffects() 第一件事就是 `await tearDownPersistentEffects()`，
+  // 会 destroy 掉 VisibleEffects 里的**全部**效果——包括我们抢在前面播的。必须等它跑完，
+  // 也就是挂它末尾 callAll 的 `sequencerEffectManagerReady`。该钩子在「一条持久化记录都
+  // 没有」时照样触发，正是我们的情况。挂错成 canvasReady 的症状是「切场景回来光环没了」。
+  Hooks.on("sequencerEffectManagerReady", () => void resyncPersist(deps, env));
+
+  // 把已经带着状态的 token 拖进场景
+  Hooks.on("createToken", (doc) => {
+    if (doc.parent?.isView) void syncToken(doc.object, deps, env);
   });
+}
+
+/** 当前场景全部 token 补齐一遍。幂等，随便多调。 */
+export async function resyncPersist(deps, env) {
+  if (!canvas?.ready) return;
+  for (const token of canvas.tokens?.placeables ?? []) await syncToken(token, deps, env);
+}
+
+async function syncToken(token, deps, env) {
+  for (const effect of token?.actor?.effects ?? []) {
+    if (!effect.active) continue;
+    await playPersist(effect, token, deps, env);
+  }
+}
+
+/** 一条 ActiveEffect 在它所有可见 token 上的持续特效。 */
+async function syncEffect(effect, deps, env) {
+  if (!(effect.parent instanceof Actor) || !effect.active) return;
+  for (const token of effect.parent.getActiveTokens()) await playPersist(effect, token, deps, env);
+}
+
+async function playPersist(effect, token, deps, env) {
+  if (!token?.scene?.isView) return;
+  const {animationsEnabled, resolveRefIn} = await import("./dispatch.mjs");
+  if (!animationsEnabled()) return;
+  if (isPlayingPersist(effect.uuid, token)) return;          // 幂等
+  const plan = planForEffect(effect, token, env(), deps);
+  if (!plan) return;
+  debug(`状态 ${plan.source} 上身`, plan);
+  const {playPlan} = await import("../player/play.mjs");
+  await playPlan(plan, {volume: 1, shake: false, resolveRef: resolveRefIn(token.scene)});
+}
+
+/**
+ * tie 失效时的兜底收尾。必须按 origin 过滤，**不能**按 name——播放层不设 name（见
+ * Task 13 的 persist 分支），而 Sequencer 的 _filterEffects 里 name 与 origin 是 AND
+ * 关系，原草案的 `{name: "crucible-anim:*", origin: ...}` 会匹配到 0 条，那张兜底网是
+ * 死的。push=false：各客户端副本的 _id 各不相同，把 id 推给别人匹配不上任何东西。
+ */
+function endPersist(effectUuid) {
+  try { Sequencer.EffectManager.endEffects({origin: effectUuid}, false); }
+  catch { /* 没有匹配的持续特效，忽略 */ }
+}
+
+/**
+ * 本客户端是不是已经在放这一份光环。只查本地 EffectManager（getEffects 只看
+ * SequenceManager.VisibleEffects），这正是需要的粒度：每客户端各放各的，判重也只该跟
+ * 自己比。必须 origin **和** object 一起过滤：一个 linked actor 的两个 token 共用同一个
+ * effect uuid，只按 origin 判会让第二个 token 永远补不上光环。
+ */
+function isPlayingPersist(effectUuid, token) {
+  try {
+    return Sequencer.EffectManager.getEffects({origin: effectUuid, object: token}).length > 0;
+  } catch { return false; }
 }
 ```
 
@@ -4121,16 +4219,29 @@ function previewActionPlan(rule, slot, origin, target, env, deps) {
   return resolve(snapshot, {assets: deps.assets, armory});
 }
 
+const PREVIEW_PERSIST_MS = 3000;
+
 function previewEffectPlan(rule, target, env, deps) {
   const snapshot = {
     statusId: `__preview__.${rule.id}`,
-    effectUuid: null,
+    // 预览没有真的 ActiveEffect。resolveEffect 的 keepTied 不放行绑不上 document 的
+    // 持久化 cue（会永久残留），所以借 token 文档当绑定目标让计划先成形，再在下面把
+    // persist 摘掉。原草案写 `effectUuid: null`，加闸之后会让 12 条 persist 规则全部
+    // plan=null——预览这条唯一的人工验收途径会静默失效。
+    effectUuid: target.document.uuid,
     target: {tokenId: target.id, uuid: target.document.uuid,
              x: target.center.x, y: target.center.y, elevation: 0,
              width: 1, height: 1, w: env.gridSize, h: env.gridSize, radiusPx: env.gridSize / 2},
     seed: 1
   };
-  return resolveEffect(snapshot, {assets: deps.assets, armory: {...deps.armory, persist: [rule]}});
+  const plan = resolveEffect(snapshot, {assets: deps.assets, armory: {...deps.armory, persist: [rule]}});
+  if (!plan) return null;
+  // 预览是「看一眼这条规则长什么样」，不是真给 token 挂状态：摘掉持久化并给一个有限
+  // 时长。否则预览跑完一轮就在场上留下十几枚谁也清不掉的光环——正是 persist 槽最怕的
+  // 那个失败模式，还偏偏发生在最常用的调试工具上。3000ms 取 5-6s 循环的一半。
+  return {...plan, cues: plan.cues.map(c => ({
+    ...c, persist: false, tieTo: null, extraEndDuration: 0, duration: PREVIEW_PERSIST_MS
+  }))};
 }
 
 /**
@@ -4297,6 +4408,35 @@ game.modules.get("crucible-anim").api.preview({filter: "melee"})   // 只看近�
 
 第 12 项是「只补空缺」的核心验证——若原生法术被本模组接管了，说明
 `buildPlanFor` 的 `nativeConfig` 判定有误，必须修复而不是绕过。
+
+#### persist 多客户端契约与遮挡（至少 GM + 1 玩家两台客户端）
+
+这一组离线测试完全测不出，必须上机。
+
+| # | 项 | 期望 |
+| --- | --- | --- |
+| 23 | **零落盘**（本契约唯一的直接读数） | 给一个 token 挂 burning，然后在 GM 控制台跑下面那段，必须返回 `[]`。注意 Sequencer 4.2.x 的记录**不在 token flag 上**，在隐藏 JournalEntry 里 |
+| 24 | GM F5 重载 | 光环只有一层，不变亮（刷新前后各截一张图，用 `tools/element-residual-colour.mjs` 量同一像素更稳） |
+| 25 | 中途进场 | 状态挂上之后玩家 B 才登录/切进场景，B 必须看得到光环（这条只有 worldPersist:false + 自建重放能过；flag 回放方案下 B 什么都看不到） |
+| 26 | 切场景往返 | GM 切到别的场景再切回来，光环恢复且只有一层。失败症状「切回来光环没了」= 重建误挂在 canvasReady 而非 sequencerEffectManagerReady |
+| 27 | 移除即清理 | 移除状态，两端光环同时消失，且两端 `Sequencer.EffectManager.getEffects({origin: "<effectUuid>"})` 都返回 `[]` |
+| 28 | linked actor 双 token | 同一个 actor 的两个 token 同挂一个状态，两个都要有光环。只有一个 = isPlayingPersist 的判重漏了 object 条件 |
+| 29 | 无 GM 在线 | 关掉 GM 客户端，只有玩家在线时挂状态，玩家仍能看到光环 |
+| 30 | preload 不再全场往返 | 用 role=PLAYER 的客户端打一次，控制台不得出现 `preloadForClients - You do not have permission`；一次动作不应看到 N 条 PRELOAD 广播 |
+| 31 | **temporary 的位置 ticker 开销**（本方案唯一的实打实代价） | 10 个 token × 2 状态全挂上，拖动其中一个跨半个屏幕，看 F12 Performance 有没有可感掉帧、socket 面板里 UPDATE_EFFECT_POSITION 的量级 |
+| 32 | 分层观感 | 9 支地面环压在 token 之下仍看得清（尤其 hidden，压下去只剩最弱的一支）；burning/haste/buff 在 token 之上不糊脸 |
+| 33 | **tint 真的生效** | decay（腐朽/辐射）必须是酒红／绛紫骷髅环、hidden（隐匿）必须是靛蓝烟弧。若仍是紫色/灰蓝，说明播放端没接 `.tint()` 或把它当加法处理了——**这是本轮唯一测试兜不住的缺口**，测试量的是「按这个 tint 算出来的颜色」，不是「屏幕上真的是这个颜色」 |
+| 34 | dead 不再挂环 | 打死一个敌人，尸体上只有 Foundry 自带的 dead overlay，没有青绿眩晕环 |
+| 35 | 战斗直调的 DoT | 触发 death / illumination / earth / life / soul 符文暴击，落地的腐朽/辐射/酸蚀/治疗/鼓舞必须命中各自分组的颜色，而不是一颗无 tint 的白泡（那是 generic.persist 兜底，说明 GENERATED_EFFECT_STATUS 没生效） |
+
+第 23 项的命令：
+
+```js
+const db = game.journal.getName("sequencerDatabase");
+Object.entries(db?.flags?.sequencer?.effects ?? {})
+  .flatMap(([k, v]) => v.map(([id, d]) => ({k, id, file: d.file, by: d.creatorUserId})))
+  .filter(r => r.file?.includes("jb2a") || r.file?.includes("eskie"));
+```
 
 - [ ] **Step 5: 记录验收结果**
 

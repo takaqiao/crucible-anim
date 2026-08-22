@@ -271,7 +271,7 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
 | 撤销动作不播动画 | 闸门是 `confirmed` 翻 true，撤销走另一条路径 |
 | 3D 骰子播完才播动画 | crucible 已在 `#autoConfirmMessage` 中 await 过 DSN |
 | 关闭动画总开关 | 直接读取 `crucible / enableVFX` |
-| 全场画面一致、不双播 | 随机选材在出手端固化进 FXPlan；不使用 Sequencer socket |
+| 全场画面一致、不双播 | 随机选材在出手端固化进 FXPlan；不使用 Sequencer socket。persist 槽同样本地播，但必须额外禁止 Sequencer 落盘，否则 N 个客户端写 N 条记录——见 §6.7 |
 | 目标、结果、伤害数据 | crucible 的 `eventsByTarget` 事件流 |
 
 ## 6. 解析层
@@ -342,6 +342,7 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
     waitUntilFinished: number|null,         // 负值 = 重叠
     // 持久化（仅 persist 槽）
     persist: bool, tieTo: uuid|null, extraEndDuration: number,
+    worldPersist: false,                    // 恒为 false，见 §6.7
     // 声音专用
     volume: number
   }]
@@ -426,6 +427,41 @@ impact = 结果层（8 选 1，与元素无关） + 元素层（仅命中类叠�
 ColorMatrix 色相旋转补足差值（学自 pf2e-jb2a-macros）。
 
 物理伤害（bludgeoning / piercing / slashing）不走颜色，走血迹 / 火花素材。
+
+### 6.7 persist 为何不落 Sequencer 的盘
+
+`persist` 是五个槽里唯一会让 Sequencer 往世界写数据的开关，而本模组的传输模型是
+「各客户端本地播同一份 plan」（§5.1 / §5.4）。两者相乘的后果是 N 个在线客户端把同一个
+状态写成 N 条记录：Sequencer 4.2.3 的落盘判据
+
+```js
+if (data.persist && setFlags && effect.context && effect.owner
+    && !effect.isSourceTemporary && !data.temporary && !data.remote) {
+  flagManager.addFlags(effect.context.uuid, {effects: effect.data});
+}
+```
+
+**没有 `!data.local` 子句**——`.locally()` 只把 `_users` 置成 `[me]` 从而让 push 为 false，
+拦得住 socket，拦不住写盘；`effect.owner` 判的是 `creatorUserId === game.user.id`，各客户端
+都是自己那份的 creator；去重键 `_id` 是 `randomID()`，不会合并。记录经
+`executeAsMainUser` 由 GM 落进隐藏 JournalEntry `sequencerDatabase` 的
+`flags.sequencer.effects`（**不在 token 的 flag 上**，验收时别找错地方）。重载时
+`initializePersistentEffects()` 回放全部记录，而 `shouldPlay` 的用户过滤以
+`game.user.isGM ||` 开头——GM 绕过过滤，N 份全播，光环层层叠加；反过来中途进场的玩家
+一条属于自己的记录都没有，一个光环都看不到。
+
+因此 FXPlan 的 `worldPersist` 恒为 `false`，播放层据此调 `.temporary(true)`（Sequencer 文档：
+「will not be stored in the flags of any object, even if .persist() is called」）。
+`.persist()` 的无限循环与 `tieToDocuments` 的自动清理都不受影响。
+
+对价是重载/入场时的重建改由本模组承担（Task 15 的 `resyncPersist`）。这不只是补偿，
+反而更强：真相是 ActiveEffect 文档本身，从它重新推导就不存在「flag 日志与文档不同步」，
+也不需要任何 GM 在线，中途进场的玩家照样能补齐全场光环——靠 Sequencer 的 flag 回放
+做不到这一条，因为记录全都属于别人。
+
+已知代价：`data.temporary && effect.owner` 会让 Sequencer 挂一个逐帧 ticker 广播 source
+位置，各客户端都是自己那份的 owner，于是 token 移动时有 N 倍冗余的
+`UPDATE_EFFECT_POSITION`。必须在 Task 16 实测其开销。
 
 ## 7. 素材层
 
