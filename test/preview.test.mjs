@@ -204,7 +204,7 @@ function stubHooksAndMessages(messages) {
   };
 }
 
-test("installReplayMenu：condition 与 dispatch.mjs 共享的 planOf 同源——" +
+test("installReplayMenu：visible 与 dispatch.mjs 共享的 planOf 同源——" +
      "带本模组 plan 的卡返回 true，没有的返回 false", () => {
   const withPlan = {id: "m1", flags: {crucible: {metadata: {cav: {v: 1, cues: []}}}}};
   const withoutPlan = {id: "m2", flags: {crucible: {}}};
@@ -214,16 +214,16 @@ test("installReplayMenu：condition 与 dispatch.mjs 共享的 planOf 同源—�
     let pushed = null;
     world.fire("getChatMessageContextOptions", {}, {push: opt => { pushed = opt; }});
     assert.ok(pushed, "必须真的注册了一条菜单项");
-    assert.equal(pushed.condition({dataset: {messageId: "m1"}}), true);
-    assert.equal(pushed.condition({dataset: {messageId: "m2"}}), false);
-    assert.equal(pushed.condition({dataset: {messageId: "does-not-exist"}}), false);
-    // condition 的判据必须真的是导出的 planOf，而不是各写一份容易漂移的等价逻辑。
+    assert.equal(pushed.visible({dataset: {messageId: "m1"}}), true);
+    assert.equal(pushed.visible({dataset: {messageId: "m2"}}), false);
+    assert.equal(pushed.visible({dataset: {messageId: "does-not-exist"}}), false);
+    // visible 的判据必须真的是导出的 planOf，而不是各写一份容易漂移的等价逻辑。
     assert.equal(!!planOf(withPlan), true);
     assert.equal(!!planOf(withoutPlan), false);
   } finally { world.restore(); }
 });
 
-test("installReplayMenu：callback 不得写 message._vfxPlayback——那个字段只服务于 confirm()", async () => {
+test("installReplayMenu：onClick 不得写 message._vfxPlayback——那个字段只服务于 confirm()", async () => {
   const msg = {id: "m3", flags: {crucible: {metadata: {cav: {v: 1, cues: []}}}}};
   const world = stubHooksAndMessages([msg]);
   try {
@@ -232,8 +232,8 @@ test("installReplayMenu：callback 不得写 message._vfxPlayback——那个字
     world.fire("getChatMessageContextOptions", {}, {push: opt => { pushed = opt; }});
     assert.equal(msg._vfxPlayback, undefined, "调用前不该有这个字段");
     // playFromMessage 会尝试碰 canvas/game.settings 等真实运行时全局，这里不追求它
-    // 真的播出动画，只钉住 callback 本身绝不主动写 _vfxPlayback 这一条契约。
-    await pushed.callback({dataset: {messageId: "m3"}}).catch(() => {});
+    // 真的播出动画，只钉住 onClick 本身绝不主动写 _vfxPlayback 这一条契约。
+    await pushed.onClick({}, {dataset: {messageId: "m3"}}).catch(() => {});
     assert.equal(msg._vfxPlayback, undefined,
       "重放不是 confirm() 的一部分，写 _vfxPlayback 会污染下一次「撤销→重新确认」的判断");
   } finally { world.restore(); }

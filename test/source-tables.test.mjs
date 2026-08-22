@@ -363,3 +363,47 @@ test("STATUS_GROUP / GENERATED_EFFECT_STATUS 与 const/effects.mjs 的 generator
     "GENERATED_EFFECT_STATUS 与「没有 statuses 字段的 generator 的 _id」对不上——"
     + "这些效果在战斗直调路径上落地时不带任何状态，statusId 会退化成这些 _id");
 });
+
+/* -------------------------------------------- */
+/*  Foundry 核心：ContextMenuEntry 键名           */
+/* -------------------------------------------- */
+
+const CORE_ROOT = "/root/foundryvtt/client";
+const CONTEXT_MENU_SRC = `${CORE_ROOT}/applications/ux/context-menu.mjs`;
+
+/**
+ * 重放菜单是本模组唯一一处往 Foundry 核心 UI 里插条目的地方，而 v14 把 ContextMenuEntry
+ * 的三个键全改了名（`name`→`label`、`condition`→`visible`、`callback`→`onClick`），旧名
+ * 只留到 v16。旧名现在还能跑，所以这类错误**不会有任何运行期症状**，只会在控制台吐弃用
+ * 警告——正是最容易一路混到 v16 才炸的那种。这里直接从核心源码里把弃用表解析出来对账。
+ */
+test("installReplayMenu 不得使用 v14 已弃用的 ContextMenuEntry 键名", () => {
+  const src = readFileSync(CONTEXT_MENU_SRC, "utf8");
+
+  // 形如：logCompatibilityWarning("ContextMenuEntry#condition is deprecated. "
+  //         + "Use ContextMenuEntry#visible instead.", {since: 14, until: 16, once: true});
+  const renames = new Map();
+  const re = /ContextMenuEntry#(\w+) is deprecated\.\s*"?\s*\+?\s*"?\s*Use ContextMenuEntry#(\w+) instead/g;
+  for (const m of src.matchAll(re)) renames.set(m[1], m[2]);
+
+  assert.ok(renames.size >= 3,
+    `核心源码里应能解析出至少 3 组 ContextMenuEntry 弃用改名，实得 ${renames.size} 组：` +
+    `${JSON.stringify([...renames])}。解析不到多半是核心把警告文案改了——` +
+    `此时本守卫已失效，必须先修解析再谈通过。`);
+
+  const preview = readFileSync(new URL("../scripts/player/preview.mjs", import.meta.url), "utf8");
+  const start = preview.indexOf("export function installReplayMenu()");
+  assert.ok(start > -1, "找不到 installReplayMenu");
+  const end = preview.indexOf("\n}", start);
+  const body = preview.slice(start, end);
+
+  for (const [oldKey, newKey] of renames) {
+    assert.ok(!new RegExp(`^\\s*${oldKey}:`, "m").test(body),
+      `重放菜单用了已弃用的 ContextMenuEntry#${oldKey}，v14 起应改用 #${newKey}（v16 移除）`);
+  }
+  // 反向钉死：不能靠"把键删光"通过上面的检查。
+  for (const newKey of renames.values()) {
+    assert.ok(new RegExp(`^\\s*${newKey}:`, "m").test(body),
+      `重放菜单缺少 ContextMenuEntry#${newKey}——菜单项不完整`);
+  }
+});

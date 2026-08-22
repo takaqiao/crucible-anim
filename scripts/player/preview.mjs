@@ -219,16 +219,16 @@ export function installPreview(deps) {
  * 本模组的计划挂在 `flags.crucible.metadata.cav`（`META_KEY`）上，原生那条菜单认不出
  * 我们的卡，必须自己注册一条。
  *
- * `condition` 与 `playFromMessage` 的播放闸门共用同一份判据（dispatch.mjs 导出的
+ * `visible` 与 `playFromMessage` 的播放闸门共用同一份判据（dispatch.mjs 导出的
  * `planOf`），两处各写一遍迟早漂移成"菜单出现但点了没反应"——这正是 Task 14 移交
  * 时点名要避免的坑。
  */
 export function installReplayMenu() {
   Hooks.on("getChatMessageContextOptions", (_app, options) => {
     options.push({
-      name: game.i18n.localize("CANIM.Replay"),
+      label: game.i18n.localize("CANIM.Replay"),
       icon: '<i class="fa-solid fa-repeat"></i>',
-      condition: li => !!planOf(game.messages.get(li.dataset.messageId)),
+      visible: li => !!planOf(game.messages.get(li.dataset.messageId)),
       // 重放**不**接管 message._vfxPlayback：那个字段只服务于 CrucibleAction#confirm()
       // 的 Promise.race（推迟 postConfirm 连锁动作，models/action.mjs:2683-2686），
       // 而重放发生在 confirm 早已结束之后，没有任何东西在等它。写进去反而会污染
@@ -237,7 +237,7 @@ export function installReplayMenu() {
       // 方向；但反过来，如果重放发生在两次确认之间，写 _vfxPlayback 会让当时正在
       // await 它的 confirm() 提前以为动画播完了。playFromMessage 本身保持无状态、
       // 可重复调用，重放不需要也不该碰这个字段。
-      callback: async li => {
+      onClick: async (_event, li) => {
         const msg = game.messages.get(li.dataset.messageId);
         if (msg) await playFromMessage(msg);
       }
