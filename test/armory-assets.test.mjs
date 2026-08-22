@@ -146,11 +146,13 @@ function looksLikeDbPath(literal) {
  *
  * Task 11 把 impact.mjs 的 generic.impact 迁到了 jb2a.impact.005.white（ASSET-NOTES
  * 已验证条目），原来的 "jb2a.impact.004" 条目已从这里删除——见下一条「自动失效」测试。
+ *
+ * Task 12 把 aftermath.mjs 的 generic.aftermath 改成恒返回 null（不再引用任何路径）、
+ * persist.mjs 的 generic.persist 迁到了 jb2a.extras.tmfx.inflow.circle.01（ASSET-NOTES
+ * 已验证条目），原来的 "jb2a.healing_generic.burst" 与
+ * "jb2a.extras.tmfx.outflow.circle.01" 两条已从这里删除——四个兵库任务至此清空。
  */
-const LEGACY_UNVERIFIED = new Set([
-  "jb2a.healing_generic.burst",      // aftermath.mjs generic.aftermath，待 Task 12 迁移
-  "jb2a.extras.tmfx.outflow.circle.01" // persist.mjs generic.persist，待 Task 12 迁移
-]);
+const LEGACY_UNVERIFIED = new Set([]);
 
 /** 全部兵库文件里出现过的路径字面量（不去重来源文件，只关心「有没有人引用」）。 */
 function allPickedPaths() {
@@ -186,19 +188,13 @@ test("兵库规则引用的每条 DB 路径都能在 ASSET-NOTES 主表里查到
   assert.deepEqual(bad, [], `${bad.length} 条兵库路径没有 ASSET-NOTES 依据或已被否决：\n${bad.join("\n")}`);
 });
 
-test("LEGACY_UNVERIFIED 白名单不许新增：条目数与内容锁死为当前已知的 2 条", () => {
+test("LEGACY_UNVERIFIED 白名单不许新增：四个兵库任务后应已清空", () => {
   // Task 10 把 travel.mjs 的 generic.travel 迁到了 ASSET-NOTES 认可的路径，原来的
   // "jb2a.magic_missile" 条目已从这里删除；Task 11 把 impact.mjs 的 generic.impact
-  // 迁到了 jb2a.impact.005.white，原来的 "jb2a.impact.004" 条目同样已删除——
-  // 均见下一条「自动失效」测试。
-  const KNOWN = [
-    "jb2a.extras.tmfx.outflow.circle.01",
-    "jb2a.healing_generic.burst"
-  ];
-  assert.ok(LEGACY_UNVERIFIED.size <= 2,
-    `LEGACY_UNVERIFIED 有 ${LEGACY_UNVERIFIED.size} 条，超过已知的 2 条——新增白名单项需要走评审，不能随手加`);
-  assert.deepEqual([...LEGACY_UNVERIFIED].sort(), KNOWN,
-    "LEGACY_UNVERIFIED 的内容与已知的 2 条不完全一致（可能被新增或替换了未经评审的条目）");
+  // 迁到了 jb2a.impact.005.white，原来的 "jb2a.impact.004" 条目同样已删除；Task 12
+  // 把 aftermath.mjs / persist.mjs 的最后两条也迁完——均见下一条「自动失效」测试。
+  assert.equal(LEGACY_UNVERIFIED.size, 0,
+    `LEGACY_UNVERIFIED 有 ${LEGACY_UNVERIFIED.size} 条，应已在四个兵库任务后清空——新增白名单项需要走评审，不能随手加`);
 });
 
 test("LEGACY_UNVERIFIED 白名单里每一条都仍被某个兵库文件实际引用（否则应删除）", () => {
