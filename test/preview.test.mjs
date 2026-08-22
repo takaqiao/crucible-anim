@@ -543,3 +543,50 @@ test("installReplayMenu：拿不到 isActive 时按不可用处理（fail-closed
     assert.equal(pushed.visible({dataset: {messageId: "m1"}}), false);
   } finally { world.restore(); }
 });
+
+/* ================================================================
+ * isolate 模式（2026-08-23 上机反馈补的一组）
+ *
+ * 玩家反馈：「不管预览哪个动画都会有个收到击打（匕首挥砍 + 出血）」。
+ *
+ * 原因不是 bug 而是设计——previewActionPlan 从前只替换**被预览的那一个槽**，
+ * 其余三槽照常解析。而 PREVIEW_ACTION_DEFAULTS 合成的是
+ * `tags:[strike,melee,slashing]` + `result:HIT` + `critical:true`，于是每次预览都附带：
+ *   · travel 槽的 strike.melee  → 近战挥砍
+ *   · impact 槽的 impact.layered → 结果层白闪 + 元素层血溅（物理三系共用 liquid.splash.red）
+ *
+ * 实战不会这样（火焰法术的元素层取火不取血），但预览时它盖在每一条规则上，
+ * 人分不清哪部分是被测的那条。V2 要靠预览验收 573 条规则，这会直接毁掉验收的有效性。
+ * ================================================================ */
+
+test("isolate 默认开：计划里只有被预览那条规则的 cue", () => {
+  const rule = ARMORY.travel.find(r => r.id === "strike.melee");
+  assert.ok(rule, "语料变了？找不到 strike.melee");
+  const plan = previewActionPlan(rule, "travel", origin(), target(), ENV, deps());
+  assert.ok(plan, "强制命中后应有产出");
+  const foreign = plan.cues.filter(c => c.rule !== "strike.melee");
+  assert.deepEqual(foreign.map(c => `${c.slot}/${c.rule}`), [],
+    "隔离模式下混进了别的槽的 cue —— 验收时会分不清哪部分是被测的那条规则");
+});
+
+test("isolate:false 恢复旧行为：其余三槽照常出 cue", () => {
+  const rule = ARMORY.travel.find(r => r.id === "strike.melee");
+  const plan = previewActionPlan(rule, "travel", origin(), target(), ENV, deps(), {}, {isolate: false});
+  assert.ok(plan, "强制命中后应有产出");
+  const foreign = plan.cues.filter(c => c.rule !== "strike.melee");
+  assert.ok(foreign.length > 0,
+    "isolate:false 应当保留上下文（「放在真实上下文里好不好看」也是要验的）");
+  // 玩家看到的那两条正是这里来的
+  assert.ok(plan.cues.some(c => c.slot === "impact" && c.rule === "impact.layered"),
+    "上下文模式下 impact.layered 应当照常出现——它就是玩家说的「出血」那一层");
+});
+
+test("parsePreviewArgs 认得 isolate / context 两种写法", () => {
+  assert.equal(parsePreviewArgs("isolate:false").isolate, false);
+  assert.equal(parsePreviewArgs("isolate:0").isolate, false);
+  assert.equal(parsePreviewArgs("isolate:true").isolate, true);
+  assert.equal(parsePreviewArgs("context:true").isolate, false);
+  assert.equal(parsePreviewArgs("context:false").isolate, true);
+  // 没写就不覆盖，交给 runPreview 的默认值
+  assert.equal(parsePreviewArgs("slot:impact").isolate, undefined);
+});

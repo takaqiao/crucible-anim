@@ -1,6 +1,7 @@
 import {registerSettings} from "./settings.mjs";
 import {log, warn, error} from "./log.mjs";
 import {createAssets, runtimeBackend} from "./resolver/assets.mjs";
+import {registerSfxDatabase} from "./register-sfx.mjs";
 import {ARMORY} from "./armory/index.mjs";
 import {installWrap} from "./trigger/wrap.mjs";
 import {installDispatch} from "./trigger/dispatch.mjs";
@@ -95,6 +96,11 @@ Hooks.once("ready", async () => {
   // 表现从"半装配"变成"整个模组加载失败"（控制台一条红），而半装配恰恰是最坏的那种：
   // installWrap 成功而后几个失败 = 动画计划照写进每张聊天卡，却永远没人播。
   try {
+    // 先把裸路径音效索引注册进 Sequencer 的 canim 命名空间，再建后端。
+    // 它内部只警告不抛（音效缺失应降级成「没声音」，不能连画面一起掀翻），
+    // 所以这里不判返回值——真失败时 canim.* 路径解析不到，兵库规则自己降级。
+    await registerSfxDatabase();
+
     const deps = {assets: createAssets(runtimeBackend()), armory: ARMORY};
     installWrap(deps);
     installDispatch();

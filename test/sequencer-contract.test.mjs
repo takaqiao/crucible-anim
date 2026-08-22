@@ -12,8 +12,9 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
+import {SEQUENCER_DIR} from "../tools/paths.mjs";
 
-const SEQ_DIR = "/root/fvtt14-data/Data/modules/sequencer";
+const SEQ_DIR = SEQUENCER_DIR;
 const src = readFileSync(`${SEQ_DIR}/dist/sequencer.js`, "utf8");
 const manifest = JSON.parse(readFileSync(`${SEQ_DIR}/module.json`, "utf8"));
 const occurrences = needle => src.split(needle).length - 1;
@@ -176,4 +177,57 @@ test("假 Sequencer 的方法白名单全部在 Sequencer 源码里找得到定�
       `.${m}() 在 sequencer.js 里找不到定义——桩比真 Sequencer 宽容，`
       + "契约测试会放行一个上机即 TypeError 的调用");
   }
+});
+
+/**
+ * 三个 SequencerFile 子类的形态。
+ *
+ * `scripts/resolver/assets.mjs` 的 `flattenEntry()` 建立在两条上游事实上：
+ *   1. `getEntry()` 返回的是这三个子类之一（或它们的数组、或 ft 解析后的字符串/数组）
+ *   2. 三个子类**都**实现了 `getAllFiles()`，那是唯一能同时应付
+ *      「私有字段」「string」「string[]」「ft 键对象」四种内部存储的对外 API
+ *
+ * 上游一旦改名或删掉 `getAllFiles`，`flattenEntry` 会安静地退回到 `.file ?? .files` 兜底，
+ * 于是 Plain 类的 cue 再次静默消失、RangeFind 再次把对象下发给 preload——
+ * **正是 2026-08-23 上机撞到的那两个 bug**。这条守卫让上游漂移先把测试打红。
+ */
+test("三个 SequencerFile 子类都还在，且都实现 getAllFiles", () => {
+  for (const cls of ["SequencerFilePlain", "SequencerFile", "SequencerFileRangeFind"]) {
+    assert.ok(src.includes(`class ${cls}`), `Sequencer 里找不到 ${cls}`);
+  }
+  // 三个类各有一处 getAllFiles 定义
+  assert.ok(occurrences("getAllFiles()") >= 3,
+    `getAllFiles() 的定义少于 3 处（实测 ${occurrences("getAllFiles()")}）——` +
+    "assets.mjs 的 flattenEntry 依赖这个统一出口");
+});
+
+test("SequencerFilePlain 的文件仍存在私有字段里（.file 读不到）", () => {
+  const i = src.indexOf("class SequencerFilePlain");
+  assert.notEqual(i, -1);
+  const body = src.slice(i, i + 900);
+  assert.match(body, /#file/,
+    "SequencerFilePlain 不再用私有字段了。若它改成公开 `file`，flattenEntry 的 " +
+    "getAllFiles 优先策略仍然正确，但这条守卫记录的『为什么必须用 getAllFiles』就过期了");
+  assert.match(body, /getAllFiles\(\)\s*\{\s*return\s*\[this\.#file\]/,
+    "SequencerFilePlain.getAllFiles 的实现变了");
+});
+
+test("SequencerFileRangeFind 的 file 仍是按 ft 键的对象", () => {
+  const i = src.indexOf("class SequencerFileRangeFind");
+  assert.notEqual(i, -1);
+  const body = src.slice(i, i + 1400);
+  assert.match(body, /getAllFiles\(\)\s*\{\s*return\s*Object\.values\(this\.file\)/,
+    "RangeFind.getAllFiles 不再是 Object.values(this.file) —— " +
+    "说明 .file 的形态变了，flattenEntry 里那条 ft 键对象兜底要重新核");
+  assert.match(body, /getFile\(inFt\s*=\s*"15ft"\)/,
+    "RangeFind.getFile 的 ft 默认值变了（选档逻辑的前提）");
+});
+
+test("entryExists 的部分前缀匹配仍会告警（快路径存在的理由）", () => {
+  assert.match(src, /matched via partial segment prefix/,
+    "Sequencer 不再打这条弃用警告了。assets.mjs 的『先试完整路径』快路径主要为它而设——" +
+    "警告没了不代表快路径该删（省全库扫描那条理由仍成立），但注释要更新");
+  assert.match(src, /this\.flattenedEntries\.find\(\(entry\) => entry\.startsWith\(inString\)\)/,
+    "entryExists 的匹配方式变了：它用的是裸 startsWith，所以查 `jb2a` 会命中 " +
+    "`jb2a-extras...`。这是快路径要绕开的具体机制。");
 });

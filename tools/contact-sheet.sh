@@ -21,6 +21,43 @@
 # 用法： tools/contact-sheet.sh <webm> <out.png> [cols] [rows]
 set -euo pipefail
 
+# ---- 工具定位：Windows 上常常只有 ffmpeg 没有 ffprobe ----
+# 优先级：环境变量 -> PATH -> 已知的随附安装。两个变量都可单独覆盖。
+FFMPEG="${CRUCIBLE_ANIM_FFMPEG:-}"
+FFPROBE="${CRUCIBLE_ANIM_FFPROBE:-}"
+[ -n "$FFMPEG" ]  || FFMPEG=$(command -v ffmpeg  2>/dev/null || true)
+[ -n "$FFPROBE" ] || FFPROBE=$(command -v ffprobe 2>/dev/null || true)
+[ -n "$FFMPEG" ] || for c in "${LOCALAPPDATA:-}/oopz/ffmpeg.exe" "$HOME/AppData/Local/oopz/ffmpeg.exe"; do
+  [ -x "$c" ] && FFMPEG="$c" && break
+done
+if [ -z "$FFMPEG" ]; then
+  echo "contact-sheet: 找不到 ffmpeg。设 CRUCIBLE_ANIM_FFMPEG 指向可执行文件。" >&2
+  echo "contact-sheet: 必须是带 libvpx / libvpx-vp9 的构建——否则解不出 WebM 的容器级" >&2
+  echo "contact-sheet: alpha（BlockAdditional），读图判断会全错。" >&2
+  exit 4
+fi
+
+# ffprobe 缺席时用 ffmpeg -i 的 stderr 顶替：两个探针只取 codec 与帧数，
+# ffmpeg 自己都打得出来，没必要为此再装一个二进制。
+probe_codec() {
+  if [ -n "$FFPROBE" ]; then
+    "$FFPROBE" -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$1" 2>/dev/null || true
+  else
+    # head 会让上游吃 SIGPIPE，pipefail + set -e 下整条脚本会静默退出——末尾的 || true 是必须的
+    { "$FFMPEG" -hide_banner -i "$1" 2>&1 || true; } |
+      grep -oE 'Video: [A-Za-z0-9_]+' | head -1 | cut -d' ' -f2 || true
+  fi
+}
+probe_frames() {
+  if [ -n "$FFPROBE" ]; then
+    "$FFPROBE" -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "$1" 2>/dev/null || true
+  else
+    { "$FFMPEG" -hide_banner -i "$1" -map 0:v:0 -c copy -f null - 2>&1 || true; } |
+      grep -oE 'frame=[[:space:]]*[0-9]+' | tail -1 | grep -oE '[0-9]+' || true
+  fi
+}
+
+
 if [ "$#" -lt 2 ]; then
   echo "contact-sheet: usage: $0 <webm> <out.png> [cols] [rows]" >&2
   exit 2
@@ -33,8 +70,7 @@ if [ ! -f "$F" ]; then
 fi
 
 # ---- 帧数与步长（与旧版逐字一致）----
-TOT=$(ffprobe -v error -count_frames -select_streams v:0 \
-      -show_entries stream=nb_read_frames -of csv=p=0 "$F" 2>/dev/null || true)
+TOT=$(probe_frames "$F")
 case "$TOT" in
   ''|*[!0-9]*) echo "contact-sheet: cannot count frames of $F (got '$TOT')" >&2; exit 3 ;;
 esac
@@ -42,8 +78,7 @@ esac
 STEP=$((TOT / N)); [ "$STEP" -lt 1 ] && STEP=1
 
 # ---- 选解码器：只有 libvpx 系列会解出 WebM 的 alpha 平面 ----
-CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name \
-        -of csv=p=0 "$F" 2>/dev/null || true)
+CODEC=$(probe_codec "$F")
 case "$CODEC" in
   vp8) DEC="-c:v libvpx" ;;
   vp9) DEC="-c:v libvpx-vp9" ;;
@@ -65,7 +100,7 @@ tile=${C}x${R}:padding=2:color=0x101010"
 
 sheet() {  # $1: 解码器参数，空串表示用默认解码器
   # shellcheck disable=SC2086
-  ffmpeg -y -v error $1 -i "$F" -filter_complex "$VF" -frames:v 1 -vsync 0 "$OUT"
+  "$FFMPEG" -y -v error $1 -i "$F" -filter_complex "$VF" -frames:v 1 -vsync 0 "$OUT"
 }
 
 if [ -n "$DEC" ]; then

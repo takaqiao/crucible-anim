@@ -51,14 +51,12 @@
  */
 import {execFileSync} from "node:child_process";
 import {pathToFileURL} from "node:url";
+import {FFMPEG, probeVideo, alphaDecoder} from "./media.mjs";
 
 export function decode(file) {
-  const meta = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0",
-    "-show_entries", "stream=codec_name,width,height", "-of", "csv=p=0", file])
-    .toString().trim().split(",");
-  const [codec, w, h] = [meta[0], +meta[1], +meta[2]];
-  const dec = codec === "vp9" ? ["-c:v", "libvpx-vp9"] : codec === "vp8" ? ["-c:v", "libvpx"] : [];
-  const buf = execFileSync("ffmpeg", ["-v", "error", ...dec, "-i", file,
+  const {codec, width: w, height: h} = probeVideo(file);
+  const dec = alphaDecoder(codec);
+  const buf = execFileSync(FFMPEG, ["-v", "error", ...dec, "-i", file,
     "-f", "rawvideo", "-pix_fmt", "rgba", "-"], {maxBuffer: 1 << 30});
   const stride = w * h * 4;
   const frames = [];

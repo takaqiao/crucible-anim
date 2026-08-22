@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import {readFileSync, existsSync} from "node:fs";
 import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
+import {FOUNDRY_DATA} from "../tools/paths.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FOUNDRY_DATA = "/root/fvtt14-data/Data";
 const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
 
 /** 遍历 DB 子树，产出 [路径, 文件或文件数组]。 */

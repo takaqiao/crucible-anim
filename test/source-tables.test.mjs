@@ -7,8 +7,8 @@ import {GESTURE_TARGET, STATUSES, TARGET_REGION, RUNE_DAMAGE,
 import {ELEMENT_LAYER, DAMAGE_ALIAS} from "../scripts/armory/impact.mjs";
 import {STATUS_GROUP, UNREACHABLE_STATUSES} from "../scripts/armory/persist.mjs";
 import {GENERATED_EFFECT_STATUS} from "../scripts/trigger/snapshot.mjs";
+import {FOUNDRY_DATA, FOUNDRY_CORE} from "../tools/paths.mjs";
 
-const FOUNDRY_DATA = "/root/fvtt14-data/Data";
 const SPELLCRAFT = `${FOUNDRY_DATA}/systems/crucible/module/const/spellcraft.mjs`;
 const STATUSES_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/statuses.mjs`;
 const ACTION_SRC = `${FOUNDRY_DATA}/systems/crucible/module/const/action.mjs`;
@@ -368,7 +368,7 @@ test("STATUS_GROUP / GENERATED_EFFECT_STATUS 与 const/effects.mjs 的 generator
 /*  Foundry 核心：ContextMenuEntry 键名           */
 /* -------------------------------------------- */
 
-const CORE_ROOT = "/root/foundryvtt/client";
+const CORE_ROOT = FOUNDRY_CORE;
 const CONTEXT_MENU_SRC = `${CORE_ROOT}/applications/ux/context-menu.mjs`;
 
 /**

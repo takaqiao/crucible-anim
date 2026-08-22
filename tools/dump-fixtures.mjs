@@ -4,16 +4,17 @@
  * 直读 leveldb，不启动 Foundry。目标与结果是参数化合成的：每个动作配两个目标，
  * 一个贴身一个隔格，覆盖 §8.2 的两条几何分支。
  *
- * 用法： node tools/dump-fixtures.mjs [--data /root/fvtt14-data/Data]
+ * 用法： node tools/dump-fixtures.mjs [--data <Foundry Data>]
  */
 import {ClassicLevel} from "classic-level";
 import {writeFileSync, existsSync} from "node:fs";
 import {join, dirname} from "node:path";
 import {fileURLToPath, pathToFileURL} from "node:url";
+import {FOUNDRY_DATA} from "./paths.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const argData = process.argv.indexOf("--data");
-const DATA = argData > -1 ? process.argv[argData + 1] : "/root/fvtt14-data/Data";
+const DATA = argData > -1 ? process.argv[argData + 1] : FOUNDRY_DATA;
 
 const GRID = 100;                       // 合成场景的网格像素
 const ORIGIN = {x: 500, y: 500};

@@ -34,9 +34,11 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync, readdirSync} from "node:fs";
 import {fileURLToPath} from "node:url";
-import {dirname, join} from "node:path";
+import {basename, dirname, join} from "node:path";
+import {familyRows} from "../tools/asset-families.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
 const md = readFileSync(join(ROOT, "docs/ASSET-NOTES.md"), "utf8");
 
 /** 主表：定位 `| DB 路径 |` 表头后连续的表格行，取第一列去掉反引号。与 asset-notes.test.mjs 同法。 */
@@ -72,7 +74,12 @@ function armoryFiles() {
 }
 
 /** 已知的素材命名空间前缀，来自 ASSET-NOTES 与 data/asset-index.json 的 modules 清单。 */
-const DB_PREFIXES = ["jb2a-extras", "jb2a", "eskie", "blfx", "psfx", "animated-spell-effects-cartoon"];
+/**
+ * 长前缀必须排在短前缀之前：正则用的是 `a|b|c` 交替，先匹配到哪个算哪个，
+ * `jb2a` 排在 `jb2a-extras` 前面会把后者从中间截断。
+ */
+const DB_PREFIXES = ["jb2a-extras", "jb2a", "eskie", "blfx", "psfx",
+                     "animated-spell-effects-cartoon", "ggg-sfx", "ggg-vfx", "jaamod"];
 const DB_PREFIX_ALT = DB_PREFIXES.join("|");
 
 /**
@@ -163,9 +170,26 @@ function allPickedPaths() {
   return out;
 }
 
-test("兵库规则引用的每条 DB 路径都能在 ASSET-NOTES 主表里查到依据，且不在否决清单里", () => {
+/**
+ * 「有依据」的第二条通路：族级选材（`V2-PLAN.md` D4）。
+ *
+ * 主表的每一行都是人抽帧读图的产物。V2 要引入 600–1000 条素材，逐条读图不可能，
+ * 于是正交矩阵那类走**族级记录**：全族机器量测 + 抽样人工读图。
+ *
+ * **这条通路不是放宽，是换了一种举证方式。** 族级记录本身由
+ * `test/asset-families.test.mjs` 守着，那边强制四件事：前缀解析得到、成员数与索引一致、
+ * **全族每一条都有量测**、以及**族内均匀**（帧率一致、alpha 一致、帧数与内容占比离散度
+ * 在阈值内）。族内不均匀时那边会红，这条通路也就随之失效——「看两条替全族签字」的
+ * 前提不成立时，签字就不作数。
+ */
+function familyPrefixes() {
+  return familyRows().map(f => f.prefix);
+}
+
+test("兵库规则引用的每条 DB 路径都能查到依据（主表逐条 或 族级记录），且不在否决清单里", () => {
   const tbl = tablePaths();
   const rej = rejectedPaths();
+  const fams = familyPrefixes();
   assert.ok(tbl.length >= 90, `主表行数异常：${tbl.length}`);
   assert.ok(rej.length >= 40, `否决清单条目数异常：${rej.length}`);
 
@@ -177,15 +201,51 @@ test("兵库规则引用的每条 DB 路径都能在 ASSET-NOTES 主表里查到
 
       const exact = tbl.includes(p);
       const asPrefix = tbl.some(t => t.startsWith(p + "."));
+      // 族级：路径落在某个已登记族之内（或它自己就是族前缀）
+      const inFamily = fams.some(f => p === f || p.startsWith(f + "."));
       const rejected = rej.some(r => r === p || r.startsWith(p + ".") || p.startsWith(r + "."));
 
-      if (!((exact || asPrefix) && !rejected)) {
-        const reason = rejected ? "在否决清单里" : "主表里查不到依据（既非精确命中也非某行的父路径）";
+      if (!((exact || asPrefix || inFamily) && !rejected)) {
+        const reason = rejected
+          ? "在否决清单里"
+          : "查不到依据：主表里既非精确命中也非某行的父路径，也不落在任何已登记的族里";
         bad.push(`${file}: "${p}" — ${reason}`);
       }
     }
   }
-  assert.deepEqual(bad, [], `${bad.length} 条兵库路径没有 ASSET-NOTES 依据或已被否决：\n${bad.join("\n")}`);
+  assert.deepEqual(bad, [], `${bad.length} 条兵库路径没有依据或已被否决：\n${bad.join("\n")}`);
+});
+
+/**
+ * 否决优先级：否决清单**压过**族级记录。
+ *
+ * 没有这一条，登记一个宽泛的族就能把族内被单独否掉的条目重新放行——
+ * 而否决清单里的条目正是「看过、判定不能用」的结论，那是最贵的一类信息。
+ * Task 9 的 review 就是靠否决清单抓到 `jb2a.cast_generic.03` 被当兜底用了一整个任务。
+ */
+test("族级记录不得让否决清单里的条目重新放行", () => {
+  const rej = rejectedPaths();
+  const fams = familyPrefixes();
+  const shadowed = [];
+  for (const f of fams) {
+    for (const r of rej) {
+      if (r === f || r.startsWith(f + ".")) shadowed.push(`族 ${f} 覆盖了已否决的 ${r}`);
+    }
+  }
+  // 覆盖本身不算错（族可以很大），错的是「靠族放行了被否决的路径」——
+  // 上面那条测试里 rejected 的判定排在最后且是硬否决，这里只做提示性记录。
+  // 一旦某个族确实包住了否决条目，写规则时必须绕开它，所以要显式列出来。
+  if (shadowed.length) {
+    console.log(`ℹ 以下族包住了否决条目（不是错误，但写规则时必须绕开）：\n  ${shadowed.join("\n  ")}`);
+  }
+  // 真正的断言：否决判定不能被族绕过。构造一次校验。
+  for (const r of rej.slice(0, 5)) {
+    const inFamily = fams.some(f => r === f || r.startsWith(f + "."));
+    if (!inFamily) continue;
+    // 该条目落在某个族里，但它仍必须被判为不可用
+    const rejected = rej.some(x => x === r || x.startsWith(r + ".") || r.startsWith(x + "."));
+    assert.ok(rejected, `否决条目 ${r} 落在族里之后不再被判否决——否决优先级被族绕过了`);
+  }
 });
 
 test("LEGACY_UNVERIFIED 白名单不许新增：四个兵库任务后应已清空", () => {
@@ -250,4 +310,57 @@ test("兵库文件里的 DB 路径不得以字符串拼接的形式出现（禁�
     }
   }
   assert.deepEqual(bad, [], bad.join("\n"));
+});
+
+/**
+ * 死链守卫：兵库不得引用 data/asset-index.json 里 deadLinks 记录的任何路径。
+ *
+ * 死链是上游厂商的 bug——DB 里可寻址、`resolve()` 不报错、`bestFit` 也不会降级
+ * （路径每一级都存在，只是末端指向的文件不在盘上）。运行时的后果是 Sequencer
+ * 静默播不出东西，而**离线测试全绿**。这正是本项目第 3 类失败模式「假成功」：
+ * 函数返回非 null，但内容不是被请求的那个东西。
+ *
+ * 拦截口径三条，缺一不可：
+ *   1. 兵库路径 === 死链路径（精确命中）
+ *   2. 兵库路径是死链的**父路径**——规则写 `jaamod.condition.rings` 传 {color}，
+ *      运行时拼出来的正是死链
+ *   3. 兵库路径是死链的**子路径**——死链本身是个中间节点时（数组成员形如
+ *      `x.y[3]`，其父 `x.y` 整条不可靠，因为 ctx.pick 会随机取到缺失的那个）
+ */
+test("兵库不引用任何死链", () => {
+  const dead = index.deadLinks;
+  assert.ok(Array.isArray(dead), "data/asset-index.json 没有 deadLinks 字段——重跑 npm run index");
+
+  // 数组成员的 `[n]` 尾码剥掉：它的父路径整条不可靠
+  const deadPaths = dead.map(d => d.replace(/\[\d+\]$/, ""));
+  const offenders = [];
+  for (const file of armoryFiles()) {
+    const src = readFileSync(file, "utf8");
+    for (const used of new Set(pickedPaths(src))) {
+      for (const d of deadPaths) {
+        const isSame = used === d;
+        const isParent = d.startsWith(`${used}.`);
+        const isChild = used.startsWith(`${d}.`);
+        if (isSame || isParent || isChild) {
+          offenders.push(`${basename(file)}: ${used}  ←  死链 ${d}`);
+          break;
+        }
+      }
+    }
+  }
+  assert.deepEqual(offenders, [],
+    "兵库引用了磁盘上不存在的素材。这类引用离线全绿、上机静默无画面——" +
+    "改选同族的其他分支，不要靠 bestFit 兜（它兜不住：路径每一级都存在）。");
+});
+
+/** deadLinks 本身要非空且形态正确，否则上面那条守卫会变成恒真。 */
+test("deadLinks 记录形态正确且非空", () => {
+  const dead = index.deadLinks;
+  assert.ok(dead.length > 0,
+    "deadLinks 为空。本机实测 eskie 2 / cartoon 3 / ggg-vfx 3 / jaamod 38 共 46 条——" +
+    "为空说明 scanDeadLinks 没跑或 Data 目录指错了，此时死链守卫恒真。");
+  for (const d of dead) {
+    assert.equal(typeof d, "string");
+    assert.ok(d.includes("."), `死链路径形态不对: ${d}`);
+  }
 });

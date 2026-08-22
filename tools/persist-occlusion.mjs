@@ -32,15 +32,15 @@
  *
  * 路径给的是 DB 点分路径，经 data/asset-index.json 换算到 Foundry Data 目录下的真实文件。
  */
-import {execFileSync, spawn} from "node:child_process";
 import {readFileSync} from "node:fs";
 import {fileURLToPath, pathToFileURL} from "node:url";
 import {dirname, join} from "node:path";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {GROUP_FX} from "../scripts/armory/persist.mjs";
+import {FOUNDRY_DATA} from "./paths.mjs";
+import {eachFrame} from "./media.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FOUNDRY_DATA = "/root/fvtt14-data/Data";
 /** 兜底规则的素材不在 GROUP_FX 里，单独补一行，键名与测试表一致。 */
 const EXTRA = {generic: {path: "jb2a.extras.tmfx.inflow.circle.01", scale: 1}};
 
@@ -48,26 +48,8 @@ const EXTRA = {generic: {path: "jb2a.extras.tmfx.inflow.circle.01", scale: 1}};
 export const REL = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.85, 1.00];
 const FACE = 0.4;
 
-/** 逐帧回调，不整片 buffer。 */
-export function eachFrame(file, cb) {
-  const meta = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0",
-    "-show_entries", "stream=codec_name,width,height", "-of", "csv=p=0", file]).toString().trim().split(",");
-  const [codec, w, h] = [meta[0], +meta[1], +meta[2]];
-  const dec = codec === "vp9" ? ["-c:v", "libvpx-vp9"] : codec === "vp8" ? ["-c:v", "libvpx"] : [];
-  const stride = w * h * 4;
-  return new Promise((res, rej) => {
-    const p = spawn("ffmpeg", ["-v", "error", ...dec, "-i", file, "-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
-    let tail = null, n = 0;
-    p.stdout.on("data", d => {
-      const buf = tail ? Buffer.concat([tail, d]) : d;
-      let off = 0;
-      while (buf.length - off >= stride) { cb(buf.subarray(off, off + stride), w, h, n++); off += stride; }
-      tail = off < buf.length ? Buffer.from(buf.subarray(off)) : null;
-    });
-    p.stderr.on("data", d => process.stderr.write(d));
-    p.on("close", c => c === 0 ? res({w, h, frames: n}) : rej(new Error(`ffmpeg exit ${c} on ${file}`)));
-  });
-}
+// eachFrame 已归位到 tools/media.mjs（通用逐帧解码，profile-family 也要用），此处只再导出。
+export {eachFrame};
 
 /** 中心边长 rel×w 的方框内的 alpha 均值；同时数近黑近不透明像素。 */
 function windowStats(buf, w, h, rel, countHoles) {

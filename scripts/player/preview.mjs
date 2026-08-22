@@ -15,6 +15,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  *
  * 用法：选中一个 token（作为施法者），可选再目标一个 token，然后
  *   game.modules.get("crucible-anim").api.preview({slot: "impact"})
+ *   game.modules.get("crucible-anim").api.preview({slot: "impact", isolate: false})
  * 或聊天框输入 `/canim-preview`（支持 `slot:impact filter:melee gap:800` 这样的
  * 空格分隔 key:value 参数，见 parsePreviewArgs）。
  *
@@ -24,7 +25,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  *   gap    每条之间的间隔毫秒，默认 1200
  * @param {{assets: object, armory: object}} deps
  */
-async function runPreview({slot = null, filter = null, gap = 1200} = {}, deps) {
+async function runPreview({slot = null, filter = null, gap = 1200, isolate = true} = {}, deps) {
   if (!animationsEnabled()) {
     ui.notifications.warn(game.i18n.localize("CANIM.Preview.Disabled"));
     return;
@@ -57,7 +58,7 @@ async function runPreview({slot = null, filter = null, gap = 1200} = {}, deps) {
       // fixture 只盖掉默认快照满足不了的那几条守卫。
       const plan = EFFECT_SLOTS.includes(s)
         ? previewEffectPlan(rule, target, env, deps, s)
-        : previewActionPlan(rule, s, origin, target, env, deps, PREVIEW_FIXTURES[key] ?? {});
+        : previewActionPlan(rule, s, origin, target, env, deps, PREVIEW_FIXTURES[key] ?? {}, {isolate});
       if (!plan) { skipped.push(key); continue; }
 
       ui.notifications.info(game.i18n.format("CANIM.Preview.Playing", {slot: s, rule: rule.id}));
@@ -274,10 +275,24 @@ export const ALWAYS_SILENT = Object.freeze([
  * @param {{assets: object, armory: object}} deps
  * @returns {FXPlan|null}
  */
-export function previewActionPlan(rule, slot, origin, target, env, deps, fixture = {}) {
+export function previewActionPlan(rule, slot, origin, target, env, deps, fixture = {}, {isolate = true} = {}) {
   const snapshot = snapshotAction(syntheticAction(rule, origin, target, fixture), env);
   const forced = {...rule, when: () => true};
-  const armory = {...deps.armory, [slot]: [forced]};
+  /*
+   * isolate（默认开）：把**其余三槽清空**，画面上只剩被预览的这一条规则。
+   *
+   * 不清空的话每次预览都会附带一次「暴击近战斩击」——因为 PREVIEW_ACTION_DEFAULTS
+   * 合成的正是 `tags:[strike,melee,slashing]` + `result:HIT` + `critical:true`，
+   * 于是 travel 槽的 strike.melee 出匕首挥砍、impact 槽的 impact.layered 按 slashing
+   * 出血溅（物理三系共用 jb2a.liquid.splash.red）。**实战不会这样**（火焰法术的元素层
+   * 取的是火，不是血），但预览时它盖在每一条规则上，人根本分不清哪部分是被测的那条。
+   *
+   * 保留 isolate:false 是因为「放在真实上下文里好不好看」也是要验的，只是它不该是默认。
+   */
+  const others = isolate
+    ? Object.fromEntries(Object.keys(deps.armory).map(k => [k, []]))
+    : deps.armory;
+  const armory = {...others, [slot]: [forced]};
   const plan = resolve(snapshot, {assets: deps.assets, armory});
   // 判据带上 slot：规则 id 目前在五个槽之间不重名，但「另一个槽里恰好同名的规则替它
   // 出场」正是本模组反复栽过的那类假成功，加一个字段的代价换掉整类误判。
@@ -346,6 +361,9 @@ export function parsePreviewArgs(rest) {
     if (key === "slot") opts.slot = value;
     else if (key === "filter") opts.filter = value;
     else if (key === "gap") { const n = Number(value); if (Number.isFinite(n)) opts.gap = n; }
+    // isolate:false（或 context:true）恢复「连同其余三槽一起播」的旧行为
+    else if (key === "isolate") opts.isolate = value !== "false" && value !== "0";
+    else if (key === "context") opts.isolate = !(value !== "false" && value !== "0");
   }
   return opts;
 }

@@ -264,3 +264,129 @@ test("runtime 与 offline 返回值形状一致", async () => {
     globalThis.Sequencer = oldSeq;
   }
 });
+
+/* ================================================================
+ * Sequencer 的真实条目形态（2026-08-23 上机实测补的一组）
+ *
+ * 这组测试补的是本项目第 6 类失败模式的一个实例：**离线全绿、上机静默失效**。
+ * 上面那些用例喂给 mock 的都是 `{file: "x.webm"}` 这种朴素对象，而
+ * `Sequencer.Database.getEntry()` 实际返回的是三个 SequencerFile 子类之一，
+ * 它们的 `.file` 形态各不相同（`sequencer.js:6374 / 6400 / 6490`）：
+ *
+ *   · SequencerFilePlain     —— 文件存在**私有字段 `#file`**，`.file` 是 undefined
+ *   · SequencerFile          —— `.file` 是 string 或 string[]
+ *   · SequencerFileRangeFind —— `.file` 是**按 ft 键的对象**
+ *
+ * 旧实现读 `e.file ?? e.files`，于是：Plain 拿到 undefined → 整条 cue 静默消失；
+ * RangeFind 拿到对象 → 一路传到 Sequencer 的 preload，报
+ * `each entry in inSrcs must be of type string`（这条是玩家实际撞到的）。
+ *
+ * 下面的假类只复刻**真实类的对外形态**，不复刻实现。形态本身由
+ * test/sequencer-contract.test.mjs 钉在 Sequencer 源码上，那边红了说明上游改了 API。
+ * ================================================================ */
+
+/** 复刻 SequencerFilePlain：文件藏在私有字段里，只有 getAllFiles() 拿得到。 */
+class FakePlain {
+  #file;
+  constructor(file) { this.#file = file; }
+  getAllFiles() { return [this.#file]; }
+}
+
+/** 复刻 SequencerFile：`.file` 可能是 string 或 string[]。 */
+class FakeSeqFile {
+  constructor(file, template = null) { this.file = file; this.template = template; }
+  getAllFiles() { return [this.file].flat(Infinity); }
+}
+
+/** 复刻 SequencerFileRangeFind：`.file` 是 `{"05ft": …, "30ft": …}`。 */
+class FakeRangeFind {
+  constructor(byFt) { this.file = byFt; }
+  getAllFiles() { return Object.values(this.file).flat(Infinity); }
+}
+
+async function withMockDb(entries, fn) {
+  const {runtimeBackend} = await import("../scripts/resolver/assets.mjs");
+  const mockDb = new MockSequencerDatabase(entries);
+  const old = globalThis.Sequencer;
+  globalThis.Sequencer = {Database: mockDb};
+  try { return fn(runtimeBackend()); } finally { globalThis.Sequencer = old; }
+}
+
+test("runtime: SequencerFilePlain 的私有字段也要取得到（否则 cue 静默消失）", async () => {
+  await withMockDb({"jb2a.impact.005.white": new FakePlain("impact.webm")}, backend => {
+    const e = backend.getEntry("jb2a.impact.005.white");
+    assert.ok(e, "返回了 null —— 旧实现读 e.file 拿到 undefined 就是这个下场");
+    assert.equal(e.file, "impact.webm");
+  });
+});
+
+test("runtime: SequencerFileRangeFind 的 ft 键对象不能原样下发", async () => {
+  const entry = new FakeRangeFind({"05ft": "near.webm", "30ft": "far.webm"});
+  await withMockDb({"jb2a.ranged.beam.001.01.blue": entry}, backend => {
+    const e = backend.getEntry("jb2a.ranged.beam.001.01.blue");
+    assert.ok(e, "应返回非空");
+    const files = Array.isArray(e.file) ? e.file : [e.file];
+    for (const f of files) {
+      assert.equal(typeof f, "string",
+        "下发了非字符串 —— Sequencer 的 preload 会抛 " +
+        "`each entry in inSrcs must be of type string`，这是玩家实际撞到的报错");
+    }
+    assert.deepEqual(files.sort(), ["far.webm", "near.webm"]);
+  });
+});
+
+test("runtime: 一个条目内部的字符串变体数组整池带走", async () => {
+  await withMockDb({"psfx.weapon-swooshes.light.v1.group01": ["a.ogg", "b.ogg", "c.ogg"]},
+    backend => {
+      const e = backend.getEntry("psfx.weapon-swooshes.light.v1.group01");
+      assert.ok(e);
+      assert.deepEqual(e.file, ["a.ogg", "b.ogg", "c.ogg"],
+        "同一条目的变体池应整池带走，由 ctx.pick 用出手端 seeded rng 摇定");
+    });
+});
+
+test("runtime: 前缀命中多个不同条目时仍只取第一条，不跨分支组池", async () => {
+  await withMockDb({
+    "jb2a.melee_attack.01.shortsword.blue": new FakeSeqFile("blue.webm", [200, 300, 300]),
+    "jb2a.melee_attack.01.shortsword.orange": new FakeSeqFile("orange.webm", [200, 300, 300])
+  }, backend => {
+    const e = backend.getEntry("jb2a.melee_attack.01.shortsword");
+    assert.equal(e.file, "blue.webm",
+      "兄弟分支之间帧数/帧率可能不同（ASSET-NOTES 实测差到 1.83 倍），" +
+      "而兵库的 startTime/duration 是逐条实测值 —— 跨分支随机会让这些数字配错素材");
+    assert.deepEqual(e.template, [200, 300, 300], "模板要从被选中的那条上取");
+  });
+});
+
+test("runtime: 精确路径不再触发逐级 getPathsUnder（消除弃用警告 + 省全库扫描）", async () => {
+  const {createAssets} = await import("../scripts/resolver/assets.mjs");
+  let pathsUnderCalls = 0;
+  const backend = {
+    getPathsUnder(p) { pathsUnderCalls++; return ["impact"]; },
+    getEntry(p) { return p === "jb2a.impact.005.white" ? {file: "x.webm", template: null} : null; }
+  };
+  const assets = createAssets(backend);
+  const r = assets.resolve("jb2a.impact.005.white");
+  assert.equal(r.file, "x.webm");
+  assert.equal(r.diverged, false);
+  assert.equal(pathsUnderCalls, 0,
+    "精确命中却仍在逐级下行。bestFit 的第一步查裸命名空间，会让 Sequencer 的 entryExists " +
+    "打出 `matched via partial segment prefix` 弃用警告（jb2a 会先命中 jb2a-extras），" +
+    "而且每级都要全库扫一遍。");
+});
+
+test("runtime: 路径不存在时仍走 bestFit 降级，divergence 警告照旧", async () => {
+  const {createAssets} = await import("../scripts/resolver/assets.mjs");
+  let pathsUnderCalls = 0;
+  const tree = {"jb2a": ["impact"], "jb2a.impact": ["005"], "jb2a.impact.005": ["white"]};
+  const backend = {
+    getPathsUnder(p) { pathsUnderCalls++; return tree[p] ?? []; },
+    getEntry(p) { return p === "jb2a.impact.005.white" ? {file: "x.webm", template: null} : null; }
+  };
+  const assets = createAssets(backend);
+  const r = assets.resolve("jb2a.impact.999.purple");
+  assert.ok(pathsUnderCalls > 0, "没命中就必须走降级 walk");
+  assert.equal(r.file, "x.webm", "应降级到同级第一个可用项");
+  assert.equal(r.diverged, true);
+  assert.equal(assets.warnings.length, 1, "降级必须留下诊断");
+});

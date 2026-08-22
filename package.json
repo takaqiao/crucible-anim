@@ -6,8 +6,12 @@
   "description": "Crucible 系统动画补齐模组的开发工具与测试",
   "scripts": {
     "test": "node --test test/",
-    "index": "node tools/extract-db.mjs",
-    "fixtures": "node tools/dump-fixtures.mjs"
+    "index": "node tools/index-sfx.mjs && node tools/extract-db.mjs",
+    "fixtures": "node tools/dump-fixtures.mjs",
+    "index:sfx": "node tools/index-sfx.mjs",
+    "index:db": "node tools/extract-db.mjs",
+    "profile": "node tools/profile-family.mjs",
+    "sheet": "node tools/family-sheet.mjs"
   },
   "devDependencies": {
     "classic-level": "^3.0.0"

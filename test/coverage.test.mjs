@@ -9,9 +9,9 @@ import {ARMORY} from "../scripts/armory/index.mjs";
 import {RESULT} from "../scripts/const.mjs";
 import {ELEMENT_LAYER} from "../scripts/armory/impact.mjs";
 import {NO_PERSIST} from "../scripts/armory/persist.mjs";
+import {FOUNDRY_DATA} from "../tools/paths.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const FOUNDRY_DATA = "/root/fvtt14-data/Data";
 const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
 const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json"), "utf8"));
 const effects = JSON.parse(readFileSync(join(ROOT, "test/fixtures/effects.json"), "utf8"));

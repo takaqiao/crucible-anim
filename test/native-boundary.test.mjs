@@ -27,9 +27,10 @@ import {readFileSync, readdirSync} from "node:fs";
 import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
 import {tokenDoc} from "../tools/token-mocks.mjs";
+import {CRUCIBLE_MODULE} from "../tools/paths.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const CRUCIBLE = "/root/fvtt14-data/Data/systems/crucible/module";
+const CRUCIBLE = CRUCIBLE_MODULE;
 const VFX = `${CRUCIBLE}/canvas/vfx`;
 
 /* ---- 源码解析工具 -------------------------------------------------------- */
@@ -161,7 +162,7 @@ function allHookImpls() {
       while ((m = re.exec(src))) {
         const ob = src.indexOf("{", m.index + m[0].length - 1);
         const body = src.slice(ob, matchPair(src, ob, "{", "}") + 1);
-        const rel = p.slice(CRUCIBLE.length + 1);
+        const rel = p.slice(CRUCIBLE.length + 1).replaceAll("\\", "/");  // 冻结表用 POSIX 分隔符，Windows 下要归一
         (found[rel] ??= []).push(body.replace(/^\{\s*|\s*\}$/g, "").replace(/\s+/g, " ").trim());
       }
     }
