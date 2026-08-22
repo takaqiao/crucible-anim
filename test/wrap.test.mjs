@@ -5,6 +5,7 @@ import {fileURLToPath} from "node:url";
 import {dirname, join} from "node:path";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
+import {tokenDoc} from "../tools/token-mocks.mjs";
 import {buildPlanFor} from "../scripts/trigger/wrap.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,18 +13,31 @@ const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8
 const ENV = {gridSize: 100, distancePixels: 100};
 const deps = () => ({assets: createAssets(offlineBackend(index)), armory: ARMORY});
 
-function mockAction(overrides = {}) {
+/**
+ * 包装体拿到的是**活的 CrucibleAction**，它的 `token` 与 `targets.get(actor).token`
+ * 都是 **TokenDocument**，不是 Token placeable：`CrucibleAction.#getTargetFromToken`
+ * （crucible/module/models/action.mjs:1541-1545）在写进 targets 之前显式
+ * `if (token instanceof Token) token = token.document`，action.mjs:1719 的注释也把
+ * 这件事写死了——「`token` is a placeable from game.user.targets while this.token is
+ * a TokenDocument」。
+ *
+ * 这个 mock 此前造的是 `{id, document:{width,height}, center:{x,y}}`——一个混合了
+ * 两种形状、现实中不存在的对象。tokenGeom 照着它写，于是线上 x/y 恒 0、贴身判定
+ * 恒真，而 277 条测试一条都抓不到。token 形状一律从 tools/token-mocks.mjs 取。
+ *
+ * `targetCenter` 提出来单独给，是因为覆盖 `targets` 的同时必须用同一个 actor 键
+ * 覆盖 `eventsByTarget`，直接从 overrides 传两个 Map 很容易写歪。
+ */
+function mockAction({targetCenter = {x: 600, y: 500}, ...overrides} = {}) {
   const targetActor = {id: "a1"};
-  const targetToken = {id: "t1", uuid: "Scene.s.Token.t1",
-                       document: {elevation: 0, width: 1, height: 1, uuid: "Scene.s.Token.t1"},
-                       center: {x: 600, y: 500}};
+  const targetToken = tokenDoc({id: "t1", center: targetCenter});
   return {
     id: "reactiveStrike", name: "反击",
     tags: new Set(["strike", "melee", "slashing"]),
     target: {type: "single", number: 1, distance: 1, scope: 2},
     range: {minimum: 0, maximum: 1}, cost: {action: 1, focus: 0, heroism: 0, health: 0},
     region: null, actor: {type: "hero"},
-    token: {id: "t0", document: {elevation: 0, width: 1, height: 1}, center: {x: 500, y: 500}},
+    token: tokenDoc({id: "t0", center: {x: 500, y: 500}}),
     targets: new Map([[targetActor, {token: targetToken}]]),
     usage: {damageType: "slashing", isAttack: true, isRanged: false,
             strikes: [{category: "balanced1", system: {damageType: "slashing"}}]},
@@ -105,4 +119,40 @@ test("plan.warnings 非空时会经 warn() 冒出来，规则本身的产出不�
     assert.ok(warns.some(line => line.includes("__test_boom__") && line.includes("boom")),
       "buildPlanFor 应该把 plan.warnings 转发给 warn()");
   } finally { console.warn = realWarn; }
+});
+
+/**
+ * Critical-1 的端到端闸门：从「Crucible 真会交出来的对象」一路走到计划里的坐标与选材。
+ *
+ * `strike.melee`（scripts/armory/travel.mjs）同时消费三样几何：
+ * `ctx.geom.adjacent(target)` 决定短剑（933ms）还是野太刀（767ms）、
+ * `ctx.geom.onLeft(target)` 决定 mirrorY、`aim.towards` 与 `at` 冻结目标中心坐标。
+ * tokenGeom 一旦只认 placeable，这三样在 TokenDocument 上会分别退化成
+ * 恒贴身、恒不镜像、恒 (0,0)——本用例的三段断言会同时变红。
+ */
+test("Critical-1：token 是 TokenDocument 时，坐标/贴身/左右一路传到计划里", () => {
+  const melee = plan => plan.cues.find(c => c.rule === "strike.melee");
+
+  // 紧邻右侧：origin(500,500) 与 target(600,500) 边缘相接
+  const near = melee(buildPlanFor(mockAction(), ENV, deps(), {nativeConfig: null}));
+  assert.ok(near, "strike.melee 应该匹配");
+  assert.deepEqual([near.at.x, near.at.y], [600, 500],
+    "at 必须冻结 TokenDocument 的真实中心；读成 (0,0) 说明又按 placeable 的 token.center 取了");
+  assert.equal(near.at.uuid, "Scene.s.Token.t1");
+  assert.deepEqual([near.aim.towards.x, near.aim.towards.y], [600, 500]);
+  assert.equal(near.duration, 933, "贴身分支（短剑）");
+  assert.equal(near.mirrorY, false);
+
+  // 隔 9 格：adjacent 必须为假，否则就是「恒贴身」的老 bug
+  const far = melee(buildPlanFor(mockAction({targetCenter: {x: 1500, y: 500}}), ENV, deps(),
+    {nativeConfig: null}));
+  assert.deepEqual([far.at.x, far.at.y], [1500, 500]);
+  assert.equal(far.duration, 767, "隔格分支（野太刀）；仍是 933 说明 adjacent 恒真");
+  assert.notEqual(far.file, near.file, "贴身与隔格必须选到不同的素材");
+
+  // 紧邻左侧：mirrorY 必须翻真（旧实现 onLeft 恒假，挥击永不镜像）
+  const left = melee(buildPlanFor(mockAction({targetCenter: {x: 400, y: 500}}), ENV, deps(),
+    {nativeConfig: null}));
+  assert.equal(left.mirrorY, true, "目标在左侧时必须 mirrorY");
+  assert.deepEqual([left.at.x, left.at.y], [400, 500]);
 });

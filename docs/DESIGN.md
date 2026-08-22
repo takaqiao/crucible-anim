@@ -264,6 +264,37 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
 因此 **「原生链最终返回 null」⟺「crucible 对此动作无动画」**。判定压缩为一个条件，
 不需维护任何白名单，也不会随系统升级而失效（新增覆盖会自动让位）。
 
+这条判定的源码依据（3 个 configureVFX 出口、三个 configurator 的全部 return 表达式、
+7 个 configurator 的 early-return / continue 条件、17 个姿态里 0 个 `configure: null`、
+五张 runes 表叉乘出的 24 个原生组合）由 `test/native-boundary.test.mjs` 逐项钉在
+Crucible 源码上，上游漂移会先让测试变红。判据用**真值**而不是 `=== null`：第三方钩子
+可能返回 `0`/`""`/`false`，而原生 `CrucibleChatMessage#_onUpdate` 的播放闸门同样是
+`flags.vfxConfig` 真值判断，两边对「有没有动画」的结论因此恒等。唯一有意为之的例外是
+**原生链抛异常**：包装体吞掉异常并照常接管（见 `trigger/wrap.mjs` 文件头）。
+
+**FXPlan 的落库体积（Task 14 实测记录，V1 不做处理）**
+
+用仓库全量 fixture（434 条计划）实测：均值 4048 字节、中位 2888、p90 7605、
+最大 8656（`spell.control.fan`，9 cue）。也就是说带上 plan 大致把一张动作卡**翻一倍**。
+
+三点让它停在「记录」而不是「处理」：
+
+1. 不是正确性问题。序列化路径成立（`_prepareMessage` 的 `isEmpty(this.metadata)` 守卫在
+   写了 `cav` 之后必然为假），与 Crucible 自用的 metadata 键无冲突，体积也远在 Foundry
+   socket 上限之下。
+2. 不存在「每次 update 重传」：`message.update()` 发的是差异不是整档，plan 只在建卡那一次
+   过线。
+3. plan 在动画播完后**并非无用**——它是 Task 15 重放菜单的唯一数据源。任何「播完就删」
+   「定期清旧卡」的方案都是在删重放能力。
+
+真要动的那天，第一步不是加体积上限（那会恰好砍掉最壮观的那几条法术），而是**剥默认值**：
+值为 `null`/`false` 的键占了 cue 总字节的 **31.1%**，写入时剥掉、播放时按 `CUE_DEFAULTS`
+回填即可白拿三成。唯一的坑：`play.mjs` 的 `cue.waitUntilFinished !== null` 与
+`cue.elevation !== null` 是仅有的两处 null 敏感读取，`undefined !== null` 成立，必须走
+回填而不是裸读。
+
+重访触发条件：单条 plan 超过 20 KB，或世界 messages 库中 `cav` 占比超过 40%。
+
 ### 5.4 白拿的能力
 
 | 能力 | 来源 |
@@ -271,7 +302,7 @@ Crucible 全部 gesture configurator 都以 `return null` 优雅退出：
 | 撤销动作不播动画 | 闸门是 `confirmed` 翻 true，撤销走另一条路径 |
 | 3D 骰子播完才播动画 | crucible 已在 `#autoConfirmMessage` 中 await 过 DSN |
 | 关闭动画总开关 | 直接读取 `crucible / enableVFX` |
-| 全场画面一致、不双播 | 随机选材在出手端固化进 FXPlan；不使用 Sequencer socket。persist 槽同样本地播，但必须额外禁止 Sequencer 落盘，否则 N 个客户端写 N 条记录——见 §6.7 |
+| 全场画面一致、不双播 | 随机选材、`randomRotation` 的角度、`randomizeMirrorY` 的镜像，全部在出手端摇定并写成具体数值进 FXPlan（`resolver/resolve.mjs` 的 `freezeRandom()`，走独立随机流 `ctx.rngAux`）；播放层不做任何随机，Sequencer 侧的 `.randomRotation()` 与 `.randomizeMirrorY()` 一律不用——它们分别用 CanvasEffect 的 twister（种子是 `creationTimestamp`，逐机不同）与裸 `Math.random()`，都在播放端求值。不使用 Sequencer socket。persist 槽同样本地播，但必须额外禁止 Sequencer 落盘，否则 N 个客户端写 N 条记录——见 §6.7 |
 | 目标、结果、伤害数据 | crucible 的 `eventsByTarget` 事件流 |
 
 ## 6. 解析层
@@ -570,9 +601,25 @@ await mod.jb2aPatreonDatabase("modules");
 
 ### 8.3 并发控制
 
-`player/semaphore.mjs`：多个动作接连确认时（例如连续反击、多目标群体动作），
+`player/semaphore.mjs`：多个**动作**接连确认时（例如连续反击、多目标群体动作），
 以信号量串行化播放，避免动画叠乱。学自 blfx 的 `getSemaphore / waitForSemaphore /
 cleanupSemaphore`。超时上限保证不会因异常而永久阻塞。
+
+**persist 槽不进这条队列**，走 `trigger/dispatch.mjs` 的 `runPersistAnimation()`：
+
+1. 持久光环在 Sequencer 里没有「播完」这个时刻——`EffectSection.run()` 对 `_persist`
+   等的是只有 `endEffect()` 才兑现的 finishPromise，塞进串行队列会把队列顶死到
+   超时（15 秒）为止。`playPlan()` 因此对带 persist cue 的计划**提前返回**：它的
+   promise 只代表「序列已交给 Sequencer」，不代表画面结束。
+2. 光环是稳态标记，多个状态同时上身本就该同时出现，串行是错的；Sequencer 自己
+   对并发持久特效毫无串行化。
+
+反过来，Crucible 的 `confirm()` 先落地 ActiveEffect、后翻 confirmed，状态动画的触发
+天然早于造成它的动作动画。所以 persist 通道在播出前做两段**有界**等待：
+`whenBusy(PERSIST_LEAD_MS)` 等那条动作动画入队，`whenIdle()` 等它播完；两段都超时
+就直接播出（最坏退回「光环略早于挥剑」，即修复前的表现）。播出前另有一道
+`fromUuidSync(effect.uuid)` 存活闸——让路期间状态若已被移除，此刻再播出的持久特效
+两条清理链路都失效，会永久残留。
 
 ## 9. 设置项
 

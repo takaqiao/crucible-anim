@@ -27,3 +27,25 @@ export const HIT_RESULTS = Object.freeze([RESULT.GLANCE, RESULT.HIT]);
 export const SETTINGS = Object.freeze({
   ENABLED: "enabled", DENSITY: "density", VOLUME: "volume", SHAKE: "shake", DEBUG: "debug"
 });
+
+/**
+ * 状态特效的「让路」宽限期（毫秒）。
+ *
+ * Crucible 的 `CrucibleAction#confirm()` **先**落地 ActiveEffect
+ * （models/action.mjs:2670 `await this.#applyEvents({reverse})` →
+ * documents/actor.mjs 的 modifyBatch → createActiveEffect），**后**才把聊天卡翻成
+ * confirmed（models/action.mjs:2680 `await this.message?.update({flags: {crucible:
+ * {confirmed: !reverse}}})`）。两个钩子之间隔着 `#recordHeroism` 的 actor 写入与
+ * `message.update()` 的一次数据库往返；其它客户端收到的是两条先后到达的 socket 广播，
+ * 间隔同量级。所以状态动画的触发天然比造成它的动作动画早，直接播就是
+ * 「挨打上毒 → 光环出现 → 才看见挥剑」。
+ *
+ * 这个常量是 persist 播放前等待「那条动作动画入队」的上限。取值只需要盖住上面那一次
+ * 往返，而**取大几乎无代价**：光环是持续数轮的稳态标记，晚半秒出现没有人看得出来；
+ * 取小的失败方式也只是退回今天的表现（光环略早于挥剑），不会更糟。500ms 对本地/局域网
+ * 服务器有一个数量级的余量，远端 VPS 也够。
+ *
+ * 注意它**不是**超时兜底：真的等到了动作动画入队，就改由 semaphore.whenIdle() 接管，
+ * 一直等到那条动画播完为止（那一段的上限是信号量自己的 timeoutMs）。
+ */
+export const PERSIST_LEAD_MS = 500;

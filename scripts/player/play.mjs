@@ -214,8 +214,13 @@ function regionMaskShape(region) {
  * 信息。真正需要在这一层补一行日志的，是版本不符（下面那条 warn）：那是播放层独有的
  * 判断，trigger 层看不到 PLAN_VERSION 对不对。
  *
+ * **返回时机**：普通计划 await 到整条序列播完；带 persist cue 的计划只 await 到序列被
+ * 交给 Sequencer 为止——持久特效在 Sequencer 里没有"播完"这个时刻，理由与源码依据见
+ * 函数末尾。调用方据此知道：persist 计划的这个 promise **不能**用来判断画面结束。
+ *
  * @param {FXPlan|null} plan
  * @param {{volume: number, shake: boolean, resolveRef: (at: object) => any}} opts
+ * @returns {Promise<void>}
  */
 export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
   if (!plan) return;
@@ -402,7 +407,9 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
       }
       if (cue.mirrorY) e.mirrorY(true);
       if (cue.randomizeMirrorY) e.randomizeMirrorY();
-      if (cue.randomRotation) e.randomRotation();
+      // angle 是 resolve.mjs 的 freezeRandom() 在出手端摇定的固定角度（见其注释）——
+      // 不用 .randomRotation()，那会让每个客户端各摇一次。
+      if (cue.angle) e.rotate(cue.angle);
       if (cue.elevation !== null) e.elevation(cue.elevation, {absolute: true});
       applyTimeWindow(e, cue);
       if (cue.tint) e.tint(cue.tint);
@@ -451,5 +458,31 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
   // 应答（sequencer.js 的 Sequence.play() 逐字确认）。本模组的传输设计是"聊天卡广播计划 +
   // 各客户端本地播放"（随机选材已在出手端固化），从不把这条 Sequence 交给 Sequencer 自己
   // 的跨客户端 socket 通路去广播执行——那条通路需要的两个开关本文件都不出现。
-  await seq.play({local: true, preload: true});
+  const playing = seq.play({local: true, preload: true});
+
+  // 带 persist cue 的计划**永远不会**"播完"，所以绝不能 await 它（Critical-2）：
+  //   · `EffectSection.run()`（sequencer.js:25008-25013）对 `this._persist` 走
+  //     `totalDuration += await canvasEffectData.promise`（非持久走 `.duration`）；
+  //   · 那个 promise 是 `CanvasEffect.play()` 的 finishPromise（15463-15476），只有
+  //     `endEffect()` 里的 `this._resolve?.(this.data)`（15479-15485）能兑现它，而
+  //     `PersistentCanvasEffect`（17784）把 `_setEndTimeout()`（17801-17808）换成了"只暂停
+  //     媒体、不 resolve"（基类 17669-17673 会 resolve）——持久特效不存在自然结束，
+  //     只有状态被移除才结束；
+  //   · `Sequence.play()` 末尾是 `Promise.allSettled(promises)`（27782），promises 里
+  //     含**每一条** section 的 `_execute()`，所以持久 section 排第几都一样挂；本仓库
+  //     45 条 persist 计划又恰好各只有 1 条 cue，`_waitAnyway`（21247-21249）让它作为
+  //     最后一条 section 被 `promises.push(await section._execute())`（27771-27772）
+  //     直接 await，连后面的 cue 都轮不到。
+  // 于是 `await seq.play()` 会一直挂到状态消失（实测：15 秒信号量超时每次必响，整条
+  // 动画队列被顶死）。判据用静态的 `cue.persist` 而不是"实际建成的 section"：这是一个
+  // **过近似**——playIf 为假、或构造期异常被 dropSection 撤下的 persist cue 其实不会挂，
+  // 但那时提前返回也只是少等一条零长序列，没有任何代价；反方向的误判（该等的没等）
+  // 则不可能发生。
+  if (plan.cues.some(cue => cue.persist === true)) {
+    // 不 await，但必须接住 rejection：preload 失败 / 构造期抛错在这条路径上没有别的
+    // 接管者，漏了就是每个客户端一条无来源的 unhandled rejection。
+    playing.catch(err => warn(`持久特效序列失败（计划 "${plan.source}"）`, err));
+    return;
+  }
+  await playing;
 }

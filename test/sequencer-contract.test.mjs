@@ -144,6 +144,29 @@ test("裸文件路径走 SequencerFilePlain（所以两端 padding 按 0 算）"
     + ".template() 对裸路径素材将不再生效");
 });
 
+test("持久特效的 run() 等的是一个只有 endEffect() 才兑现的 promise", () => {
+  // playPlan() 对带 persist cue 的计划提前返回（不 await seq.play()），全部依据在这里。
+  // 这四条只要有一条变了，"持久序列永不 settle" 就不再成立，那个提前返回要么多余、
+  // 要么变成真的丢等待；tools/fake-sequencer.mjs 的 sectionBlocks 也会开始模拟一个
+  // 不再成立的行为——测试全绿而线上表现相反。
+  assert.match(src, /if \(this\._persist\) \{\s*totalDuration \+= await canvasEffectData\.promise;\s*\} else \{\s*totalDuration \+= await canvasEffectData\.duration;\s*\}/,
+    "EffectSection.run() 不再对 _persist 走 canvasEffectData.promise —— "
+    + "playPlan 对 persist 计划提前返回的理由需要重新论证");
+  assert.match(src, /const finishPromise = new Promise\(async \(resolve, reject\) => \{\s*this\._resolve = resolve;/,
+    "CanvasEffect.play() 的 finishPromise 结构变了");
+  assert.match(src, /endEffect\(\) \{\s*if \(this\._ended\) return;\s*this\._durationResolve\?\.\(0\);[\s\S]{0,120}?this\._resolve\?\.\(this\.data\);/,
+    "endEffect() 不再是兑现 finishPromise 的地方");
+  assert.equal(occurrences("class PersistentCanvasEffect extends CanvasEffect {"), 1,
+    "PersistentCanvasEffect 不见了：持久特效可能又走回会自然结束的那条路");
+  // PersistentCanvasEffect 覆写掉的 _setEndTimeout 是"持久特效不会自然结束"的关键：
+  // 基类那份会 `this._resolve(this.data); this.endEffect();`，覆写版只暂停媒体。
+  const persistent = src.slice(src.indexOf("class PersistentCanvasEffect extends CanvasEffect {"));
+  const override = persistent.slice(persistent.indexOf("_setEndTimeout() {"));
+  assert.ok(!override.slice(0, override.indexOf("\n  }\n")).includes("_resolve"),
+    "PersistentCanvasEffect._setEndTimeout 开始 resolve 了：持久特效变成会自然结束，"
+    + "playPlan 的提前返回与 tools/fake-sequencer.mjs 的 sectionBlocks 都要重看");
+});
+
 test("假 Sequencer 的方法白名单全部在 Sequencer 源码里找得到定义", async () => {
   const {EFFECT_METHODS, SOUND_METHODS} = await import("../tools/fake-sequencer.mjs");
   const names = new Set([...EFFECT_METHODS, ...SOUND_METHODS]);

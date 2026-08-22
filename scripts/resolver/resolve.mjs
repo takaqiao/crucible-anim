@@ -7,6 +7,7 @@ const CUE_DEFAULTS = {
   attachTo: false, bindScale: false, local: true,
   aim: null, stretchTo: null, offset: {x: 0, y: 0}, gridUnits: false,
   objectScale: 1, scale: null, mirrorY: false, randomizeMirrorY: false, randomRotation: false,
+  angle: 0,
   filter: null, tint: null, opacity: 1,
   fadeIn: 200, fadeOut: 300, fadeInEase: "easeOutQuad", fadeOutEase: "easeInQuad",
   belowTokens: false, zIndex: 50, elevation: null, mask: null,
@@ -117,11 +118,37 @@ function firstMatch(rules, s, ctx, slot) {
  * 写在 `...c` **之前**：默认值由槽装配给（每目标规则 = 当前目标，cast/once = null），
  * 但 once 规则内部自己按目标铺开时（impact.layered）必须能逐条盖掉这个 null。
  */
-function normalize(out, slot, ruleId, at, forTarget = null) {
+function normalize(out, slot, ruleId, at, forTarget, ctx) {
   if (!out) return [];
   const arr = Array.isArray(out) ? out : [out];
   return arr.filter(Boolean)
-    .map(c => ({...CUE_DEFAULTS, forTarget, ...c, slot, rule: ruleId, at: c.at ?? at}));
+    .map(c => freezeRandom({...CUE_DEFAULTS, forTarget, ...c, slot, rule: ruleId, at: c.at ?? at}, ctx));
+}
+
+/**
+ * 把两个「Sequencer 交给每个客户端各自摇」的随机项在出手端摇定，写成具体数值进 FXPlan。
+ *
+ * 这是 DESIGN §5.4「随机选材在出手端固化进 FXPlan」的最后一个缺口：本模组的传输模型是
+ * 每客户端各自本地播同一份 plan，而这两项的求值都发生在**播放端**——
+ *   · randomRotation：CanvasEffect 用自己的 mersenne twister（sequencer.js:15694），种子是
+ *     `creationTimestamp: Date.now()`（sequencer.js:25244），逐机不同；
+ *   · randomizeMirrorY：`_initialize()` 里的裸 `Math.random() < 0.5`（sequencer.js:25045），
+ *     连 twister 都不走。
+ * 结果是同一次命中的血溅在每台机器上朝向/镜像都不同。这不影响玩法，但会让 Task 16 第 20 项
+ * 「两个客户端画面一致」把一个正常差异当成 bug 追。
+ *
+ * 固化后 `randomRotation` / `randomizeMirrorY` 恒为 false 下发给播放层，兵库规则的写法不变。
+ */
+function freezeRandom(cue, ctx) {
+  if (cue.randomRotation) {
+    cue.angle = (cue.angle ?? 0) + Math.round(ctx.rngAux() * 720) - 360;
+    cue.randomRotation = false;
+  }
+  if (cue.randomizeMirrorY) {
+    cue.mirrorY = cue.mirrorY || (ctx.rngAux() < 0.5);
+    cue.randomizeMirrorY = false;
+  }
+  return cue;
 }
 
 /**
@@ -138,7 +165,7 @@ function runBuild(rule, snapshot, ctx, target, built, slot, at, forTarget = null
     ctx.warn(`[${slot}] 规则 "${rule.id}" 的 build() 抛出异常：${err?.message ?? err}`);
     return [];
   }
-  return normalize(out, slot, rule.id, at, forTarget);
+  return normalize(out, slot, rule.id, at, forTarget, ctx);
 }
 
 /**
@@ -158,7 +185,7 @@ const originAnchor = s => ({ref: "origin", tokenId: s?.origin?.tokenId ?? null,
  * @param {{assets: object, armory: object}} deps
  * @returns {FXPlan|null}
  */
-export function resolve(snapshot, {assets, armory}) {
+export function resolve(snapshot, {assets, armory, onWarn}) {
   const ctx = createContext({assets, snapshot, seed: snapshot.seed});
   const cues = [];
   const targets = snapshot.targets ?? [];
@@ -215,11 +242,25 @@ export function resolve(snapshot, {assets, armory}) {
     }
   }
 
-  if (!cues.length) return null;
+  if (!cues.length) return drainWarnings(ctx, onWarn);
   return {
     v: PLAN_VERSION, seed: snapshot.seed, source: snapshot.id, region: snapshot.region ?? null,
     cues, warnings: ctx.warnings
   };
+}
+
+/**
+ * 「一条 cue 都没产出」时把诊断交出去，然后返回 null。
+ *
+ * 成功路径的 warning 挂在 plan.warnings 上、由触发层转发；空计划路径下 plan 是 null，
+ * warning 会随 ctx 一起被丢掉——persist 槽尤其致命：每条 persist 规则只产 1 个 cue，
+ * 唯一那个 cue 被 keepTied 丢掉后 cues 必为空，于是 keepTied 那条「宁可这次没有状态标记
+ * 也要留痕」的诊断**永远不可能被任何人看到**（现象：状态图标有、光效没有、控制台零日志）。
+ * onWarn 只在这条路径上调用，成功路径仍走 plan.warnings，不会重复报。
+ */
+function drainWarnings(ctx, onWarn) {
+  if (onWarn) for (const msg of ctx.warnings) onWarn(msg);
+  return null;
 }
 
 /**
@@ -270,7 +311,7 @@ function keepTied(cue, ctx, ruleId) {
  * @param {{assets: object, armory: object}} deps
  * @returns {FXPlan|null}
  */
-export function resolveEffect(effectSnapshot, {assets, armory}) {
+export function resolveEffect(effectSnapshot, {assets, armory, onWarn}) {
   const target = effectSnapshot?.target;
   if (!target) return null;
   const ctx = createContext({assets, snapshot: effectSnapshot, seed: effectSnapshot.seed});
@@ -282,7 +323,7 @@ export function resolveEffect(effectSnapshot, {assets, armory}) {
   const cues = runBuild(rule, effectSnapshot, ctx, null, NO_PRIOR_SLOTS, "persist", at,
                         target.tokenId)
     .filter(c => keepTied(c, ctx, rule.id));
-  if (!cues.length) return null;
+  if (!cues.length) return drainWarnings(ctx, onWarn);
   return {
     v: PLAN_VERSION, seed: effectSnapshot.seed, source: effectSnapshot.statusId,
     cues, warnings: ctx.warnings

@@ -4255,7 +4255,9 @@ export function installReplayMenu() {
       icon: '<i class="fa-solid fa-repeat"></i>',
       condition: li => {
         const msg = game.messages.get(li.dataset.messageId);
-        return !!msg?.flags?.crucible?.metadata?.[META_KEY];
+        // 与 dispatch.mjs 的播放闸门共用同一个判据（Task 14 已导出 planOf），
+        // 两处各写一遍迟早漂移成「菜单出现但点了没反应」。
+        return !!planOf(msg);
       },
       callback: async li => {
         const msg = game.messages.get(li.dataset.messageId);
@@ -4428,6 +4430,14 @@ game.modules.get("crucible-anim").api.preview({filter: "melee"})   // 只看近�
 | 33 | **tint 真的生效** | decay（腐朽/辐射）必须是酒红／绛紫骷髅环、hidden（隐匿）必须是靛蓝烟弧。若仍是紫色/灰蓝，说明播放端没接 `.tint()` 或把它当加法处理了——**这是本轮唯一测试兜不住的缺口**，测试量的是「按这个 tint 算出来的颜色」，不是「屏幕上真的是这个颜色」 |
 | 34 | dead 不再挂环 | 打死一个敌人，尸体上只有 Foundry 自带的 dead overlay，没有青绿眩晕环 |
 | 35 | 战斗直调的 DoT | 触发 death / illumination / earth / life / soul 符文暴击，落地的腐朽/辐射/酸蚀/治疗/鼓舞必须命中各自分组的颜色，而不是一颗无 tint 的白泡（那是 generic.persist 兜底，说明 GENERATED_EFFECT_STATUS 没生效） |
+
+#### Task 14 修复的三条专项复验
+
+| # | 项 | 期望 |
+| --- | --- | --- |
+| 36 | 撤销后重新确认 | 确认一次看到动画 → 右键 Reverse → 再点 Confirm，动画必须**重播**；开 debug 后控制台应出现两次「已确认，尝试播放」 |
+| 37 | postConfirm 推迟仍然生效 | 带连锁动作的天赋，撤销后重新确认，连锁动作应等到动画播完（验证 `confirm()` 的 `Promise.race` 拿到的是本轮的新 promise） |
+| 38 | 状态上身不再顶死队列 | `一条动画超过 15000ms 仍未播完` 这条 warn 必须彻底消失；观感是「挥剑 → 光环」；AoE 多人上状态时几圈光环同时出现 |
 
 第 23 项的命令：
 

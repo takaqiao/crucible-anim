@@ -595,3 +595,58 @@ test("cue 构造期抛错时，半成品 section 不留在序列里", async () =
       + "（sequencer.js:27890-27894 / 27901-27905），catch 里只打日志不撤销，那条 section 照播");
   }
 });
+
+/**
+ * 出手端固化：`randomRotation` / `randomizeMirrorY` 的求值都发生在**播放端**——前者用
+ * CanvasEffect 自己的 twister（种子是 `creationTimestamp`，逐机不同），后者是
+ * `_initialize()` 里的裸 `Math.random() < 0.5`（sequencer.js:25044-25045）。两者都会让
+ * 同一条 plan 在每台客户端上呈现不同朝向/镜像，与 DESIGN §5.4「全场画面一致」相悖，
+ * 也会让 Task 16 第 20 项把一个正常差异当成 bug 追。
+ *
+ * resolve.mjs 的 freezeRandom() 在出手端把它们摇定成具体的 `angle` / `mirrorY`，
+ * 于是播放层这两个方法一次都不该被调用。
+ */
+test("全量语料：两个随机项已在出手端固化，播放层一次都不摇", async () => {
+  const {records, plans} = await runAll();
+  const rot = records.filter(r => r.has("randomRotation"));
+  const mir = records.filter(r => r.has("randomizeMirrorY"));
+  assert.equal(rot.length, 0,
+    `${rot.length} 条 section 调了 .randomRotation()——那是每客户端各摇一次的，`
+    + "角度必须由 resolve.mjs 的 freezeRandom() 在出手端摇定后写进 cue.angle");
+  assert.equal(mir.length, 0,
+    `${mir.length} 条 section 调了 .randomizeMirrorY()——它连 twister 都不走，是裸 Math.random()`);
+
+  // 正向：固化的角度真的**传给了** Sequencer。少了这一条，把 play.mjs 改回
+  // `if (cue.randomRotation) e.randomRotation()` 照样全绿——freezeRandom 之后
+  // randomRotation 恒为 false，那一行永远不执行，固化好的角度被静默丢掉。
+  const rotated = records.filter(r => r.has("rotate"));
+  assert.ok(rotated.length > 300,
+    `只有 ${rotated.length} 条 section 调了 .rotate()——固化好的角度没有传给 Sequencer`);
+  for (const r of rotated) {
+    const a = r.argOf("rotate")[0];
+    assert.ok(Number.isFinite(a) && a !== 0 && a >= -360 && a <= 360,
+      `.rotate(${a}) 的实参不是一个有效的固化角度`);
+  }
+
+  // 反向：固化真的发生了（否则上面两条会因为「兵库根本没用过随机」而空转通过）。
+  const cues = plans.flatMap(p => p.cues);
+  const angled = cues.filter(c => c.angle);
+  assert.ok(angled.length > 300,
+    `只有 ${angled.length} 条 cue 带固化角度，freezeRandom 可能没跑（兵库里有 390+ 条随机旋转）`);
+  assert.equal(cues.filter(c => c.randomRotation === true).length, 0);
+  assert.equal(cues.filter(c => c.randomizeMirrorY === true).length, 0);
+
+  // 固化后的角度必须落在 Sequencer 那条 `random_float_between(-360, 360, twister)`
+  // 的等价区间里（sequencer.js:16336-16337，它是加在 data.angle 上的）。
+  for (const c of angled) {
+    assert.ok(Number.isFinite(c.angle) && c.angle >= -360 && c.angle <= 360,
+      `规则 "${c.rule}" 的固化角度 ${c.angle} 超出 [-360, 360]`);
+  }
+
+  // 同一份快照重跑必须得到同一个角度：freezeRandom 走的是 seed 派生的 ctx.rngAux，
+  // 不是 Math.random（manifest.test.mjs 的仓库级扫描只管 resolver/armory 的源码文本，
+  // 管不住"确定性"本身）。
+  const again = resolve(corpus()[0], {assets: mk(), armory: ARMORY});
+  const first = resolve(corpus()[0], {assets: mk(), armory: ARMORY});
+  assert.deepEqual(again.cues.map(c => c.angle), first.cues.map(c => c.angle));
+});

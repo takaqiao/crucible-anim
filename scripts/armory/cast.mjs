@@ -113,6 +113,23 @@ export default [
   /**
    * 弓弩起手：拉弓动作 + 弓弦音，两条平行轨。
    *
+   * **这条规则在原生正常工作时到不了**：它的 when 与 configureStrikeVFXEffect 产出非空
+   * 配置的条件（canvas/vfx/strikes.mjs 的
+   * `continue ⇐ !["projectile1", "projectile2"].includes(weapon?.category)`）基本同构，
+   * 弓弩射击归原生独占（README 的「不替换弓弩射击」）。留着它是为了两条降级路径：
+   * (a) 原生 configureStrikeVFXEffect 抛错时（见 trigger/wrap.mjs 文件头那条有意为之的
+   * 例外）整条动作会掉到我们手里；(b) 目标 actor 在当前场景没有 token 时原生 continue
+   * 到底、timeline 为空、返回 null。删掉它等于让这两种情况下的弓箭射击彻底静音；
+   * test/armory-cast.test.mjs 的「弓弩起手带音效轨」用合成快照专门覆盖它，不是死代码。
+   *
+   * 一处**今天就可达**的分歧，改 when 之前先想清楚：我们判的是
+   * `s.strikes.some(w => 是投射物)`（整条动作的武器集合里有没有弓），而 Crucible 判的是
+   * 逐 roll 的 `usage.strikes[roll.data.strike].category`。主手弓、副手近战（mainhand 与
+   * offhand 两个 tag 都 propagate 到 strike，const/action.mjs:850-891，两者各往
+   * usage.strikes push 一件）时用近战那只手出手：Crucible 逐条 continue → 返回 null →
+   * 我们接管 → 一次挥剑配上弓弦音。要根治得把判据改成逐 roll 的武器，那需要快照里带上
+   * 每条 roll 对应的 weapon index，属于 Task 10 的范围。
+   *
    * psfx.ranged-weapons.longbow.v1.30ft 是一个 3.5s 的烘焙音频（拉弓 0.05-0.35s →
    * 放弦 0.62-0.80s → 箭到 0.80-1.05s，其后 2.45s 是静音填充），只有 sound 轨，起手
    * 段暂不挂视觉——ASSET-NOTES 里能当远程蓄力视觉的 jb2a.cast_generic.02 全程只有

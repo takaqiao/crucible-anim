@@ -2,7 +2,7 @@ import {SETTINGS} from "../const.mjs";
 import {getSetting} from "../settings.mjs";
 import {snapshotEffect} from "./snapshot.mjs";
 import {resolveEffect} from "../resolver/resolve.mjs";
-import {animationsEnabled, resolveRefIn, runAnimation} from "./dispatch.mjs";
+import {animationsEnabled, resolveRefIn, runPersistAnimation} from "./dispatch.mjs";
 import {playPlan} from "../player/play.mjs";
 import {debug, warn, error} from "../log.mjs";
 
@@ -25,8 +25,11 @@ export function planForEffect(effect, token, env, deps) {
   try {
     const snapshot = snapshotEffect(effect, token, env);
     if (!snapshot?.statusId) return null;
-    const plan = resolveEffect(snapshot, deps);
-    if (plan) for (const msg of plan.warnings ?? []) warn(`[persist:${snapshot.statusId}] ${msg}`);
+    const tag = msg => warn(`[persist:${snapshot.statusId}] ${msg}`);
+    // onWarn 只在 resolveEffect 产出空计划时被调用（见 resolve.mjs 的 drainWarnings）：
+    // persist 规则每条只产 1 个 cue，被 keepTied 丢掉后计划为空、warning 本会随之蒸发。
+    const plan = resolveEffect(snapshot, {...deps, onWarn: tag});
+    if (plan) for (const msg of plan.warnings ?? []) tag(msg);
     return plan;
   } catch (err) {
     error("为状态效果构造动画计划失败，已跳过", err);
@@ -67,16 +70,28 @@ export function installEffectTriggers(deps) {
         const plan = planForEffect(effect, token, env(), deps);
         if (!plan) continue;
         debug(`状态 ${plan.source} 上身`, plan);
-        // 复用 dispatch.mjs 的共享队列：动作动画与状态上身动画最终都在同一块画布上
-        // 叠 Sequencer 序列，只有共用同一条队列才能真正防止两者互相重叠（AoE 一次
-        // 命中数人、每人各上一个状态的场景尤其容易撞在一起）。不 await——多个目标各自
-        // 排队即可，串行化交给队列自己处理。
+        // 走 persist 专用通道而不是共享串行队列：持久光环是稳态标记，既不该占住队列，
+        // 也不该彼此排队（AoE 一次让 5 个人上毒，5 圈光环必须同时出现）。让路与顺序倒置
+        // 的处理全在 runPersistAnimation 里，理由与源码依据见那里的注释。不 await——
+        // 多个目标各自让路即可。
         // volume 走用户设置而不是硬编码 1：目前 persist 兵库里没有一条 sound cue，
         // 这两种写法暂时观察不出差异，但 play.mjs 对 volume 的处理不区分槽位来源，
         // 硬编码在这里等于给"状态特效的音量不受设置项控制"埋了一个将来才会兑现的坑。
-        runAnimation(`状态 ${plan.source}@${token.id}`, () => playPlan(plan, {
-          volume: getSetting(SETTINGS.VOLUME), shake: false, resolveRef: resolveRefIn(token.scene)
-        }));
+        runPersistAnimation(`状态 ${plan.source}@${token.id}`, () => {
+          // 让路期间状态可能已经没了（GM 撤销、瞬时过期）。这时候再播就是一枚**永远
+          // 清不掉**的光：CanvasEffect 注册 tie 钩子时是 `const tiedDocument =
+          // fromUuidSync(uuid); if (tiedDocument) { …addHook… }`（sequencer.js:16932-
+          // 16943），解析不到就不注册；而 deleteActiveEffect 里按 origin 收尾的那条兜底
+          // 早在我们播出之前就跑过了，扫不到还没存在的特效。判据用 fromUuidSync 而不是
+          // `effect.parent.effects.has(...)`，是为了与 Sequencer 用的解析路径逐字一致。
+          if (!fromUuidSync(effect.uuid)) {
+            debug(`状态 ${plan.source} 在让路期间已被移除，放弃播放（否则光效清不掉）`);
+            return undefined;
+          }
+          return playPlan(plan, {
+            volume: getSetting(SETTINGS.VOLUME), shake: false, resolveRef: resolveRefIn(token.scene)
+          });
+        });
       }
     } catch (err) {
       error("状态特效触发失败，已跳过", err);
@@ -91,8 +106,24 @@ export function installEffectTriggers(deps) {
     // 第二个参数 push 必须显式给 false：默认 true 会走 Sequencer 的跨客户端通路
     // （sequencer.js:11626-11639），违反 DESIGN §5.4 的契约 3
     // （test/armory-persist.test.mjs 的仓库级扫描会在这一行落地时抓住）。
+    //
+    // endEffects 是 `static async`（sequencer.js:11626）：_validateFilters 的
+    // custom_error（11748-11761）与 _endManyEffects 的失败**全部**发生在异步函数体内，
+    // 同步 try/catch 一条都接不住，只会在每个客户端的控制台里留下一条既没有本模组前缀、
+    // 也没有 effect uuid 的 unhandled rejection。必须用 .catch()。
+    // 外面套 Promise.resolve().then(...) 而不是直接 .catch()，是为了让「Sequencer 全局
+    // 本身不存在」抛的那个**同步** TypeError 也落进同一条 catch——两种失败一个出口。
+    //
+    // 不传 sceneId：评审建议的「显式传 token 所在场景的 sceneId 以覆盖跨场景」是空操作。
+    // _filterEffects 根本不看 sceneId（只按 effects/name/source/target/origin 五项过滤，
+    // 11694-11703），_validateFilters 写进去的那个 sceneId 只喂给 _validateObject；
+    // 真正的范围限制来自 SequencerEffectManager.effects ≡ SequenceManager.VisibleEffects
+    // （11538-11540）。而本模组的 persist cue 是 e.temporary(true)（worldPersist:false），
+    // _playEffect 的 `!data.temporary` 守卫（11819）让它根本不落 flag——别的场景上没有
+    // 可清理的残留（那是「切场景往返光环消失」的另一个问题，不归这条兜底管）。
     if (!effect?.uuid) return;
-    try { Sequencer.EffectManager.endEffects({origin: effect.uuid}, false); }
-    catch (err) { warn(`清理状态 ${effect.uuid} 的持续特效失败`, err); }
+    Promise.resolve()
+      .then(() => Sequencer.EffectManager.endEffects({origin: effect.uuid}, false))
+      .catch(err => warn(`清理状态 ${effect.uuid} 的持续特效失败`, err));
   });
 }

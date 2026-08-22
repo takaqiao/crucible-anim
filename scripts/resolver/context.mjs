@@ -16,7 +16,16 @@ function mulberry32(seed) {
  * @param {{assets: object, snapshot: object, seed: number}} opts
  */
 export function createContext({assets, snapshot, seed}) {
-  const rng = mulberry32(seed ?? snapshot?.seed ?? 0);
+  const baseSeed = seed ?? snapshot?.seed ?? 0;
+  const rng = mulberry32(baseSeed);
+  /**
+   * 第二条独立随机流，专供 resolve.mjs 的 freezeRandom() 固化「本该由播放端摇」的随机项。
+   * 必须与 rng 分开：共用一条会让每条带 randomRotation 的 cue 挪动后续 pick() 的取数
+   * 位置，同一个动作的选材结果凭空改变（确定性仍在，但所有既有计划的素材选择都会变）。
+   * 异或 0x9E3779B9（黄金比例常数，mulberry32 作者建议的 stream 分离手法）后种子仍是
+   * snapshot.seed 的纯函数，全场一致与可复现都不受影响。
+   */
+  const rngAux = mulberry32((baseSeed ^ 0x9E3779B9) >>> 0);
   const warnings = [];
 
   const runeColor = () => (snapshot?.spell ? RUNE_COLOR[snapshot.spell.rune] ?? null : null);
@@ -64,7 +73,7 @@ export function createContext({assets, snapshot, seed}) {
   };
 
   return {
-    rng,
+    rng, rngAux,
     pickOne: arr => arr[Math.floor(rng() * arr.length)],
     pick, sound, runeColor, damageColor, geom,
     warn: msg => warnings.push(msg),

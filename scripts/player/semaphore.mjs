@@ -29,9 +29,11 @@ export const TIMED_OUT = Symbol("crucible-anim:semaphore-timeout");
 export function createSemaphore({timeoutMs = 15000} = {}) {
   let tail = Promise.resolve();
   let pending = 0;
+  let arrivals = [];                       // whenBusy() 的等待者
 
   function run(fn) {
     pending++;
+    for (const notify of arrivals.splice(0)) notify();
     const slot = tail.then(() => {
       // 单条任务最多占用 timeoutMs，超时后放行队列（任务本身继续跑完）
       let timer = null;
@@ -53,5 +55,52 @@ export function createSemaphore({timeoutMs = 15000} = {}) {
     return slot.finally(() => { pending--; });
   }
 
-  return {run, get pending() { return pending; }};
+  /**
+   * 等**此刻已经排在队里**的任务全部走完，但自己不占队列——不 run、不递增 pending、
+   * 不阻塞后来者。给「不属于动作时间轴、却应当排在动作画面之后」的播放用（persist）。
+   *
+   * 只等调用那一刻的 tail：之后新入队的任务不在等待范围内，否则一条持续被喂任务的队列
+   * 会让等待者永远排不上。超时同样只是「不再等」，兑现 false 供调用方留痕。
+   *
+   * @param {{timeoutMs?: number}} [opts]
+   * @returns {Promise<boolean>}  true = 队列已排空，false = 等到超时
+   */
+  function whenIdle({timeoutMs: waitMs = timeoutMs} = {}) {
+    const drained = tail.then(() => true, () => true);
+    let timer = null;
+    const capped = new Promise(resolve => { timer = setTimeout(() => resolve(false), waitMs); });
+    // clearTimeout 与 run() 里同一个理由：Node 下不清会吊住事件循环整整 waitMs。
+    return Promise.race([drained, capped]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * 等到队列里**出现**任务为止（或宽限期用尽）。
+   *
+   * 唯一的用途是修 Crucible 的顺序倒置：状态特效的触发（createActiveEffect）比造成它的
+   * 那个动作的触发（updateChatMessage → confirmed 翻真）**早**一个数据库往返，直接播会
+   * 让光环抢在挥剑前面。先 whenBusy 等那条动作动画入队、再 whenIdle 等它播完，就把
+   * 「等一个还没发生的事件」变成了有界的两段等待。
+   *
+   * @param {{timeoutMs?: number}} [opts]
+   * @returns {Promise<boolean>}  true = 有任务入队，false = 宽限期内无人入队
+   */
+  function whenBusy({timeoutMs: waitMs = timeoutMs} = {}) {
+    if (pending > 0) return Promise.resolve(true);
+
+    let timer = null;
+    let notify = null;
+    const waited = new Promise(resolve => {
+      notify = () => resolve(true);
+      arrivals.push(notify);
+      timer = setTimeout(() => resolve(false), waitMs);
+    });
+    // 超时的等待者必须从 arrivals 里摘掉，否则一场战斗下来数组只增不减。
+    return waited.finally(() => {
+      clearTimeout(timer);
+      const i = arrivals.indexOf(notify);
+      if (i > -1) arrivals.splice(i, 1);
+    });
+  }
+
+  return {run, whenIdle, whenBusy, get pending() { return pending; }};
 }

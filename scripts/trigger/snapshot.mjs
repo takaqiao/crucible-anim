@@ -64,7 +64,23 @@ export const GENERATED_EFFECT_STATUS = {
  * 优先取 `statuses[0]`：那是效果**实际**赋予的状态，即使与它的来源状态 id 不同也一样
  * ——entropy 的 generator 产出 `statuses:["frightened"]`，取到 frightened 才是对的，
  * 强行还原成 entropy 反而会让画面与角色身上真正挂着的状态对不上。
- * statuses 为空时才退回 _id，并过一遍 GENERATED_EFFECT_STATUS。
+ * statuses 为空时过一遍 GENERATED_EFFECT_STATUS（战斗直调落地的 5 个 DoT 效果不带
+ * statuses，只剩 generator 写死的 16 位补零 _id）；表外的 _id **不是状态**，返回 null。
+ *
+ * 这里绝不能原样放行裸 _id：真实 ActiveEffect 文档的 id 永远非空，放行等于让
+ * planForEffect 的 `if (!snapshot?.statusId) return null` 这道闸对所有非状态效果失效，
+ * 而 armory/persist.mjs 的 generic.persist 是 `when: () => true`——每一个纯记账/纯增益的
+ * ActiveEffect 都会挂上一圈 jb2a inflow 白环。Crucible 里这类效果是常态不是边缘：
+ *   hooks/action.mjs:112     Amplify Affix 标记（getEffectId("Amplify Affix")，无 statuses）
+ *   models/action.mjs:1916   所有 gesture 的通用法术效果（regionEffectRequired）
+ *   hooks/spellcraft.mjs:45  aspect 抗性增益 / :149 senseCreature
+ *   hooks/talent.mjs:376     Dominance 标记
+ * 外加 GM 手搓效果与其它模组建的效果。
+ *
+ * 「将来 Crucible 新增状态就没人兜底了」这个担心不成立：新状态一定带 statuses（走
+ * 生成器或 core 的 _fromStatusEffect），仍会命中 generic.persist；而新增的**无 statuses**
+ * DoT generator 会让 test/source-tables.test.mjs 的
+ * 「GENERATED_EFFECT_STATUS 与 const/effects.mjs 的 generator 产出一致」先变红、强制补表。
  *
  * @param {ActiveEffect|{statuses?: string[]|Set<string>, _id?: string, id?: string}} effect
  * @returns {string|null}
@@ -74,19 +90,65 @@ export function statusIdOf(effect) {
   const first = [...(effect.statuses ?? [])][0];
   if (first) return first;
   const id = effect.id ?? effect._id ?? null;
-  return id ? (GENERATED_EFFECT_STATUS[id] ?? id) : null;
+  return id ? (GENERATED_EFFECT_STATUS[id] ?? null) : null;
 }
 
-/** 从一个 Token 对象取出快照所需的几何。 */
+/**
+ * 从一个 Token 取出快照所需的几何。**两种形状都要吃**，因为两条调用路径交出来的
+ * 东西根本不是同一类对象：
+ *
+ *   · 动作路径（trigger/wrap.mjs → snapshotAction）拿到的是 **TokenDocument**。
+ *     `CrucibleAction#token` 与 `action.targets.get(actor).token` 都是文档而不是
+ *     placeable：`CrucibleAction.#getTargetFromToken`（crucible/module/models/
+ *     action.mjs:1541-1545）显式 `if (token instanceof Token) token = token.document`
+ *     之后才写进 targets；action.mjs:1719 的注释也把这件事写死了——「`token` is a
+ *     placeable from game.user.targets while this.token is a TokenDocument」。
+ *   · 状态路径（trigger/effects.mjs → snapshotEffect）拿到的是 **Token placeable**：
+ *     `Actor#getActiveTokens(linked=false, document=false)`（foundry client/documents/
+ *     actor.mjs:286-296）在 document 为假时 push 的是 `t.object`。
+ *
+ * TokenDocument 上**没有** `center` 取值器，也没有 `.document`（全 foundry 源码
+ * `get center()` 只出现在 placeable / 形状类：canvas/placeables/{region,drawing}.mjs、
+ * placeables/mixins/shapes.mjs、containers/elements/door-control.mjs、data/shapes.mjs；
+ * `get document()` 只出现在 6 个 Application / 控件类上，没有一个是 Document）。
+ * 于是 `token.document ?? token` 是一句能同时归一化两种形状的安全写法：placeable 归到
+ * 它的 TokenDocument，TokenDocument 原样返回自身。归一化之后**只读文档 API**，
+ * 与 Crucible 自己的两个 VFX 配置器同源（canvas/vfx/landing.mjs:20-24 的
+ * `token.getCenterPoint()` / `token.width`，canvas/vfx/helpers.mjs:41-44 的 tokenCenter）。
+ *
+ * 中心点与像素尺寸走文档自己的方法而不是 `x + width*gridSize/2` 手算：
+ *   · `BaseToken#getCenterPoint(data={})`（foundry common/documents/token.mjs:506-530）
+ *     返回 `{x, y, elevation}`，且是唯一处理六边形 token 形状的地方；placeable 的
+ *     `get center()`（client/canvas/placeables/token.mjs:448-451）本身就是转调它。
+ *   · `BaseToken#getSize(data={})`（common/documents/token.mjs:481-494）返回**像素**
+ *     宽高，六边形网格下会把宽（或高）折算成 `0.75*floor(n) + 0.5*(n%1) + 0.25` 再
+ *     乘 `grid.sizeX/sizeY`；placeable 的 `get w()/get h()`（client/canvas/placeables/
+ *     token.mjs:431-433 / 441-443）同样只是转调它。
+ * 两者都取不到（纯数据 mock、或将来 foundry 改名）时才退回 `gridSize` 手算，
+ * 与 helpers.mjs:41-44 同式，保证快照永远出得来。
+ *
+ * @param {TokenDocument|Token|null} token
+ * @param {number} gridSize
+ */
 function tokenGeom(token, gridSize) {
-  const w = (token.document?.width ?? 1) * gridSize;
-  const h = (token.document?.height ?? 1) * gridSize;
+  const doc = token?.document ?? token ?? null;   // placeable → TokenDocument；文档原样
+  const width = doc?.width ?? 1;                  // 格数（schema 字段），不是像素
+  const height = doc?.height ?? 1;
+
+  const size = typeof doc?.getSize === "function" ? doc.getSize() : null;
+  const w = Number.isFinite(size?.width) ? size.width : width * gridSize;
+  const h = Number.isFinite(size?.height) ? size.height : height * gridSize;
+
+  const center = typeof doc?.getCenterPoint === "function" ? doc.getCenterPoint() : null;
+  const x = Number.isFinite(center?.x) ? center.x : (doc?.x ?? 0) + w / 2;
+  const y = Number.isFinite(center?.y) ? center.y : (doc?.y ?? 0) + h / 2;
+
   return {
-    tokenId: token.id ?? null,
-    uuid: token.document?.uuid ?? token.uuid ?? null,
-    x: token.center?.x ?? 0, y: token.center?.y ?? 0,
-    elevation: token.document?.elevation ?? 0,
-    width: token.document?.width ?? 1, height: token.document?.height ?? 1,
+    tokenId: doc?.id ?? null,
+    uuid: doc?.uuid ?? null,
+    x, y,
+    elevation: doc?.elevation ?? 0,
+    width, height,
     w, h, radiusPx: Math.max(w, h) / 2
   };
 }

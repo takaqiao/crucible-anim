@@ -22,7 +22,7 @@ export const EFFECT_METHODS = Object.freeze([
   "playIf", "file", "opacity", "fadeIn", "fadeOut", "zIndex", "delay", "startTime", "endTime",
   "timeRange", "playbackRate", "belowTokens", "locally", "attachTo", "atLocation", "rotateTowards",
   "missed", "stretchTo", "scale", "scaleToObject", "spriteOffset", "mirrorY", "randomizeMirrorY",
-  "randomRotation", "elevation", "duration", "tint", "filter", "mask", "persist", "temporary",
+  "randomRotation", "rotate", "elevation", "duration", "tint", "filter", "mask", "persist", "temporary",
   "tieToDocuments", "origin", "extraEndDuration", "waitUntilFinished", "copySprite", "loopProperty",
   "name", "anchor", "center", "size", "spriteScale", "moveTowards"
 ]);
@@ -60,16 +60,56 @@ function makeSection(kind, methods, seq) {
   return api;
 }
 
+/**
+ * 这条 section 会不会让 `Sequence.play()` 的 promise 永不 settle？
+ *
+ * 判据逐字对应 Sequencer 4.2.3 的三段源码：
+ *  · `EffectSection.run()`（sequencer.js:25008-25013）对 `this._persist` 走
+ *    `totalDuration += await canvasEffectData.promise`，非持久走 `await ...duration`；
+ *  · 那个 promise 是 `CanvasEffect.play()` 的 finishPromise（15463-15476），只有
+ *    `endEffect()`（15479-15485）里的 `this._resolve?.(this.data)` 能兑现它，而
+ *    `PersistentCanvasEffect`（17784）把 `_setEndTimeout()`（17801-17808）整个换成了
+ *    「只暂停媒体、不 resolve」——持久特效不存在自然结束；
+ *  · `_execute()`（21506-21540）在 `_shouldPlay()` 为假时直接 SKIPPED 返回
+ *    （21507-21510），所以 `playIf(false)` 的 persist cue 不会挂住。
+ */
+function sectionBlocks(rec) {
+  if (rec.kind !== "effect") return false;
+  if (!rec.has("persist") || rec.argOf("persist")?.[0] === false) return false;
+  return !rec.has("playIf") || rec.argOf("playIf")?.[0] !== false;
+}
+
 export class FakeSequence {
   constructor(options) {
     this.options = options;
     this.sections = [];              // 与真 Sequence 一样是普通数组（sequencer.js:27726）
     this.played = null;
     this.faultOn = null;             // 注入构造期异常的方法名，用于验证 catch 是否撤下 section
+    this.holdPlay = false;           // 强制 play() 悬着，用来验证「普通计划仍然被等到底」
+    this.settled = false;            // play() 的 promise 兑现了没有
+    this._settle = null;
   }
   effect() { const s = makeSection("effect", EFFECT_METHODS, this); this.sections.push(s); return s; }
   sound() { const s = makeSection("sound", SOUND_METHODS, this); this.sections.push(s); return s; }
-  async play(opts) { this.played = opts; return this; }
+  /**
+   * 与真 `Sequence.play()` 同构地兑现：它末尾是 `Promise.allSettled(promises)`
+   * （sequencer.js:27782），promises 里含**每一条** section 的 `_execute()`，所以只要
+   * 序列里有一条持久 section，整个 play() 就悬着——与它排第几无关。
+   *
+   * 写成返回 Promise 的普通函数而不是 async：async 函数没法在返回之后再兑现。
+   */
+  play(opts) {
+    this.played = opts;
+    if (!this.holdPlay && !this.sections.some(s => sectionBlocks(s.__rec))) {
+      this.settled = true;
+      return Promise.resolve(this);
+    }
+    return new Promise(resolve => {
+      this._settle = () => { this.settled = true; resolve(this); };
+    });
+  }
+  /** 兑现悬着的那条 play()：对持久序列相当于状态被移除（CanvasEffect.endEffect()）。 */
+  finish() { this._settle?.(); this._settle = null; }
   /** 留在序列里、真的会被 Sequencer 播出去的 section 的记录。 */
   get records() { return this.sections.map(s => s.__rec); }
 }
@@ -86,18 +126,27 @@ export const FakePIXI = {
  * game.settings 那处被 try/catch 吞掉，const.mjs 是纯常量——所以两个桩就够跑真实的
  * playPlan()。
  *
- * @param {{faultOn?: string|null}} [opts] faultOn = 在这个方法上注入构造期异常
+ * @param {{faultOn?: string|null, holdPlay?: boolean}} [opts]
+ *   faultOn  = 在这个方法上注入构造期异常
+ *   holdPlay = 让**每一条** play() 都悬着，直到 finishAll()。默认只有带 persist 的
+ *              序列会悬（那是真 Sequencer 的行为）；打开它是为了反向钉住「不带 persist
+ *              的计划 playPlan() 仍然等到序列播完」——否则一个「永远不 await」的实现
+ *              照样全绿。
  */
-export function installFakeSequencer({faultOn = null} = {}) {
+export function installFakeSequencer({faultOn = null, holdPlay = false} = {}) {
   const made = [];
   const prevSequence = globalThis.Sequence, prevPIXI = globalThis.PIXI;
   globalThis.Sequence = class extends FakeSequence {
-    constructor(o) { super(o); this.faultOn = faultOn; made.push(this); }
+    constructor(o) { super(o); this.faultOn = faultOn; this.holdPlay = holdPlay; made.push(this); }
   };
   globalThis.PIXI = FakePIXI;
   return {
     sequences: made,
     get records() { return made.flatMap(s => s.records); },
+    /** 还悬着没兑现的 play()——「playPlan 永不返回」这件事的直接观测点。 */
+    get unsettled() { return made.filter(s => !s.settled); },
+    /** 兑现所有悬着的序列（相当于状态被移除 / Sequencer.EffectManager.endEffects()）。 */
+    finishAll() { for (const s of made) s.finish(); },
     restore() { globalThis.Sequence = prevSequence; globalThis.PIXI = prevPIXI; }
   };
 }
