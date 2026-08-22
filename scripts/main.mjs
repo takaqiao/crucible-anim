@@ -24,7 +24,7 @@ Hooks.once("init", () => {
   log("设置项已注册");
 });
 
-Hooks.once("ready", () => {
+Hooks.once("ready", async () => {
   const reason = selfCheck();
   if (reason) {
     state.reason = reason;
@@ -40,4 +40,16 @@ Hooks.once("ready", () => {
   const assetModules = ["jb2a_patreon", "eskie-effects", "blfx-assets-pack01", "psfx-patreon"];
   const missing = assetModules.filter(id => !game.modules.get(id)?.active);
   if (missing.length) warn(`以下素材模组未激活，相关动画将降级：${missing.join(", ")}`);
+
+  const {createAssets, runtimeBackend} = await import("./resolver/assets.mjs");
+  const {ARMORY} = await import("./armory/index.mjs");
+  const {installWrap} = await import("./trigger/wrap.mjs");
+  const {installDispatch} = await import("./trigger/dispatch.mjs");
+  const {installEffectTriggers} = await import("./trigger/effects.mjs");
+
+  const deps = {assets: createAssets(runtimeBackend()), armory: ARMORY};
+  installWrap(deps);
+  installDispatch();
+  installEffectTriggers(deps);
+  log("触发层已挂载");
 });
