@@ -1,0 +1,490 @@
+[
+ {
+  "category": "近战武器音效（library/weapon-swooshes + library/weapon-attacks，共 19 个 DB 组 / 76 个 .ogg 全量分析）",
+  "total_scanned": 76,
+  "recommended": [
+   {
+    "db_path": "psfx.weapon-swooshes.light.v1.group05",
+    "sound_type": "whoosh",
+    "duration_ms": 3010,
+    "onset_ms": 170,
+    "peak_ms": 520,
+    "tail_silence_ms": 2380,
+    "loopable": false,
+    "spectrum": "两团宽频风噪。回摆团 0.165-0.21s（弱，比主挥低约 25dB，频谱上是一条暗淡的竖带、上探到 12kHz），主挥团 0.45-0.60s 是一条明亮竖带，DC 到 16kHz 全通、亮核集中在 1.7kHz 以下。主挥的 -12dB 宽度只有 45-65ms，85% 能量滚降点 470-580Hz。主挥结束后到文件末尾只剩 -50dB 的 ogg 底噪，频谱全黑——没有任何第二次瞬态，即素材内部不含命中音。",
+    "suggested_use": "轻档挥砍（cast 槽）：unarmed / light1 / simple1 / shieldLight / shieldHeavy（基础伤害 ≤4 的类别）。同一条也直接当 miss 用（落空只播它、不播 impact）。",
+    "notes": "【最大的坑：group 不是音色分支，是同一套录音的不同前置静音】light 的 group01-group05 经互相关验证是完全相同的 4 条录音（corr 0.997-0.999），只是各自平移了 -132ms 到 +325ms；group06 只是其中 take00 与 take03 的又一次平移（corr 0.999）。所以整个 light 家族只有 4 条真实素材，随机跨 group 取样不会增加变化，只会让挥砍点乱漂。选 group05 的唯一理由是它 4 个变体的峰值最集中（0.490/0.513/0.511/0.559s，离散仅 69ms）；group01 同样 4 条却散在 0.362-0.622s（离散 260ms），随机取样时挥砍点会漂 1/4 秒。\n【时间对齐】峰值在 ~0.52s，与挥刀帧同帧触发会晚半拍：cast 槽需提前 ~520ms 触发，或 .startTime(430) 裁掉前置静音+回摆（代价是丢掉回摆这个很好的预备提示音）。\n【响度不可校准】4 个变体的整体响度是 -25.8 / -29.3 / -30.8 / -22.3 LUFS，跨度 8.5 LU；Sequencer 的 .volume() 源码里写死 Math.max(0,Math.min(1,v))，只能压不能提，所以随机取样时这 8.5dB 的忽大忽小没法在规则层修掉。要恒定响度必须钉死索引：用 psfx.weapon-swooshes.light.v1.group05.0（-25.8 LUFS，Sequencer 支持 flatten 出来的 .N 数组索引路径，_flatten 把数组摊成 group05.0/.1/.2/.3）。\n【不含命中音】必须另叠 impact 层（psfx.impacts.slashing.v1 / bludgeoning.v1），否则打中了没声。\n【空尾】有效声 0.60s 结束，后面 2.4 秒是 -50dB 底噪，waitUntilFinished 会白等 2.4 秒，建议 .endTime(700)。\n【别加 fadeIn】起振点 0.165s 处的回摆是硬起的，fadeIn 会把它抹平。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.light.v1.group05.2",
+    "sound_type": "whoosh",
+    "duration_ms": 3003,
+    "onset_ms": 165,
+    "peak_ms": 511,
+    "tail_silence_ms": 2409,
+    "loopable": false,
+    "spectrum": "与 group05 同族的第 3 条 take，最暗最弱的一条：主挥 0.454-0.594s，滚降点 471Hz（家族最低），低频占比 68.5%/中频 23.5%，整体 -30.8 LUFS / TP -9.6dBFS。",
+    "suggested_use": "unarmed（徒手）与 talisman1 / talisman2（法器，基础伤害 2-3）——需要「有挥动感但不能像挥刀」的最轻档。",
+    "notes": "钉死索引的用法，好处是响度恒定（-30.8 LUFS）、不会随机蹦出 +8dB 的那条。坑：它本身就是全组最弱的，如果场景里同时有 fire 挥砍（-12.6 LUFS）这条会被压得完全听不见——同一场战斗里 fire/lightning/light 三家混用必须先做响度分档（见 fire 与 lightning 两条的备注）。徒手攻击建议再 .volume(0.7)，因为徒手在频谱上不该有 470Hz 以下的刀风体量。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.light.v1.group06",
+    "sound_type": "miss",
+    "duration_ms": 3007,
+    "onset_ms": 444,
+    "peak_ms": 722,
+    "tail_silence_ms": 2155,
+    "loopable": false,
+    "spectrum": "两个文件的峰值分别在 0.724s 与 0.721s（相差 3ms），是全库时间一致性最好的一组。内容与 group05 的 take00 / take03 完全相同（corr 0.999），只是整体后移了约 100ms 与 240ms。",
+    "suggested_use": "落空（miss 槽）。当规则层需要「不管随机到哪条，挥空点都落在同一毫秒」时用这一组。",
+    "notes": "【订正已有记录】docs/ASSET-NOTES.md 第 145 行把 light group06 写成「落空音（纯风声），很干净的 miss 素材」，并暗示它与 group01 是不同素材——实测不成立：group06-00 与 group01-00 是同一段音频（互相关 0.999、整体响度同为 -25.8 LUFS、真峰同为 -5.2dBFS，仅平移 102ms），group06-01 = group01-03。整个 light 家族全都是「纯风声、不含命中瞬态」，group06 并不特殊，它只是变体最少的那一组。第 145 行「这一组只有 2 个文件、随机重复率偏高」的结论仍然成立，但原因不是素材稀缺，而是它本来就是别组的子集。\n【真正的价值】两条峰值只差 3ms，是唯一可以「随机取样但挥空点不漂」的组；代价是只有 2 条、且两条的响度差 4.4 LU（-25.8 vs -21.4 LUFS）。\n峰值 0.72s，需提前 720ms 触发；有效声 0.86s 结束，endTime 建议 950。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.heavy.v1.group05",
+    "sound_type": "whoosh",
+    "duration_ms": 3013,
+    "onset_ms": 240,
+    "peak_ms": 556,
+    "tail_silence_ms": 2320,
+    "loopable": false,
+    "spectrum": "结构与 light 相同（回摆团 + 主挥团），但主挥团在频谱上明显更宽更暗：-12dB 宽度 90-125ms（light 只有 45-65ms，正好两倍），85% 能量滚降点 164-349Hz（light 是 471-580Hz，低了约一个八度），2kHz 以上的亮部比 light 暗 3-6dB。低频（<250Hz）几乎顶在 0dB 相对电平。听感/看图都成立：heavy 是「更长、更闷、更有体量」的同一把风。",
+    "suggested_use": "重档挥砍（cast 槽）：heavy2 / balanced2（基础伤害 7-8）；heavy1 / simple2 也可用，但见下方中档方案。",
+    "notes": "【与 light 同样的 group 陷阱】heavy 的 group01-05 也是同 4 条录音的平移版（corr 0.976-0.997），group06 = take02 与 take03 的平移版。选 group05 同样是因为它峰值最集中（0.523/0.538/0.560/0.603s，离散 80ms），而 group01 散在 0.391-0.628s（离散 237ms）。\n【组内响度跨度更大】-26.8 / -33.4 / -23.2 / -24.6 LUFS，跨度 10.2 LU，随机取样时最弱那条（v01）会明显「哑火」。要稳就钉死 psfx.weapon-swooshes.heavy.v1.group05.2（-23.2 LUFS，滚降 234Hz，最有分量的一条）。\n【低频叠加】heavy 的 <250Hz 能量比 light 高得多，与 psfx.impacts.bludgeoning.v1（同样低频量很大）同帧叠加会把低频堆爆，impact 那一路建议压 -3dB 或错开 ≥120ms。\n峰值 ~0.556s → cast 需提前约 556ms；有效声 0.70s 结束，endTime 建议 800；同样不含任何命中瞬态。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.heavy.v1.group05.1",
+    "sound_type": "whoosh",
+    "duration_ms": 3014,
+    "onset_ms": 170,
+    "peak_ms": 538,
+    "tail_silence_ms": 2321,
+    "loopable": false,
+    "spectrum": "heavy 家族里唯一「偏亮」的一条：主挥 -12dB 宽度 125ms（有重量），但滚降点 349Hz、2-8kHz 段比其它三条 heavy 高 3-8dB（有刃感），整体 -33.4 LUFS / TP -16.1dBFS（家族最弱）。频谱上它介于 light 的窄亮竖带与 heavy 的宽暗竖带之间。",
+    "suggested_use": "中档挥砍（cast 槽）：balanced1 / heavy1 / simple2（基础伤害 5-6）。这是本次侦察里唯一能撑起「中档」的素材。",
+    "notes": "【为什么必须靠它凑中档】psfx 的物理挥砍只有 light / heavy 两档，没有 medium；而 Sequencer 的 SoundSection 没有 playbackRate（typings 里 playbackRate 只挂在 EffectSection 上，SoundSection 只继承 CoreMethods/Section/HasFiles/HasAudio/HasElevation/HasLevels/HasName/HasTime/HasMovement/HasLocation），所以「把 light 降速当中档」这条路走不通。剩下的唯一办法就是在 heavy 内部挑最亮最轻的这一条。\n【最大的坑：它比同伴弱 10dB】-33.4 LUFS 是 heavy 组最弱、也是全部物理挥砍里最弱的。因为 .volume() 被钳在 [0,1] 不能提升，要让它和 light 档（-25.8）听起来同重，只能把 light 那一路压到 .volume(0.24)——也就是说三档的音量关系必须以它为基准反过来定，否则中档武器听着比匕首还轻。\n【必须钉索引】它只有作为 group05.1 被钉死才有意义；一旦写成 group05 让 Sequencer 随机，4 次里有 3 次会抽到真正的重档音色，中档就名存实亡。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.heavy.v1.group06",
+    "sound_type": "miss",
+    "duration_ms": 3008,
+    "onset_ms": 445,
+    "peak_ms": 759,
+    "tail_silence_ms": 2098,
+    "loopable": false,
+    "spectrum": "两条的峰值 0.760s 与 0.758s（相差 2ms），响度 -24.2 / -24.6 LUFS（相差 0.4 LU）——是全部 19 个组里时间与响度双双最一致的一组。内容 = heavy take02 与 take03 的平移版。",
+    "suggested_use": "重武器落空（miss 槽），或任何需要「随机但完全可预测」的重档挥空。",
+    "notes": "这是 heavy 家族里唯一不需要钉索引就能保证时间和响度都稳的组，代价是只有 2 条、落空频繁的战斗会听腻。峰值 0.759s → 需提前 759ms 触发（这是全部推荐素材里前置最长的，规则层如果用固定 delay 表，这条要单独开一行）。有效声 0.91s 结束，endTime 建议 1000。注意别把它和 light.v1.group06（峰值 0.722s）当成同一档来共用 delay，两者差 37ms 虽小，但如果 cast 与 impact 是硬编码间隔就会露馅。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.cold.v1.group01",
+    "sound_type": "whoosh",
+    "duration_ms": 2010,
+    "onset_ms": 254,
+    "peak_ms": 690,
+    "tail_silence_ms": 620,
+    "loopable": false,
+    "spectrum": "三段式：0-0.42s 数字静音 → 0.45-0.72s 一团集中在 1.2-2.5kHz 的低中频冰霜涌起（频谱上是个椭圆亮斑，不是宽频竖带，所以听感是「冻结」不是「刃风」）→ 0.72-1.60s 一长串明亮的垂直细纹（冰晶碎裂/叮当），一路铺到 16kHz。4 个变体的高频占比高度一致（vhi 43.8-46.8%）。",
+    "suggested_use": "frost 符文附魔的近战挥砍（cast 槽）。也可直接当 frost 符文缺失的 whoosh 用。",
+    "notes": "【它不是挥砍，是挥砍+冰晶余韵】主体只有 0.27 秒，后面 0.9 秒全是碎冰叮当声。如果 cast 槽还要接 impact，这串叮当会和命中音重叠成「哗啦一片」——建议要么 .endTime(750) 只取涌起段，要么干脆用它同时覆盖 cast+impact 两个槽（把 impact 留空）。\n【真峰逼近削顶】4 条的 TP 是 -0.2 到 -0.8 dBFS，已经贴着 0dB；再和别的音效叠加时总线容易 clip，同帧叠加务必先把这一路压到 .volume(0.7) 以下。\n【空尾很短】只有 0.6 秒，这是本次唯一 waitUntilFinished 代价可接受的一组（总长 2.0s）。\n【前置静音 0.25-0.48s 且四条不一致】随机取样时起振点漂 230ms，峰值漂 0.613-0.847s（漂 234ms），比 light/heavy group05 差得多。要对齐视觉必须钉索引，推荐 .2（onset 0.254 / peak 0.613，最快的一条）。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.fire.v1.group01",
+    "sound_type": "whoosh",
+    "duration_ms": 2022,
+    "onset_ms": 25,
+    "peak_ms": 370,
+    "tail_silence_ms": 787,
+    "loopable": false,
+    "spectrum": "从第 25 毫秒就是满电平，没有起振段。0.02-0.65s 是一大片贴地的宽频轰鸣（DC-1.7kHz 亮到发白，一直延伸到 16kHz），之后衰减、并夹着稀疏的火星噼啪竖纹到 1.9s。低频占比 88-91%（sub 频段），是全库低频最重的挥砍素材。",
+    "suggested_use": "flame 符文附魔的近战挥砍（cast 槽）；也是 flame 唯一能补的 whoosh。",
+    "notes": "【它是火焰轰鸣，不是刃风】频谱上没有 light/heavy 那种「窄竖带」的挥动结构，是一整片持续 0.6 秒的轰鸣。用在快速的匕首挥砍上会完全对不上动作，只适合慢速大挥（heavy1/heavy2）或「火焰缠绕武器」的表现。\n【全库最响，必须压】-12.6 LUFS，比 light 档响 13dB、比 lightning 响 27dB。真峰 0.0 到 -0.2 dBFS，已经在削顶（ogg 解码后有过冲）。与 light 档同场使用时这一路要 .volume(0.25)；与 lightning 同场则要 .volume(0.05) 才能听起来同重——而 lightning 那边因为 .volume() 上限是 1 无法反向提升，所以只能压这边。\n【峰值在第 0.37 秒但起振在 0.02 秒】任何 fadeIn 都会削掉「轰」的头；delay 也不能加，视觉火焰必须在音频开始的同一帧点亮。\n四条变体的响度、频谱、时间高度一致（I 差 0.7 LU、onset 差 80ms），是随机取样最安全的一组。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.lightning.v1.group01",
+    "sound_type": "whoosh",
+    "duration_ms": 3513,
+    "onset_ms": 370,
+    "peak_ms": 950,
+    "tail_silence_ms": 2100,
+    "loopable": false,
+    "spectrum": "频谱上是一个边界笔直的矩形块：0.35s 处一道垂直硬边突然全频段起（不是自然起振），一直到 1.44s 又是一道垂直硬边结束，块内是密集的电弧噼啪，两个亮度高峰在 0.70s 与 1.05s。块外全黑。",
+    "suggested_use": "storm 符文附魔的近战挥砍（cast 槽）——storm 是原生 8 个无音效符文之一，这是库里唯一的电系近战挥砍。",
+    "notes": "【致命短板：太轻，且救不回来】-35.8 到 -40.2 LUFS，是全部 76 个文件里最弱的一组，比 fire 弱 27dB、比 light 档弱 11-14dB。Sequencer 的 .volume() 源码把值钳在 [0,1]，无法放大，所以想让它和其它挥砍同重，只能把全场其它音效整体压 11dB 以上——实际做法只有两条：(a) 承认它是垫音，压在物理挥砍（light/heavy group05）底下当电流层，不单独用；(b) 离线把这 4 个 ogg 增益 +12dB 另存到本模组自己的目录（但这就脱离 psfx DB 了，规则表要写死文件路径）。\n【两道硬边】0.35s 起和 1.44s 收都是垂直硬切，安静场景下能听出「接上去」和「掐掉」。收尾那道要么用视觉闪电盖住，要么 .fadeOutAudio(120) 自己收。\n【组内起振不齐】onset 分别是 0.379/0.060/0.384/0.364s，其中 .1 那条整整早 320ms，随机取样会明显忽早忽晚——建议钉 .0 或 .2。\n峰值 ~0.95s → 需提前近 1 秒触发，是所有推荐素材里对齐最难的一条。有效声 1.44s 结束，endTime 建议 1500（空尾 2.1 秒）。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.psychic.v1.group01",
+    "sound_type": "whoosh",
+    "duration_ms": 3516,
+    "onset_ms": 400,
+    "peak_ms": 690,
+    "tail_silence_ms": 2460,
+    "loopable": false,
+    "spectrum": "低频段（120-500Hz）占 58-70%、中频 29-42%，2kHz 以上几乎为零——是一条被重度低通的「闷挥」，加两条约 250Hz 与 600Hz 的嗡鸣尾。没有任何宽频嘶声，所以听感不像风、更像「空间被压了一下」。",
+    "suggested_use": "illusion / soul / oblivion 符文附魔的近战挥砍（cast 槽）——这三个符文原生无音效，psychic 的无实体质感比 light/heavy 的风声贴题。",
+    "notes": "复核了 docs/ASSET-NOTES.md 第 159 行的结论，基本成立，补两点：(1) 它的前置静音四条不一致（0.274 / 0.359 / 0.444 / 0.529s，漂 255ms）、峰值漂 0.554-0.836s（282ms），是本次所有推荐组里时间离散最大的一组，随机取样几乎不可能与视觉对齐——要用就钉 .1（onset 0.274 / peak 0.554，最快）。(2) 响度 -21.7 到 -24.1 LUFS，反而是元素组里最接近 light 档（-25.8）的，跨家族混用时几乎不用调音量，这是它相对 fire/lightning 的最大优势。嗡鸣尾拖到 1.0-1.14s，比挥击本身长，连续多击会叠成持续低鸣，多段攻击建议只在第一击用。空尾 2.46 秒，endTime 建议 1200。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.necrotic.v1.group01",
+    "sound_type": "charge",
+    "duration_ms": 4518,
+    "onset_ms": 45,
+    "peak_ms": 1350,
+    "tail_silence_ms": 1750,
+    "loopable": false,
+    "spectrum": "完全没有挥砍结构：从 t=0.04s 起就是一条稳定的低频长鸣（亮核在 300-1500Hz 之间缓慢起伏），上面叠着几条向上弯曲的谐波扫弦一直探到 10kHz，2.7s 后落到底噪。频谱是横向条带（持续音）而不是纵向竖带（瞬态），这一点和 light/heavy/cold/fire 完全不同。",
+    "suggested_use": "death / oblivion 符文的 charge 槽（起手蓄力），或武器附魔上身的一次性演出。绝对不要放进 cast 槽当挥砍。",
+    "notes": "【文件名骗人的典型】它挂在 weapon-swooshes 目录下、命名也叫 swoosh，但内容是一段 2.7 秒的死灵长鸣，没有任何挥动瞬态。按名字直接接到近战 cast 槽上，会出现「刀挥出去了、声音还在嗡」的严重错位——这正是本项目栽过的那类坑。\n【当 charge 用时的参数】峰值在 1.07-1.68s（四条漂 618ms，是全库最散的），但因为它是缓慢起伏的持续音，峰值漂移听不出来，所以反而可以放心随机取样。有效声 2.7s，配 2-3 秒的蓄力读条正好；.endTime(2800) 砍掉 1.75 秒空尾。\n【响度】-33.2 到 -33.4 LUFS（四条一致），与 heavy group05.1 同级，属于「只能压别人来迁就它」的那一档；当垫音用正好，当主音不够。\n【别加 fadeIn】onset 在第 40 毫秒，起手就有声。"
+   }
+  ],
+  "rejected": [
+   {
+    "db_path": "psfx.weapon-attacks.sword.v1（整组 6 个变体）",
+    "reason": "「完整攻击」烘焙件，挥砍与命中焊死在一个文件里，本项目 cast/impact 两槽独立播放的架构用不了。逐条实测的命中点是 1.04 / 1.31 / 1.56 / 1.49 / 1.42 / 1.82s，随机取变体时命中点漂 780ms，没法跟固定 delay 的视觉 impact 对齐；六条的前置静音也从 0.75s 到 1.19s 不等。更糟的是音色不统一：sword-001-02 的能量 97% 在 2kHz 以上（sub 只占 1.1%），是一条又薄又嘶的「划」；sword-001-00 却是 sub 占 56.6% 的闷响——同一个随机池里两种完全不同的兵器质感。频谱里也没有金属谐波梳，是风声+软命中，不能当兵刃相交用。"
+   },
+   {
+    "db_path": "psfx.weapon-attacks.sword.v1.5 / psfx.weapon-attacks.spear.v1.5",
+    "reason": "单独点名：这两条不是一次攻击，是四连击。频谱上清清楚楚 4 团挥砍（约 0.80 / 1.00 / 1.20 / 1.45s）之后接一记 1.62-2.00s 的收尾重击，尾巴拖到 2.4s。就算有人打算「从 6 个变体里钉一个索引来用」，钉到 5 号就会一次攻击响出五下。"
+   },
+   {
+    "db_path": "psfx.weapon-attacks.spear.v1（整组 6 个变体）",
+    "reason": "与 sword.v1 同一套 3.5 秒模板、同样的病：前置静音 0.76-0.89s，命中点 1.04 / 1.02 / 1.37 / 1.32 / 1.34 / 1.68s（漂 660ms）。其中 spear-001-00 反倒是全 12 条里最干净的单次刺击（0.85-1.30s 一团、1.28s 一记亮瞬态），如果非要用刺击整音可以钉 psfx.weapon-attacks.spear.v1.0 + .startTime(780)；但只要走随机池就是不可用。整组不收录。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.light.v1.group01 / group02 / group03 / group04",
+    "reason": "与 group05 是同一套 4 条录音，仅整体平移（互相关 0.997-0.999，位移 -132ms 至 +325ms），不提供任何新音色。而它们组内的峰值离散度都比 group05 差：group01 峰值散在 0.362-0.622s（260ms）、group03 散在 0.567-0.751s（184ms）、group04 散在 0.468-0.660s（192ms），group05 只有 69ms。既然内容完全相同，没有理由收录时间更乱的那几组。"
+   },
+   {
+    "db_path": "psfx.weapon-swooshes.heavy.v1.group01 / group02 / group03 / group04",
+    "reason": "同上，heavy 的 group01-05 也是同 4 条录音的平移版（互相关 0.976-0.997）。峰值离散：group01 237ms、group03 223ms、group04 186ms，而 group05 只有 80ms。收 group05（+ 时间最齐的 group06）已覆盖 heavy 家族全部真实内容。"
+   },
+   {
+    "db_path": "weapon-swooshes / weapon-attacks 两个目录内的「金属兵刃相交 / 盾牌格挡」用途",
+    "reason": "全量 76 条频谱看完，没有任何一条带金属谐波梳（一组等间距的水平亮线）。物理挥砍是纯宽频风噪，元素挥砍是噪声+噼啪+长鸣，weapon-attacks 是风声+软命中。因此 shieldLight / shieldHeavy 的「铛」这两个目录里没有——已有记录第 150 行把 psfx.1st-level-spells.shield-spell.intro.v1.001 定为最接近的替代，本次侦察确认在近战目录里找不到更好的，shield 类只能按「轻档挥砍(light group05) + 护盾弹开音」两层拼。"
+   }
+  ]
+ },
+ {
+  "category": "library/impacts (psfx-patreon 0.14.0) — Sequencer 命名空间 psfx.impacts.*，共 8 个可寻址节点 / 23 个 .ogg",
+  "total_scanned": 23,
+  "recommended": [
+   {
+    "db_path": "psfx.impacts.slashing.v1",
+    "sound_type": "impact",
+    "duration_ms": 1206,
+    "onset_ms": 0,
+    "peak_ms": 164,
+    "tail_silence_ms": 641,
+    "loopable": false,
+    "spectrum": "四条全都是 DC-20kHz 的宽带撕裂噪声，频谱上完全没有金属谐波线（无水平亮条）→ 肉/布质感，不是兵刃相交。-00 从第 0 像素列就是满宽带红色，0.16s 一道最亮的垂直列（切入点），0.28s 处 18kHz 以上被一道垂直黑边切掉（ogg 截止），0.43-0.66s 是一片蓝色碎屑噪声、右端 0.66s 是一条笔直垂直硬边（硬截断而非自然衰减，但电平只有 -70dB，听不见）。-01 左缘有 51ms 黑色空档，0.52s 有第二团垂直亮列（二次溅射）。-02 是三连亮列（0.05/0.13/0.22s）+ 0.37-0.62s 碎屑，最密。-03 主体 0.09-0.3s + 0.37-0.45s 一小团。",
+    "suggested_use": "slashing 伤害的 impact 槽（近战刀剑斧、以及任何 slashing 的符文/技能命中）。这是整个 impacts 分类里唯一真正 4 个变体互不相同的节点（两两波形相关系数 -0.011~0.094，全都独立），随机取样不会听腻，是本分类最省心的一条。",
+    "notes": "实测四个变体的关键参数全都不一样，把它们当同一条用会出问题：时长 1206/1244/1244/1267ms（差 61ms），峰值点 164/227/234/244ms（漂移 80ms），起振点 0/51/0/12ms。所以①视觉命中闪光和音效同帧触发时，随机到 -00 晚 164ms、随机到 -03 晚 244ms，没法用一个固定 delay 对齐——要么锁死单变体，要么接受 80ms 抖动；②waitUntilFinished 的返回时刻也会抖 61ms。\n【坑·click】-02 是唯一一条硬起头：第 0 采样值 -0.0235，5ms 内冲到 0.315（-10dBFS），耳机上是一记「嗒」。要消掉必须只给 -02 加 3-5ms fadeIn，但 -00/-02/-03 的起振点都在第 0 采样、加 fadeIn 会削掉刀刃切入的嘶声——两难，实践上建议整节点统一 3ms fadeIn（3ms 短到不影响切入感，足够压掉 -02 的 click）。\n【坑·空尾】尾部真数字零起点各是 717/1014/844/615ms，-60dB 以下的听感空尾 641/633/650/792ms，waitUntilFinished 会白等 0.6-0.8 秒。\n【响度】gated RMS -18.6~-21.3dB、峰值 -2.4~+1.4dBFS。原生 Crucible impact 是 -20~-24dB，本节点只高 1-3dB，是本分类里唯一不用大幅压音量的——.volume(0.75) 即可与原生混排。\n【订正 ASSET-NOTES 第 147 行】原记录写「峰值在 0.15s / 有效声 0.70s / 后 0.5 秒静音 / 1205ms」，那是只量了 -00 一条。四变体的真实区间见上。"
+   },
+   {
+    "db_path": "psfx.impacts.bludgeoning.v1",
+    "sound_type": "impact",
+    "duration_ms": 1723,
+    "onset_ms": 200,
+    "peak_ms": 255,
+    "tail_silence_ms": 1029,
+    "loopable": false,
+    "spectrum": "0-0.14s 频谱纯黑（真数字零到 86ms）；0.15-0.24s 一团只在 8kHz 以下的暗红色微弱隆起，这是烘进来的抡臂风声（-31dB，听得见）；0.255s 一道贯穿 DC-20kHz 的垂直亮列 = 砸中瞬间，能量高度集中在 DC-3kHz（那一带是亮黄色）；0.26-0.5s 低频体量衰减；之后一整片 -70~-85dB 的蓝色噪声床铺到 1.4s。-02 与众不同：0.31/0.345/0.375s 还有三道额外垂直亮列 + 0.49s 一记碎屑点击，是「砸碎+落石」变体。",
+    "suggested_use": "bludgeoning 伤害的 impact 槽（锤/棍/盾击/落石/坠落伤害）。低频量是全分类最大的，砸击分量最足。",
+    "notes": "【最大的坑·四个变体其实只有两个】实测波形互相关：-00 vs -01 相关系数 0.999（残差 4.1%）、-00 vs -03 = 0.988（残差 15%）、-01 vs -03 = 0.988。也就是说 -00/-01/-03 是同一次录音的三个微调版本，只有 -02（与其余相关 0.87-0.88）是真正不同的一条。Sequencer 从这个 4 元数组随机取，实际听感只有 2 种，75% 的概率抽到同一记闷响。多段攻击（连击/Flurry）会明显重复。想要变化只能自己混 slashing 或 generic 进去。\n【坑·255ms 延迟】真正的砸中瞬态在 0.255s（-02 的最响峰甚至在 0.325s，比其余晚 70ms）。同帧触发会晚出四分之一秒。补偿方式二选一：startTime 裁掉前 140ms（保留抡臂风声，砸中提前到 t+115ms），或者干脆让视觉 impact delay 255ms。**不要 startTime 裁到 250ms**——那样会把 0.15-0.24s 那段抡臂风声也切掉，只剩一记突兀的干闷响。\n【坑·削顶/爆音】峰值实测 +2.8dBFS（浮点解码 maxabs=1.375，四条都有 66-86 个采样 ≥0.999）。Web Audio 在 volume=1.0 时会直接削顶失真。而且 gated RMS -15.5dB 是全分类最响，比原生 Crucible impact（-20~-24dB）高 6-9dB。**必须 .volume(0.35) 左右**，否则与原生 frost/flame 混排时钝击会突然大一截并且爆音。\n【坑·空尾】听感内容 0.56s 就结束，之后 1.03 秒是 -70dB 以下的噪声床 + 真数字零（1.51s 起），waitUntilFinished 白等 1 秒以上。\n【坑·低频堆叠】DC-1kHz 能量极大，与 psfx.weapon-swooshes.heavy 同帧叠会糊底（ASSET-NOTES 第 144 行已记）；同回合多次命中间隔要 ≥200ms。\n【订正 ASSET-NOTES 第 148 行】原记录「0.20 秒干净前置静音 → 0.27s 硬瞬态 → 尾部 0.7 秒静音」：真数字零只有 0-86ms，86-200ms 是次听阈内容，瞬态在 255ms 不是 270ms，空尾是 1.03s 不是 0.7s；且原记录没发现四变体重复。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.lightning",
+    "sound_type": "impact",
+    "duration_ms": 2521,
+    "onset_ms": 178,
+    "peak_ms": 1023,
+    "tail_silence_ms": 661,
+    "loopable": false,
+    "spectrum": "不是单发瞬态，是一段 1.4 秒的连续电弧噼啪：频谱上从 0 到 2.0s 密布竖条纹（每根竖条 = 一次放电），条纹之上叠着四团明显更亮的宽带柱——约 0.24s / 0.55-0.68s / 0.95s / 1.05-1.15s，其中 0.55-0.68 和 1.05-1.15 两团在 DC-3kHz 有亮黄色低频。2.02s 之后频谱全黑。",
+    "suggested_use": "electricity 伤害的 impact 槽。原生 RUNE_SOUNDS 完全没有雷电符文（storm 符文 0 音效），这是补 storm/electricity 唯一能用的东西。",
+    "notes": "【坑·5 个变体是同一套节奏】波形相关系数只有 0.04-0.16（噪声实现不同），但 50ms 分桶的 dB 包络五条几乎逐桶重合（互差 <1dB），四次大放电的时间点完全一样。随机取样换来的只是噼啪的细节不同，「哒—哒哒—哒」的节奏一模一样，连打三次就听出来是同一条。要真正的变化只能自己 startTime 错开。\n【坑·峰值电平差 6.4dB】-00 峰值 -3.6dBFS、-02 峰值 +2.5dBFS（削顶，6 个采样 ≥0.999），而五条的 gated RMS 全在 -26.2~-26.9dB 高度一致。也就是说 RMS 对齐了但瞬态峰没对齐：随机抽到 -02 会突然「炸」一下并失真，抽到 -00 则明显软。建议整节点 .volume(0.7) 保安全，或锁死用 -00/-03。\n【坑·主峰在 1.02s】-00/-01/-02/-04 的最大峰值都在 1.02s，只有 -03 的峰在 0.26s。想让「击中」的重音落在动画闪光帧上，只有 -03 对得上；其余四条要么接受 1 秒后才最响，要么 endTime 裁到 0.7s 只留前两次放电。\n【坑·太安静】gated -26.5dB 是全分类最低，比原生 Crucible impact 低 3-6dB。与原生混排要 boost（但 -02 已经削顶，boost 前先排除 -02）。\n【时长】总长 2.52s 里听感内容只到 1.60s（-45dB）/1.86s（-60dB），最后 0.42 秒（2.10s 起）是真数字零。waitUntilFinished 白等约 0.66-0.92 秒。前置静音 178ms 需补偿。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.psychic",
+    "sound_type": "impact",
+    "duration_ms": 3519,
+    "onset_ms": 42,
+    "peak_ms": 398,
+    "tail_silence_ms": 691,
+    "loopable": false,
+    "spectrum": "两段式，分界线是频谱上一道刀切般的垂直硬边。0-0.415s：DC-2kHz 一大团亮黄色低频涌起 + 一层弥散到 17kHz 的宽带雾；0.415s 处整个宽带部分**瞬间归零**（笔直垂直边，无任何衰减尾）。0.415-3.4s：只剩三条一模一样粗细、完全水平、恒定电平的细线，实测频率 5588Hz / 11175Hz / 16763Hz（严格 1:2:3 谐波）、电平 -61.5 / -67.8 / -71.0 dBFS，外加 3.4kHz 以下一层极弱的低频床。",
+    "suggested_use": "psychic 伤害的 impact 槽。「一记闷压 + 耳鸣」是刻意的精神攻击设计，四个变体的前半段（0-0.42s）确实互不相同（相关 0.31-0.51），单次使用效果很好。",
+    "notes": "【坑·耳鸣尾四条完全相同】5588/11175/16763Hz 这三条线在 -00~-03 里频率、电平一致到小数点后一位（-61.6/-61.5/-61.3/-61.2dBFS）。所以①随机取样换不掉耳鸣，②同回合多个目标各响一次时，同频正弦会叠加——不是变响两倍那么简单，是相位随机导致的拍频/梳状起伏，听起来像有人在调收音机。多目标 AoE 只放一次，或第二次起 .volume(0.4)。\n【坑·和 mind-sliver 打架】ASSET-NOTES 第 158 行的 psfx.cantrips.mind-sliver.v1 也是同一套耳鸣设计，但它的三条线实测在 6.6k/11.5k/16.5kHz。两者相差约 1.0kHz 和 0.3kHz，同场先后播放会产生明显拍频。精神系要么全用 mind-sliver、要么全用 impacts.psychic，别混。\n【坑·0.415s 硬切】主体是被门限硬砍断的，安静场景耳机上能听出「被吞掉」。要盖住只能靠视觉爆发同帧，或自己在 0.38-0.42s 加一段 40ms fadeOut（但那样耳鸣尾也一起没了）。\n【坑·不是瞬态是涌起】峰值在 398ms，0-0.4s 是一路上扬的 swell。这条不能当「打中的那一下」，它是「被打中之后脑子嗡的一下」。要有打击感必须再叠一层 slashing/bludgeoning 在 t=0。\n【坑·waitUntilFinished 3.5 秒】听感主体 0.42s 结束，0.42-2.83s 全靠 -61dB 的耳鸣撑着，2.83s 后才降到 -60dB 以下。整条 3.52s，等它播完等于罚站 3 秒。建议 endTime 1500 保留一段耳鸣即可。\n【设备差异】-61dB 的 5.6kHz 正弦在笔记本扬声器上基本听不见、在耳机上刺耳，玩家之间体验会完全不同（与 mind-sliver 同一问题）。\n【响度】gated -21.7~-24.7dB、峰值 -6.8~-8.4dBFS，与原生 Crucible impact 同档，不用调音量。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.cold",
+    "sound_type": "impact",
+    "duration_ms": 5002,
+    "onset_ms": 150,
+    "peak_ms": 233,
+    "tail_silence_ms": 1263,
+    "loopable": false,
+    "spectrum": "0-0.13s 纯黑；0.14s 起噼啪起振；0.225s 一道贯穿到 20kHz 的白/黄色尖锐垂直亮柱（干脆的冰裂瞬态，本分类第二好的起振）；之后是一大片碎裂噪声，最有辨识度的是 6-18kHz 之间成片的**水平共振细线段**——一根根断续的横线，每根就是一次冰晶的吱嘎/开裂声，一直零星出现到 4.0s。4.3s 之后基本归零。",
+    "suggested_use": "cold 伤害的 impact 槽。注意原生 RUNE_SOUNDS.frost 已经有 3 条 FrostImpact（2.02/2.86/3.11s），所以这条的真正用武之地是**非 frost 符文的寒冷伤害**：附冰武器、环境寒冷、寒冷陷阱、以及 frost 之外借用寒冷的技能。",
+    "notes": "【坑·5 秒，全库最长】总长 5.002s，比原生最长的 FrostImpact3（3.11s）还长 61%，比任何一个 Crucible 回合动画都长。-60dB 以下要到 3.74s，真正的余韵（那些冰晶吱嘎声）一直到 4.3s。**必须 endTime 裁到 1200-1500ms**，否则下一个角色都行动了它还在响；waitUntilFinished 绝对不能用。\n【坑·只有 1 个文件】整个 cold 节点就一条 .ogg，没有任何变体。冰系连续命中会一模一样地重复五次。想要变化只能配合 generic.002.002（金属/晶体碎裂）交替使用。\n【坑·150ms 前置静音 + 233ms 峰值】数字零到 128ms，起振 150ms，冰裂瞬态 233ms。同帧触发晚 0.23 秒。startTime 130 可以裁掉死头而不伤起振。\n【坑·后半是「环境音」不是 SFX】2.4s 之后剩下的只是零散的冰晶吱嘎，没有事件感，裁掉不损失任何信息量——这正是它应该被裁短的理由。\n【响度】gated -24.4dB / 峰值 +1.6dBFS。RMS 与原生 FrostImpact（-22.9~-24.5dB）几乎完全一致，不用调 RMS；但峰值过 0dBFS（9 个采样削顶），volume 建议 0.8 防爆。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.fire",
+    "sound_type": "impact",
+    "duration_ms": 4503,
+    "onset_ms": 180,
+    "peak_ms": 257,
+    "tail_silence_ms": 1403,
+    "loopable": false,
+    "spectrum": "0-0.19s 纯黑；0.22-0.40s 一团宽带呼啸爆发；随后 DC-1.5kHz 一整条亮黄色低频轰鸣持续撑到 2.6s（这是「烧起来了」的主体）；全程叠着密集的竖条纹（火焰噼啪），条纹一直延伸到 3.36s 后整体归零，之后 1.14 秒纯数字静音。",
+    "suggested_use": "fire 伤害的 impact 槽。同 cold：原生 RUNE_SOUNDS.flame 已有 FlameImpact×2 + FlameImpactHeavy×3，所以这条主要用于**非 flame 符文的火焰伤害**（附火武器、火焰陷阱、炼金火、龙息之类）。也可以当 flame 的 impactHeavy 补充（它比原生 FlameImpactHeavy 更长更「轰」）。",
+    "notes": "【坑·这是 whoosh+burn，不是 impact】0.22-0.40s 那团是呼啸，真正持续的是后面 2.2 秒的低频轰鸣。它的信息量在「烧起来」而不是「打中」。要有命中感必须在 t=0 另叠一层瞬态（generic.002.003 最合适）。\n【坑·3.2 秒有效声】听感内容 0.18-3.36s，比原生 FlameImpact（1.91-2.01s）长 60%。单次命中建议 endTime 1800 + fadeOut 300ms；不裁的话它会盖过后续动作的声音。\n【坑·尾部 1.14 秒纯静音】3.36s 之后是真数字零，waitUntilFinished 白等 1.1 秒以上（按 -60dB 口径 1.40 秒）。\n【坑·削顶】峰值 +2.5dBFS（63 个采样 ≥0.999），volume 1.0 会失真，建议 0.75。gated -22.2dB 与原生 FlameImpactHeavy（-20.3~-21.9dB）基本齐平，RMS 不用另调。\n【坑·只有 1 个文件】无变体，重复使用会听出来。\n【前置静音】数字零到 130ms，起振 180ms，峰值 257ms——同帧触发晚 0.26 秒，startTime 150 可裁死头。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.generic.002.003",
+    "sound_type": "impactHeavy",
+    "duration_ms": 3502,
+    "onset_ms": 296,
+    "peak_ms": 453,
+    "tail_silence_ms": 1257,
+    "loopable": false,
+    "spectrum": "0-0.29s 完全纯黑；0.295s 处一整面 DC-20kHz 的宽带白噪墙**瞬间竖起**（垂直边极其干净，攻击时间接近 0 采样，是全分类最好的瞬态）；有意思的是低频是分两级到的——0.30-0.44s 期间 DC-3.4kHz 明显比中高频暗，0.44s 处低频才补上来（第二级低频轰）；之后是教科书式的平滑指数衰减，频谱上看不到任何剪辑接缝或硬边，一路自然淡到 2.7s。",
+    "suggested_use": "通用/无属性法术命中的 impact 槽，以及需要「大」的场合：AoE 落点、重击（impactHeavy）、radiant / void 这类本分类没有专属素材的伤害类型的中性替代（当作「大爆」而不是当作「圣光」用）。也是给 fire/psychic/necrotic 这类没有打击感的素材垫瞬态的首选底层。",
+    "notes": "【优点先说清】这是 23 条里唯一一条同时满足「零攻击时间的干净瞬态 + 全程无剪辑接缝 + 自然指数衰减 + 无 DC 偏移 + 无削顶（仅 5 个采样过 0.999）」的素材。要垫瞬态就用它。\n【坑·296ms 死头】前 0.296 秒是**真数字零**，不是低电平。同帧触发等于晚 0.3 秒。两种用法：startTime 290 让爆点几乎落在 t=0（推荐），或者不裁、让视觉 delay 300ms。注意裁到 300 以上会削掉那面墙的第一个采样，反而变闷——裁 285-292 之间最稳。\n【坑·低频晚 145ms】爆裂的「劈」在 0.305s，「轰」在 0.44s。如果你 startTime 290 让劈落在 t=0，那么低频轰会落在 t+145ms——视觉上的冲击波扩散动画应该对齐 145ms 而不是 0。\n【坑·2.7 秒长尾】-60dB 以下要到 2.25s、-80dB 到 2.66s，2.99s 起真数字零。总长 3.5s，waitUntilFinished 白等 1.26 秒。单体命中建议 endTime 1400。\n【响度】gated -15.2dB / 峰值 +0.4dBFS，比原生 Crucible impact 高 5-9dB。**必须 .volume(0.35~0.4)**。\n【订正 ASSET-NOTES 第 149 行】原表在「通用魔法命中」这一格选的是 generic.002.001。实测 .003 在同一用途上全面更优（见 rejected 里对 .001 的说明），建议把那一行的路径换成 .003。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.generic.002.002",
+    "sound_type": "impact",
+    "duration_ms": 3508,
+    "onset_ms": 300,
+    "peak_ms": 462,
+    "tail_silence_ms": 1411,
+    "loopable": false,
+    "spectrum": "0-0.30s 纯黑；0.305s 宽带起振；与 .003 的关键区别是它满屏都是**水平共振亮线**——实测约 3.9k / 6.5k / 8.5k / 9.6k / 11.2k / 13.5kHz 六条以上，从起振一直响到 2.0s 才淡掉，是明确的金属/晶体共鸣（有音高）。低频轰的峰在 0.462s。整体衰减平滑，无硬边。",
+    "suggested_use": "需要「碎裂 / 金属 / 晶体」质感的 impact：护甲被击碎、冰晶炸裂（配合 cold 用来给它加变体）、构装体/骷髅被打碎、屏障破碎。它不对应任何一个 Crucible 伤害类型，属于按「材质」而不是按「伤害类型」选的素材。",
+    "notes": "【坑·它是有音高的】那六条共振线构成一组固定的谐波，等于这条素材带一个固定音高。这意味着①连续多次命中会明显听出「同一个音」在重复（比无音高的噪声类素材更容易听腻）；②和其它有音高的素材同时响会走调——ASSET-NOTES 里 conditions.boon.001、class-features.bardic-inspiration.keyOfC、1st-level-spells.cure-wounds 都是有调性的，同帧叠会不和谐。要么错开 ≥300ms，要么改用无音高的 .003。\n【坑·300ms 死头】和 .003 一样前 0.30 秒是真数字零，startTime 295 补偿。\n【坑·长尾】-60dB 到 2.10s、-80dB 到 2.61s、真零 2.90s，总长 3.51s。waitUntilFinished 白等 1.4 秒。建议 endTime 1600（1.6s 处共振线还在但已经很弱，此处 fadeOut 200ms 听不出接缝）。\n【响度】gated -15.1dB / 峰值 +0.3dBFS，与 .003 同样偏响 5-9dB，**.volume(0.35~0.4)**。\n【命名坑】DB 路径里的 `002` 是目录层不是变体号：三个文件都躺在 `library/impacts/magicaleffects/generic/002/` 下，文件名却叫 `...-generic-001-03.ogg` / `-002-03` / `-003-03`。所以 `psfx.impacts.magicaleffects.generic.002.002` 里的两个 002 含义完全不同，且不存在 `generic.001.*` 这个兄弟节点。写规则表时极易漏一层写成 `generic.002` 而解析失败。"
+   }
+  ],
+  "rejected": [
+   {
+    "db_path": "psfx.impacts.magicaleffects.necrotic",
+    "reason": "【无起振，不能当 impact】唯一 1 个文件。频谱上从 t=0 到 0.7s 是一片均匀的竖条纹低频震颤 + 一条贴着 DC 的强次低频亮线，**全程找不到任何瞬态垂直亮柱**——它是一段质感床（withering 的「嗡」），不是一次打击。数据佐证：峰值 -15.2dBFS 是全分类最低（比 bludgeoning 低 18dB），而 gated RMS -24.6dB 属正常档，波峰因数只有 9.4dB（bludgeoning 是 18.3dB、generic.003 是 15.6dB），也就是说它几乎没有动态起伏。所谓「峰值在 396ms」只是那片床里最鼓的一处，听感上根本不构成击中点。挂到 impact 槽的结果是：动画闪光炸了，声音那边只有一声闷嗡，玩家会以为音效没触发。\n它也不适合改挂 damage 槽——damage 按 Crucible 定义是 loop，而这条是 3.0s 一路单调衰减（-31dB 起，2.5s 后基本没了），首尾电平差 30dB 以上，接不上环。\n真要用它只能当**垫层**：在 generic.002.003 或 bludgeoning 的瞬态底下同帧叠一层并 boost +10dB，用来给打击音染上腐蚀色。单独用请直接放弃。\n后果：corruption 与 void 这两个伤害类型在本分类里等于没有覆盖，不要硬凑。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.generic.002.001",
+    "reason": "【被 .003 全面压制，且自带两个缺陷】①**唯一一条有直流偏移的文件**：DC = +0.0121（约 -38dBFS 的恒定直流），其余 22 条都在 ±0.002 以内。直流偏移会在播放起止各产生一次低频「噗」，并白白吃掉 0.1dB 余量；如果将来要重新编码，必须先 40Hz 高通。②**0.385s 一道垂直硬边**：0.20-0.38s 只有低频，0.385s 处 3-11kHz 整段瞬间以恒定电平接上并一直保持——是明显被剪/被门限过的痕迹，安静环境能听出「贴上去」的感觉。它真正的瞬态只有 0.186s 那一记很细的亮柱，而听感上的「主体」要等到 0.385s 才来，比 .003 的爆点（0.305s）还晚 80ms。③频谱里还有一条约 3.3kHz 的持续调性亮线贯穿整个轰鸣段，单放略带哨音，重复使用会腻。\n结论：同一个「通用魔法命中」用途上，.003 起振更早（0.305s vs 0.385s）、瞬态更干净（零攻击时间的整面宽带墙 vs 一记细亮柱）、无接缝、无直流。建议把 ASSET-NOTES 第 149 行的 `psfx.impacts.magicaleffects.generic.002.001` 换成 `...generic.002.003`。\n（若坚持要用 .001：它比 .003 早 240ms 就有低频铺垫，在需要「先闷一下再炸」的蓄力型命中里是它唯一的优势。）"
+   },
+   {
+    "db_path": "psfx.impacts.bludgeoning.v1 → meleeattack-impacts-bludgeoning-01.ogg / -03.ogg",
+    "reason": "【重复变体，不构成随机性】与 -00 的波形互相关分别是 0.999（最佳增益后残差 4.1%）和 0.988（残差 15.2%），-01 vs -03 也是 0.988。三条是同一次录音的微调版本。Sequencer 从 4 元数组里随机取，实际只有 2 种听感，且 75% 概率落在这三条同源的上面。\n注意：Sequencer 的 DB 条目是整个数组，**没法只排除数组里的某几个文件**（除非自己在 crucible-anim 里另建一张只列 -00 和 -02 两条完整路径的表，绕过 psfx.impacts.bludgeoning.v1 这个节点）。所以这条严格说不是「驳回某个文件」，而是「这个节点的变体数要按 2 计，不能按 4 计」——排多段攻击/连击的音效方案时必须按 2 个变体来设计，否则会出现同一回合里连响三次一模一样的闷响。"
+   },
+   {
+    "db_path": "psfx.impacts.magicaleffects.lightning → meleeattack-impacts-magicaleffects-lightning-02.ogg",
+    "reason": "【电平离群 + 削顶】五条 lightning 的 gated RMS 高度一致（-26.2 ~ -26.9dB，互差 0.7dB），但峰值散得极开：-00 是 -3.6dBFS、-03 是 -3.2、-04 是 -1.3、-01 是 -2.8，唯独 -02 是 **+2.5dBFS**（浮点解码 maxabs=1.308，6 个采样 ≥0.999）。即 RMS 对齐了、瞬态峰没对齐，随机抽到 -02 时那四次放电会比其它变体响一截并且在 volume=1.0 下削顶失真。\n同样地，数组里的单个文件无法在 Sequencer 层排除，所以实践建议二选一：整节点 .volume(0.7) 把 -02 压进安全区（代价是其余四条更闷，而它们本来就已经是全分类最安静的），或者在 crucible-anim 自己的表里改成直接列 -00/-01/-03/-04 四条完整路径、绕开 psfx.impacts.magicaleffects.lightning 节点。"
+   }
+  ]
+ },
+ {
+  "category": "施法起手类 charge 候选（library/casting + library/incantations + library/magic-signs）",
+  "total_scanned": 430,
+  "recommended": [
+   {
+    "db_path": "psfx.casting.fire-side.001",
+    "sound_type": "charge",
+    "duration_ms": 2015,
+    "onset_ms": 35,
+    "peak_ms": 758,
+    "tail_silence_ms": 395,
+    "loopable": false,
+    "spectrum": "频谱：t=0 起有一层 -68dB 的极低电平宽频底噪（听不见），0.60s 开始明显渐强，0.70-1.35s 是主体——能量集中在 DC-1.7kHz 的低频轰鸣加一层宽频嘶声，1.35s 后是平滑自然衰减到 1.62s。全图没有任何垂直硬边（无剪辑接缝、无门限），也没有横向谐波线（无音高、纯噪声质感）。这是本次扫描里唯一一条形态上真正等价于 FrostChargeUpMedium / FlameChargeUpMedium 的渐强弧线。",
+    "suggested_use": "flame 符文的第二条 charge（与原生 FlameChargeUpMedium 随机混用）；因为完全无音高，也是 8 个空缺符文里最安全的通用蓄力垫底层（storm / kinesis / control 都能用）。",
+    "notes": "① 响度不匹配是最大的坑：有效段 RMS -11.4dB，而 Crucible 六条原生 charge 的有效段 RMS 是 -15.2~-22.4dB（中位 -18.4dB）。直接混用会比原生响约 7dB，必须 volume≈0.45 才能坐在一起。整个 psfx casting 分类都偏响 4-8dB，这条规律对本目录所有素材都成立。② 2.015s 总长里尾部 395ms 是纯静音，waitUntilFinished 会白等；但这个尾长和原生 charge 的 265-470ms 空尾几乎一样，所以如果规则层是照抄原生的 duration 逻辑，反而对得上。③ 起振点 35ms 且开头是 -68dB 底噪，加不加 fadeIn 都无所谓（与原生不同，这条不会被 fadeIn 削掉冲击）。④ 5 个变体一致性极好：onset 全是 35ms、有效段结束全在 1616-1621ms、有效 RMS 差 0.8dB 以内，包络峰值只在 609ms / 758ms 两档之间跳。这一点和 psfx.weapon-attacks.sword.v1 那种 0.5 秒命中点漂移完全相反，可以放心随机取样。⑤ 名字里的 fire-side 是「侧向火」，实测听感偏低频轰鸣而不是明火噼啪，用在非火系符文上不违和。"
+   },
+   {
+    "db_path": "psfx.casting.fire.001",
+    "sound_type": "charge",
+    "duration_ms": 2515,
+    "onset_ms": 0,
+    "peak_ms": 619,
+    "tail_silence_ms": 815,
+    "loopable": false,
+    "spectrum": "频谱：DC-1.7kHz 的低频轰鸣床从第 0 采样就在，0.76s 起中高频（1.7-8kHz）整片抬起，包络峰值 0.61s、频谱亮度峰值 0.80-1.05s，之后自然衰减到 1.70s。1.26s 和 1.70s 各有一道窄的全频段垂直条纹——是火焰爆响瞬态（宽频、无谐波），不是剪辑接缝。1.70s 之后只剩一条贴着 DC 的余韵，到 1.75s 归零。",
+    "suggested_use": "flame 符文的重型/大手势 charge（对应原生 FlameChargeUpLarge 那一档）；有效声 1.70s，比 fire-side 长 0.1s、低频更厚。",
+    "notes": "① 唯一一条没有前置静音的：第 0 采样电平就是 -0.0072（带一点负 DC 偏置），前 5ms 已经到 -34dB。和原生 charge 相反，这条**建议**加 5-10ms fadeIn——真正的攻击点在 0.6s，短 fadeIn 削不到任何东西，却能盖掉 t=0 的直流台阶。② 有效段 RMS -10.9dB，是本组最响的，比原生 charge 高 7.4dB，volume≈0.43。③ 2.515s 里尾部 815ms 是纯静音，waitUntilFinished 会白等 0.8 秒，配 1.5 秒的蓄力动画要自己截断。④ 1.26s / 1.70s 那两下爆响瞬态在低频量大的音箱上很明显，如果同帧还要叠 impact 层会撞在一起，建议 impact 延后到 1.8s 之后。⑤ 5 个变体包络峰值全在 604-619ms、有效结束 1696-1741ms、RMS 差 0.9dB，随机取样安全。"
+   },
+   {
+    "db_path": "psfx.casting.earth.001",
+    "sound_type": "charge",
+    "duration_ms": 3005,
+    "onset_ms": 35,
+    "peak_ms": 733,
+    "tail_silence_ms": 1334,
+    "loopable": false,
+    "spectrum": "频谱：宽频底噪从 t=0 起，0.90-1.65s 是主体，整段布满密集的窄垂直条纹——碎石/砂砾颗粒瞬态，这是全库最像「土石」的纹理。关键结构：1.72s 处 2kHz 以上有一道**贯穿全宽的硬门限**（实测 1.70s→1.75s 之间 >2kHz 能量从 -12dB 掉到 -53dB，41dB 断崖），碎石质感被一刀切掉；2kHz 以下的次低频轰鸣不受影响，继续拖到 2.20s 才衰完。无谐波线，无音高。",
+    "suggested_use": "earth 符文的 charge（Crucible earth = acid/落石，图标就是 projectile-boulder-debris，质感对得上）。",
+    "notes": "① 1.72s 的高频硬门限是这条最大的坑：耳机上能听出「碎石声被掐断、只剩一声闷响」的突变。要么用 duration/endTime 截到 1720ms 并补 100-150ms fadeOut，要么接受那条 2.2s 的次低频拖尾并用视觉盖住掐断点。② 3.005s 总长里尾部 1334ms 是纯静音——占了 44%，waitUntilFinished 会白等 1.3 秒，一定要显式给 duration。③ 有效段 RMS -12.0dB，比原生 charge 高 6.3dB，volume≈0.48。④ 5 个变体 onset 全是 35ms、有效结束 1671-1736ms、RMS 差 0.9dB，包络峰值在 604ms / 733ms 两档间跳，一致性好。⑤ 次低频量很大，和同回合的 impacts.bludgeoning 叠加会糊底。"
+   },
+   {
+    "db_path": "psfx.casting.generic.002.001",
+    "sound_type": "charge",
+    "duration_ms": 3500,
+    "onset_ms": 115,
+    "peak_ms": 347,
+    "tail_silence_ms": 1770,
+    "loopable": false,
+    "spectrum": "频谱：0-0.11s 是真正的数字静音（样本值精确为 0，不是低电平底噪），0.115s 一记干净起振，随后 1.7-13kHz 出现一整片密集的水平谐波梯——十几条等间距横线一直平行延伸到 1.90s，是强烈的调性/共鸣「魔力充能」质感；1.90s 处高频整体收束（偏软的衰减、不是垂直硬边），低频余韵拖到 2.80s。",
+    "suggested_use": "8 个空缺符文的**通用 charge**（对应原生伪符文 generic.MagicChargeUp 的位置）。它是本次扫描里唯一响度接近原生的 casting 素材，也是唯一有干净数字静音打头的。",
+    "notes": "① 响度最接近原生：有效段 RMS -14.7dB，只比原生 charge 中位数高 3.6dB，volume≈0.66 即可（其余 casting 素材都要压到 0.45 左右）。② 有音高，而且是很密的谐波梯——同一回合给多个目标连放会互相打拍子（和已记录的 conditions.boon.001.01 同一个坑）。多目标只放一次，或第二次起 delay ≥300ms 并压音量。③ 0.115s 前置数字静音要么提前 115ms 触发，要么接受起手晚一帧；好处是这 115ms 让 fadeIn 完全安全。④ 3.5s 总长里尾部 1.77s 是纯静音，占 51%，waitUntilFinished 会白等；有效声 0.115-1.73s，正好 1.62s，和原生 charge 的 1.41-1.92s 同档。⑤ 同目录的 generic.002.002 / .003 是同一套 3.5s 定时模板但内容完全不同（分别只有 0.58s / 0.94s 有效声），三者不可互换，规则表里只能锁 .001。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.illusion.intro",
+    "sound_type": "charge",
+    "duration_ms": 3516,
+    "onset_ms": 175,
+    "peak_ms": 715,
+    "tail_silence_ms": 510,
+    "loopable": false,
+    "spectrum": "频谱：0.17s 起振，0.20-0.72s 是一记通透的宽频爆开（亮度峰在 8-11kHz，空气感/微光质感），0.72s 处 1.7kHz 以上有一道明显的垂直接缝、高频整片掉下去，之后转成一段带微弱谐波线的暖低中频 drone，撑到 2.85s，再淡到 3.40s。整体是「亮起 → 收进一层雾」。",
+    "suggested_use": "illusion 符文的 charge（名字与频谱质感双向对得上：气声起手 + 朦胧余韵）。",
+    "notes": "① 3.5s 对 charge 太长——原生 charge 是 1.41-1.92s。实用配方：startTime 保持 0、duration 1600ms、补 150ms fadeOut，正好取到「爆开 + 一小段雾」，掐断点落在 drone 段上完全听不出。② 0.72s 那道高频接缝是设计里的段落分界，不截断的话在安静场景听得出「亮度突然掉一层」。③ 有效段 RMS -14.8dB（本组 8 个 rune intro 里最轻的），比原生 charge 高约 3.5dB，volume≈0.67。④ **intro 不能直接接 loop**：intro 在 2.5-3.0s 区间只剩 -30dB，而同 school 的 loop 全程 -15.9dB，直接首尾相接会先听到声音死掉、再被 loop 一巴掌拍起来。正确接法是让 loop 在 intro 的 t≈1.0-1.3s 处淡入（实测 intro[0.8-1.3s]=-12.2dB 与 loop=-15.9dB 只差 3.7dB），或者干脆按 ① 截断后另起 passive。⑤ 尾部 510ms 纯静音，是本组最短的空尾。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.necromancy.intro",
+    "sound_type": "charge",
+    "duration_ms": 3519,
+    "onset_ms": 30,
+    "peak_ms": 555,
+    "tail_silence_ms": 1065,
+    "loopable": false,
+    "spectrum": "频谱：几乎无前置静音（onset 30ms），0.05-0.60s 一片高电平的中高频粗噪（5-13kHz 很亮），0.60s 处一道垂直接缝后高频整体退去，露出一组**下行的水平谐波梳**——从 1.7kHz 附近一路缓慢下滑并逐条变暗，一直响到 3.40s；同时 DC-700Hz 有一条持续的低频轰鸣在 0.70-1.50s 达到最亮。整体是「刺啦一声 → 往下沉的调性尾」，是本组 8 条里最阴暗的。",
+    "suggested_use": "oblivion 符文的 charge（void 伤害、morale 资源），也可以给 death 符文当第二条 charge 变体。",
+    "notes": "① 同样是 3.5s 过长，用 duration 1600-1800ms + 150ms fadeOut 截取；截断点落在下行谐波梳上，因为它本来就在往下衰，掐得干净。② 下行谐波梳=有音高且音高在变，多个目标同时上 oblivion 会出现滑音互相打架，多目标只放一次。③ onset 只有 30ms，加 fadeIn 会削掉那记「刺啦」的起手，别加。④ 有效段 RMS -13.6dB，比原生高约 4.7dB，volume≈0.58。⑤ 尾部 1065ms 纯静音（占 30%），waitUntilFinished 会白等 1 秒。⑥ intro→loop 的衔接坑同 illusion：intro 在 2.5-3.0s 只剩 -53.4dB，而 necromancy loop 是 -11.9dB，落差 41dB，必须在 t≈1.0s 处交叉淡入而不是首尾相接。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.evocation.intro",
+    "sound_type": "charge",
+    "duration_ms": 3516,
+    "onset_ms": 85,
+    "peak_ms": 557,
+    "tail_silence_ms": 1000,
+    "loopable": false,
+    "spectrum": "频谱：0.085s 起振，0-0.55s 是一段抬升的宽频铺垫，0.60-0.75s 一记明亮的全频爆发（是本组最像「能量放出」的瞬间），之后 4kHz 以上在 2.30s 处整片切掉，只留 700Hz-1.7kHz 的几条水平谐波线拉长到 3.40s。低频（DC-700Hz）在 0.35-1.50s 一直很亮。",
+    "suggested_use": "illumination 符文的 charge（radiant / 光束，明亮爆发质感匹配）；也是 storm 符文在本目录里最接近的替代（但本目录没有真正的电弧素材，storm 仍算缺口）。",
+    "notes": "① 3.5s 过长，配方同上：duration 1600ms + 150ms fadeOut。② 有效段 RMS -11.5dB，比原生 charge 高 6.8dB，volume≈0.46。③ 2.30s 处那道 4kHz 以上的整片切除是硬门限，不截断的话能听出「亮度被拔掉」；截到 1.6s 就完全避开了。④ 700Hz-1.7kHz 的谐波线意味着有音高，和 illumination 的其它调性素材同放要注意。⑤ 尾部 1000ms 纯静音。⑥ intro→loop：intro[0.8-1.3s]=-8.8dB 与 evocation loop 的 -11.2dB 很接近，是本组衔接最顺的一条——如果要做 charge→passive 连播，从 intro 的 t≈1.0s 交叉淡入 loop 几乎听不出接缝。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.transmutation.intro",
+    "sound_type": "charge",
+    "duration_ms": 3519,
+    "onset_ms": 65,
+    "peak_ms": 652,
+    "tail_silence_ms": 745,
+    "loopable": false,
+    "spectrum": "频谱：0.065s 起振，0-0.68s 是一片集中在 1.7-7kHz 的中频推进，0.68s 处一道很干脆的垂直接缝把 1.7-8kHz 整段砍掉，之后是 DC-1.7kHz 的低频翻涌一路到 2.80s，其间散布若干窄垂直条纹（物质翻搅的颗粒瞬态）。10-13kHz 在 1.7-2.5s 有几道零星的窄竖线。无持续谐波线（基本无音高）。",
+    "suggested_use": "kinesis 符文的 charge（physical 伤害、力场推挤；无音高的宽频翻涌最像「念动力起势」）；earth 符文的备选变体。",
+    "notes": "① **本目录最响的一条**：有效段 RMS -10.3dB，比原生 charge 中位数高 8.1dB，volume≈0.40，不压会明显盖过原生四符文。② 0.68s 那道中频接缝非常干脆，是全组最容易被听出「剪过」的一处；建议 duration 截到 1600-1700ms 时另加 60-80ms 的 fadeIn 在 0.65s 附近是做不到的——实际做法是接受它，或者用视觉爆发盖住 0.68s 这一帧。③ 3.5s 过长，duration 1600ms + 150ms fadeOut。④ 尾部 745ms 纯静音。⑤ 无音高是它的优点：多目标同时施放不会打拍子，是 8 条 rune intro 里唯一可以放心叠多次的。⑥ intro[0.8-1.3s]=-9.2dB 对 loop 的 -9.4dB，衔接电平几乎完全一致，charge→passive 连播效果最好。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.abjuration.intro",
+    "sound_type": "charge",
+    "duration_ms": 3522,
+    "onset_ms": 0,
+    "peak_ms": 560,
+    "tail_silence_ms": 555,
+    "loopable": false,
+    "spectrum": "频谱：从第 0 采样就有声（前 5ms 已到 -66dB，属低电平但非静音）。全程被一组**固定不动的水平谐波线**统治——约 1.7k / 3.4k / 4.4k / 6.8k / 10.3kHz 五条亮线从头拉到尾，是明确的持续 drone；同时 DC-1.7kHz 的低频轰鸣从 0.6s 一路**渐强**到 2.40s 才开始退，到 3.5s 都没完全衰完（2.5-3.0s 区间仍有 -27.3dB）。8kHz 以上可见块状的编码带纹。这是 8 条里唯一没有明显「爆发点」的一条，全靠渐强。",
+    "suggested_use": "control 符文的 charge（hypnosis / 持续精神压迫，无爆点的渐强 drone 质感对味）；也适合任何需要「压迫感缓慢升起」的长起手。",
+    "notes": "① 它其实不是一次性音——3.5s 结束时声音还没衰完（尾部 555ms 是本组最短空尾，正是因为还在响）。当 charge 用必须自己补 fadeOut，否则会听到硬切。推荐 duration 1600ms + 200ms fadeOut。② 五条固定谐波线=固定音高，多个目标叠放会形成和弦/拍频，control 多目标只放一次。③ onset 0 且开头是 -66dB 的 drone 底噪，加 5ms fadeIn 无害。④ 有效段 RMS -13.9dB，比原生高 4.4dB，volume≈0.55。⑤ 8kHz 以上那片块状纹是 Ogg 编码痕迹（142kbps），在好耳机上是一层轻微的「沙沙格子」，音量压下去后不明显。⑥ intro[0.8-1.3s]=-12.6dB vs loop -14.5dB，衔接顺。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.enchantment.intro",
+    "sound_type": "charge",
+    "duration_ms": 3513,
+    "onset_ms": 265,
+    "peak_ms": 707,
+    "tail_silence_ms": 975,
+    "loopable": false,
+    "spectrum": "频谱：0.265s 起振（本组前置静音最长的一条），0.28-0.72s 是一片很亮的气声噪（能量集中在 5-12kHz，几乎没有低频），0.72s 处一道极干脆的垂直接缝，之后突然只剩一组**干净的持续谐波**——约 700Hz / 1.1k / 1.4k / 1.7kHz 加上若干高次分音，像敲了一记钟，一直响到 2.50s 再淡到 3.20s。前后两段的质感反差是 8 条里最大的。",
+    "suggested_use": "soul 符文的 charge（restoration / 精神系，钟鸣质感偏「净化、召回」）；control 的备选。",
+    "notes": "① 0.265s 前置静音要提前触发或用 startTime 补偿，否则起手明显晚半拍。② 0.72s 那道「气声 → 钟鸣」的切换是设计意图，但它同时意味着如果 duration 截在 0.72s 之前，听到的就只是一声「嘶」，完全不像蓄力。截断点必须 ≥1.2s，推荐 duration 1700ms + 200ms fadeOut。③ 钟鸣段是明确的定调和弦——soul 连续给多人上效果会走调打架，和已记录的 class-features.bardic-inspiration.keyOfC 是同一类坑，要么全场固定这一条，要么多目标只放一次。④ 有效段 RMS -13.3dB，volume≈0.60。⑤ ⚠ **同 school 的 loop 是全库异常值**：enchantment-rune-loop 整体 RMS 只有 -37.6dB，比其余 7 个 school 的 loop（-8.9 ~ -14.5dB）低 23-29dB。如果规则层按 school 配套取 intro+loop，切到 enchantment 时 passive 会几乎听不见。要用这条 intro 就别配它的 loop，改配别的 school 的 loop 或原生 passive。⑥ 尾部 975ms 纯静音。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.divination.intro",
+    "sound_type": "charge",
+    "duration_ms": 3511,
+    "onset_ms": 200,
+    "peak_ms": 688,
+    "tail_silence_ms": 960,
+    "loopable": false,
+    "spectrum": "频谱：0.20s 一记很短的亮瞬态（0.20-0.30s），随后压下去；0.72s 处第二道门限之后中频（1.7-7kHz）反而**开始上涨**，在 1.00-1.60s 达到最亮，再衰减到 2.50s。低频 DC-1.7kHz 同步在 0.9-1.5s 最厚。9-11kHz 有两条明显的水平**暗带凹口**（滤波器 notch 痕迹，贯穿整条）。整体形态是「点一下 → 再涨起来」，双峰。",
+    "suggested_use": "soul 或 illumination 的 charge 备选；它的「先点一下、再涨」双峰形态适合有前摇动作的手势（先起手势、再聚能）。",
+    "notes": "① 双峰形态和原生 charge 的单峰渐强不一样——如果规则层假设「峰值 ≈ 0.6-0.9s 对齐视觉爆发」，这条的真正主峰在 1.0-1.6s，会晚 0.5 秒。要么按 1.2s 对齐视觉，要么别用。② 0.20s 前置静音要补偿。③ 9-11kHz 那两条 notch 暗带是素材自带的滤波痕迹，单放听不出，但和其它明亮素材（如 evocation intro）交替播放时会觉得这条「闷一层」。④ 有效段 RMS -11.9dB，比原生高 6.4dB，volume≈0.48。⑤ 3.5s 过长，尾部 960ms 纯静音；推荐 duration 1800ms + 150ms fadeOut（要盖住 1.0-1.6s 的主峰，不能像别条那样截到 1.6s）。⑥ intro[0.8-1.3s]=-8.5dB vs loop -8.9dB，衔接顺。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.conjuration.intro",
+    "sound_type": "charge",
+    "duration_ms": 3519,
+    "onset_ms": 240,
+    "peak_ms": 818,
+    "tail_silence_ms": 905,
+    "loopable": false,
+    "spectrum": "频谱：0.24s 起振，0.25-0.75s 是一段厚实的宽频上扬（3.4-13kHz 均匀铺满），0.75s 处接缝后高频退去，DC-1.7kHz 的低频翻涌接手并在 0.90-1.60s 最亮，之后缓慢衰减到 2.80s。3.4-13kHz 区间在 1.0-2.8s 有一层很淡的纹理残留。谐波线弱、基本无明确音高。",
+    "suggested_use": "soul 或 kinesis 的 charge 备选；「召唤」质感的低频翻涌，适合需要「有东西被拽出来」的手势。",
+    "notes": "① 0.24s 前置静音要补偿。② 主体重心在 0.9-1.6s 的低频，和 transmutation.intro 高度相似但更闷、更没有颗粒感——两条不要在同一场战斗里混用，会听成同一个音。③ 有效段 RMS -13.9dB，volume≈0.55。④ 尾部 905ms 纯静音；推荐 duration 1700ms + 150ms fadeOut。⑤ 末端 100ms 内测到最高 -43.2dB 的一小段残留（本组 8 条里最高），但仍在听阈以下，实测最后一个采样是 0，没有 end-of-file 咔哒，可以放心不加 fadeOut——不过既然要截断，fadeOut 反正是要加的。⑥ intro[0.8-1.3s]=-10.0dB vs loop -12.4dB，衔接可用。"
+   }
+  ],
+  "rejected": [
+   {
+    "db_path": "psfx.casting.generic.001",
+    "reason": "最危险的一条「看数字像、实听不像」：总长 1.54s，和 FrostChargeUpMedium(1.409s) / FlameChargeUpMedium(1.562s) 几乎一模一样，非常容易被规则层直接拿去顶 charge。实际频谱是：0.03s 起一片电平恒定的宽频噪（完全没有渐强弧线），在 0.61s 处一道**贯穿全频段的垂直硬边**直接切断，尾巴到 0.66s 归零，之后 0.89s 纯静音。有效声只有 0.62s，占总长 40%——听感是一发「噗」，不是蓄力。另有两个次要问题：码率只有 81kbps（本目录其余素材 115-153kbps），高频有可闻的编码毛刺；磁盘上 cast-generic-01~05 有 5 个文件，但 psfx_sequencer.js 只把 cast-generic-03 注册进了 DB，所以 psfx.casting.generic.001 永远只会解析到同一个文件，没有随机变体。它更适合当短促的手势收势音，不能当 charge。"
+   },
+   {
+    "db_path": "psfx.casting.generic.002.002",
+    "reason": "总长 3.50s 但有效声只有 0-0.58s，之后 2.92s 是纯静音（83% 是空的）。码率仅 48kbps，是本次扫描 430 个文件里最低的，频谱在 14kHz 以上完全没有内容、可见明显的编码天花板。第 0 采样即满电平、无起振段，也没有任何渐强。既短又糊又浪费时长，任何用法都不如同目录的 .001。"
+   },
+   {
+    "db_path": "psfx.casting.generic.002.003",
+    "reason": "总长 3.50s，第 0 采样起就是高电平宽频，0.60s 处一道接缝后高频退去，只剩低频拖到 1.40s 硬停，有效声 0.94s，尾部 2.54s 纯静音（73%）。码率 61kbps，同样偏低。形态是「爆发+衰减」而不是「蓄力」，与原生 charge 的渐强弧线相反，混用会明显违和。"
+   },
+   {
+    "db_path": "psfx.casting.sound.001",
+    "reason": "总长 4.00s，形态错误：0-0.90s 是高电平宽频，实测 0.86s→0.94s 之间 >2kHz 能量掉 17dB（硬门限），之后只剩 DC-1.7kHz 的低频一路衰减到 2.52s。也就是说能量全压在开头 0.9 秒，是「爆发→长衰减」的 whoosh/impact 形态，不是 charge 的渐强。另外 1.35-1.75s 的 8-13kHz 区间有一段独立的、约 10.3kHz 的水平亮线（像一记铃音的残留），来源不明、和主体不搭。有效声 2.52s 也超出原生 charge 的 1.41-1.92s 区间；尾部 1.48s 纯静音。五个变体一致性倒是很好（onset 全 30ms），但形态问题不是靠选变体能解决的。"
+   },
+   {
+    "db_path": "psfx.casting.water.001",
+    "reason": "总长 5.00s，频谱是从 0 到 4.30s 连续不断的宽频水花翻搅，**没有任何峰值弧线**（包络峰值在 2.4-2.8s 之间随变体乱漂：01=2.60s、02=1.23s、03=2.51s、04=2.76s、05=2.43s，漂移 1.5 秒），4.30s 处整片硬切。既没有蓄力形态，变体之间的峰值又对不齐，规则层没法给它一个固定的视觉对齐点。属于环境/持续音，不是一次性 SFX。"
+   },
+   {
+    "db_path": "psfx.casting.generic-v2.002.02",
+    "reason": "总长 4.00s，尾部只有 175ms 静音 → 有效声 3.83s，是本目录最长的有效段。频谱：第 0 采样即满电平，0-0.80s 主体，0.80s 接缝后转成一长串带节律的低频脉冲一直到 3.85s。这是「持续引导/施法床」而不是一次性蓄力，塞进 1.5 秒的 charge 槽会被硬切在最响的地方。同目录 .003.01（有效 3.15s）、.001.02（有效 3.50s）同理。已记录的 psfx.casting.generic-v2.001.01 也是这一族，用途应归到长读条而非 charge。"
+   },
+   {
+    "db_path": "psfx.casting.on-token.001",
+    "reason": "6.00s，onset 0.55s、3.90s 处硬切、之后 2.1 秒静音——已在 ASSET-NOTES.md 记录过，定位是 3 秒以上的施法读条，长度是原生 charge 的 3-4 倍，不能进 charge 槽。.002 同族（6.00s，包络峰值 1.13s）同理。"
+   },
+   {
+    "db_path": "psfx.magic-signs.circle.v1.*.intro",
+    "reason": "八个 school 的 circle intro 全部是 5.63s，前置静音 0.445-1.285s（enchantment 那条要等 1.29 秒才出声），包络峰值统一落在 2.19-3.29s。也就是说主峰比原生 charge 的整条时长还晚。circle 家族的设计尺度是「大型仪式法阵」，与 1.5 秒的手势蓄力完全不是一个量级。要用 magic-signs 做 charge 只能用 rune 分支（3.5s，主峰 0.55-0.82s）。"
+   },
+   {
+    "db_path": "psfx.magic-signs.circle.v1.*.complete / rune.v1.*.complete / *.intro-fade",
+    "reason": "complete 是 intro+loop+outro 预渲染成一整条（circle 12.00s / rune 11.00s），intro-fade 是 intro 加一条超长淡出（全部 14.00s，尾部纯静音 3.07-6.69s）。都是分钟级演出用的整段素材，长度是原生 charge 的 6-9 倍，且 intro-fade 有一半以上是空的。charge 槽不可用。"
+   },
+   {
+    "db_path": "psfx.magic-signs.rune.v1.enchantment.loop",
+    "reason": "不是 charge 候选，但必须留档的陷阱：这条 loop 整体 RMS 只有 -37.6dB，而其余七个 school 的 rune loop 是 -8.9 ~ -14.5dB，低了 23-29dB。circle 分支的 enchantment loop 同样是 -37.9dB。如果规则层按 school 成套取 intro+loop，切到 enchantment 时 passive 会几乎完全听不见，而玩家会以为是模组坏了。用 enchantment.intro 时必须换别的 loop。"
+   },
+   {
+    "db_path": "psfx.incantations.masculine.001.* / masculine.002.* / feminine.001.*（共 270 条）",
+    "reason": "全部是**真人吟唱**（频谱上有清晰的基频谐波梳与共振峰，音节团之间夹着摩擦音宽频爆发，是无可争议的人声），且太长：总时长 5.31-8.22s，有效声 1.76-5.20s。以最短的 masculine/002/dry/harm/005 为例——5.36s 总长里人声只有 0.42-1.00s 和 1.15-1.90s 两句，2.30s 后是 3.06 秒纯静音（57% 是空的）。即便截断，2.3 秒的人声也超出原生 charge 的 1.41-1.92s。三个处理分支的实测差别：dry = 人声在 2.28s 处直接硬停（无混响尾）；reverb = 同一条录音加空间混响，尾巴拖到 2.8s；demonic = dry 加一层降八度并把低中频拖到 3.3s（有效段比 dry 长 1.0 秒）。⚠ 语言问题：频谱只能证明是人声，**证明不了是哪种语言**——本项目是中文桌面，这 270 条在正式接入前必须上机试听确认不是可辨识的英语（先例：jb2a.ui.miss.white 是烘死的英文字）。已记录的 psfx.incantations.masculine.001.reverb.harm.001 那一行同样带这个未决问题。"
+   },
+   {
+    "db_path": "incantations/older-female/fire-spells/*/*-rushed.ogg（10 条，无 DB 路径）",
+    "reason": "时长上是全库最贴 charge 的一组——1.00-2.00s，onset 5-35ms，有效声 0.88-1.69s，正好落在原生 charge 的 1.41-1.92s 附近（例：ignis-imperium-rushed 1.52s / 有效 1.13s / 尾部 0.37s 纯静音，实测最后 300ms 是精确的数字零，没有 end-of-file 咔哒）。但两条都是硬性阻断：**(a) 没有 Sequencer DB 路径**——psfx_sequencer.js 第 2204 行起整个 older-female 区块被注释掉了（作者标了 TO DO Variations pending），只能用裸文件路径 modules/psfx-patreon/library/incantations/older-female/fire-spells/... 引用，绕过 Sequencer.Database，与本模组「一律走 db 路径」的做法冲突，且模组升级后可能被作者改名。**(b) 是老年女性真人念拉丁语咒**——目录名就是台词（ardor exsurge / concrema omnia / ignis imperium / pyri dominatus …），频谱上能清楚看到成串的元音谐波梳与句末下行音高滑落，确认是真人朗读而非合成。拉丁语在中文桌面上比英语好接受（听起来就是「咒语」），但仍是固定的老年女声，男性/怪物 NPC 施法时会出戏，而且十条台词全是火系专属，套到 frost/oblivion 上语义就错了。"
+   },
+   {
+    "db_path": "incantations/older-female/fire-spells/*/*-commanding.ogg / *-slow.ogg / *-whisper.ogg（29 条）",
+    "reason": "同一批拉丁语女声的另外三种念法，2.00-5.00s，有效声 1.51-4.45s，比 rushed 分支长一倍以上，超出 charge 档；slow 分支里 pyri-dominatus-slow 的包络峰值甚至在 4.13s。DB 未注册的问题与 rushed 相同。"
+   }
+  ]
+ }
+]
