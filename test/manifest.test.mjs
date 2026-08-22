@@ -107,3 +107,53 @@ test("resolver 与 armory 不得引用 Foundry 全局或 Math.random", async () 
     assert.ok(!banned.test(stripped), `${f} 引用了 Foundry 全局或 Math.random`);
   }
 });
+
+/**
+ * 面向用户的 `ui.notifications.*` 文案一律走 `game.i18n`，两份语言文件的键集合又由上面
+ * 那条用例钉死——三者合起来才是「i18n 补齐」这个交付项的守卫。
+ *
+ * 光靠人眼很难守住：Task 15 交付时 scripts/player/coverage 同一个文件里 4 处走 i18n、
+ * 3 处硬编码中文模板串，全部测试照样全绿。判据取「参数里出现的每一个字符串字面量都必须
+ * 是 CANIM. 开头的 i18n 键」——模板串（`${...}`）与任何裸中文/英文文案都会因此落网，
+ * 而 `game.i18n.format(key, {...})` 的数据对象里只有标识符、没有字符串字面量。
+ */
+test("面向用户的 ui.notifications 文案一律走 game.i18n，不得硬编码", () => {
+  /** 从 src[open]（"("）开始取到配对的 ")"，跳过字符串内容。 */
+  function argText(src, open) {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      const c = src[i];
+      if (c === '"' || c === "'" || c === "`") {
+        const q = c; i++;
+        while (i < src.length && src[i] !== q) { if (src[i] === "\\") i++; i++; }
+        continue;
+      }
+      if (c === "(") depth++;
+      else if (c === ")") { depth--; if (depth === 0) return src.slice(open + 1, i); }
+    }
+    throw new Error("括号不配对");
+  }
+
+  const offenders = [];
+  let sites = 0;
+  for (const f of walk(join(ROOT, "scripts"))) {
+    const src = readFileSync(f, "utf8");
+    const re = /ui\.notifications\.(info|warn|error)\(/g;
+    for (const m of src.matchAll(re)) {
+      // 跳过注释里引用的调用（armory/travel.mjs 里引了一句 Sequencer 的报错）
+      const lineStart = src.lastIndexOf("\n", m.index) + 1;
+      const line = src.slice(lineStart, m.index);
+      if (line.trimStart().startsWith("*") || line.includes("//")) continue;
+      sites++;
+      const arg = argText(src, m.index + m[0].length - 1);
+      const where = `${f}: ui.notifications.${m[1]}(${arg.slice(0, 60)}…`;
+      if (!arg.includes("game.i18n.")) { offenders.push(`${where}（没有走 game.i18n）`); continue; }
+      for (const lit of arg.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|`([^`\\]*(?:\\.[^`\\]*)*)`/g)) {
+        const body = lit[1] ?? lit[2] ?? lit[3] ?? "";
+        if (!body.startsWith("CANIM.")) offenders.push(`${where}（字面量 ${JSON.stringify(body)} 不是 i18n 键）`);
+      }
+    }
+  }
+  assert.ok(sites >= 8, `扫到的 ui.notifications 调用点只有 ${sites} 个，扫描逻辑可能失效了`);
+  assert.deepEqual(offenders, [], offenders.join("\n"));
+});

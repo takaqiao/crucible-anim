@@ -27,9 +27,11 @@ import {ARMORY} from "../scripts/armory/index.mjs";
 import {resolve, resolveEffect} from "../scripts/resolver/resolve.mjs";
 import {snapshotAction} from "../scripts/trigger/snapshot.mjs";
 import {NO_PERSIST, GROUP_FX} from "../scripts/armory/persist.mjs";
-import {previewActionPlan, previewEffectPlan, parsePreviewArgs, installReplayMenu}
-  from "../scripts/player/preview.mjs";
+import {previewActionPlan, previewEffectPlan, parsePreviewArgs, installReplayMenu,
+        PREVIEW_FIXTURES, ALWAYS_SILENT} from "../scripts/player/preview.mjs";
 import {planOf} from "../scripts/trigger/dispatch.mjs";
+import {TARGET_REGION} from "../tools/dump-fixtures.mjs";
+import {SLOTS} from "../scripts/const.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
@@ -210,7 +212,7 @@ test("installReplayMenu：visible 与 dispatch.mjs 共享的 planOf 同源——
   const withoutPlan = {id: "m2", flags: {crucible: {}}};
   const world = stubHooksAndMessages([withPlan, withoutPlan]);
   try {
-    installReplayMenu();
+    installReplayMenu(() => true);
     let pushed = null;
     world.fire("getChatMessageContextOptions", {}, {push: opt => { pushed = opt; }});
     assert.ok(pushed, "必须真的注册了一条菜单项");
@@ -227,7 +229,7 @@ test("installReplayMenu：onClick 不得写 message._vfxPlayback——那个字�
   const msg = {id: "m3", flags: {crucible: {metadata: {cav: {v: 1, cues: []}}}}};
   const world = stubHooksAndMessages([msg]);
   try {
-    installReplayMenu();
+    installReplayMenu(() => true);
     let pushed = null;
     world.fire("getChatMessageContextOptions", {}, {push: opt => { pushed = opt; }});
     assert.equal(msg._vfxPlayback, undefined, "调用前不该有这个字段");
@@ -240,21 +242,39 @@ test("installReplayMenu：onClick 不得写 message._vfxPlayback——那个字�
 });
 
 /* -------------------------------------------- */
-/*  installPreview：/canim-preview 聊天命令 + api  */
+/*  installPreview / installPreviewCommand        */
 /* -------------------------------------------- */
 
-function stubInstallPreviewWorld() {
-  const handlers = {};
-  const prev = {Hooks: globalThis.Hooks, game: globalThis.game};
+/**
+ * v14 的聊天输入是 ProseMirror，`processMessage()` 转发给钩子与 `parse()` 的都是 HTML。
+ * `ChatLog.parse()` 对**非 isRoll** 的命令匹配的不是原串，而是剥掉最外层 `<p>` 之后的
+ * `html`（foundry client/applications/sidebar/tabs/chat.mjs:812 与 820-826）。
+ * 这个 helper 复刻那一行；`test/source-tables.test.mjs` 有一条守卫把它钉在真源码上，
+ * 免得核心改了剥法之后这里还在按老规矩自测自嗨。
+ */
+export const CORE_HTML_STRIP = message => message.replace(/^<p>|<\/p>$/gi, "");
+
+function stubChatWorld({withApi = true} = {}) {
+  const prev = {game: globalThis.game, foundry: globalThis.foundry, ui: globalThis.ui};
   const mod = {};
-  globalThis.Hooks = {on: (n, fn) => { (handlers[n] ??= []).push(fn); }};
-  globalThis.game = {modules: {get: id => (id === "crucible-anim" ? mod : null)}};
+  const CHAT_COMMANDS = {};
+  const notices = [];
+  globalThis.game = {
+    modules: {get: id => (id === "crucible-anim" ? mod : null)},
+    i18n: {localize: k => k, format: (k, d) => `${k}:${JSON.stringify(d)}`}
+  };
+  globalThis.foundry = {applications: {sidebar: {tabs: {ChatLog: {CHAT_COMMANDS}}}}};
+  globalThis.ui = {notifications: {warn: m => notices.push(m), info: m => notices.push(m)}};
+  if (!withApi) mod.api = undefined;
   return {
-    handlers, mod,
-    fire: (name, ...args) => {
-      let ret;
-      for (const fn of handlers[name] ?? []) ret = fn(...args);
-      return ret;
+    mod, CHAT_COMMANDS, notices,
+    entry: () => CHAT_COMMANDS["canim-preview"],
+    /** 走一遍核心 parse() 的判据：剥 <p> → 匹配 rgx → 调 fn。 */
+    send: (message) => {
+      const entry = CHAT_COMMANDS["canim-preview"];
+      const match = CORE_HTML_STRIP(message).match(entry.rgx);
+      if (!match) return null;                     // 没匹配上 = 核心会继续往下找别的命令
+      return entry.fn.call({}, "canim-preview", match, {}, {});
     },
     restore: () => { for (const [k, v] of Object.entries(prev)) globalThis[k] = v; }
   };
@@ -262,35 +282,259 @@ function stubInstallPreviewWorld() {
 
 test("installPreview：把 preview() 挂到 game.modules.get(MODULE_ID).api 上", async () => {
   const {installPreview} = await import("../scripts/player/preview.mjs");
-  const world = stubInstallPreviewWorld();
+  const world = stubChatWorld();
   try {
     installPreview(deps());
     assert.equal(typeof world.mod.api.preview, "function");
   } finally { world.restore(); }
 });
 
-test("installPreview：/canim-preview 拦截消息（返回 false）并转发解析后的参数", async () => {
-  const {installPreview} = await import("../scripts/player/preview.mjs");
-  const world = stubInstallPreviewWorld();
+test("installPreviewCommand：注册进 ChatLog.CHAT_COMMANDS，而不是挂 chatMessage 钩子", async () => {
+  const {installPreviewCommand, PREVIEW_COMMAND_KEY} = await import("../scripts/player/preview.mjs");
+  const world = stubChatWorld();
   try {
-    let called = null;
+    assert.equal(installPreviewCommand(), true);
+    const entry = world.CHAT_COMMANDS[PREVIEW_COMMAND_KEY];
+    assert.ok(entry, "必须真的写进 CHAT_COMMANDS");
+    assert.ok(entry.rgx instanceof RegExp);
+    assert.equal(typeof entry.fn, "function");
+    // isRoll 必须为假（不设即为假）：parse() 只有非 isRoll 的分支才拿剥过 <p> 的 html 去
+    // 匹配，置真会改成拿 textContent，我们的 rgx 就对不上了。
+    assert.ok(!entry.isRoll);
+  } finally { world.restore(); }
+});
+
+test("installPreviewCommand：ProseMirror 送来的 <p> 包裹形态能匹配，参数照常解析，并吞掉消息", async () => {
+  const {installPreview, installPreviewCommand} = await import("../scripts/player/preview.mjs");
+  const world = stubChatWorld();
+  try {
+    installPreviewCommand();
     installPreview(deps());
+    let called = null;
     world.mod.api.preview = opts => { called = opts; return Promise.resolve(); };
-    const ret = world.fire("chatMessage", {}, "/canim-preview slot:persist gap:500");
-    assert.equal(ret, false, "命令必须拦截默认的聊天发送流程");
+    const ret = world.send("<p>/canim-preview slot:persist gap:500</p>");
+    assert.equal(ret, false, "fn 必须返回 false，否则消息会真的发进聊天（chat.mjs:886-887）");
     assert.deepEqual(called, {slot: "persist", gap: 500});
   } finally { world.restore(); }
 });
 
-test("installPreview：不是本命令的普通聊天消息放行（返回 true），不触发预览", async () => {
-  const {installPreview} = await import("../scripts/player/preview.mjs");
-  const world = stubInstallPreviewWorld();
+test("installPreviewCommand：不带参数、以及裸文本（非 ProseMirror）两种形态都匹配", async () => {
+  const {installPreview, installPreviewCommand} = await import("../scripts/player/preview.mjs");
+  const world = stubChatWorld();
   try {
-    let called = false;
+    installPreviewCommand();
     installPreview(deps());
-    world.mod.api.preview = () => { called = true; return Promise.resolve(); };
-    const ret = world.fire("chatMessage", {}, "大家好");
-    assert.equal(ret, true);
+    const seen = [];
+    world.mod.api.preview = opts => { seen.push(opts); return Promise.resolve(); };
+    assert.equal(world.send("<p>/canim-preview</p>"), false);
+    assert.equal(world.send("/canim-preview slot:cast"), false);
+    assert.deepEqual(seen, [{}, {slot: "cast"}]);
+  } finally { world.restore(); }
+});
+
+test("回归：Task 15 交付版的 `message.startsWith(\"/canim-preview\")` 对 v14 的 HTML 判负", () => {
+  // 这是 C 组缺陷的根：钩子拿到的是 "<p>/canim-preview …</p>"，startsWith 永远为假 →
+  // 放行 → parse() 判 invalid command → 弹「Invalid command」。命令一次都没触发过。
+  const raw = "<p>/canim-preview slot:persist</p>";
+  assert.equal(raw.startsWith("/canim-preview"), false,
+    "如果这条都为真，说明 v14 的输入形态变了，C 组的修法要重新评估");
+  assert.equal(CORE_HTML_STRIP(raw).startsWith("/canim-preview"), true);
+});
+
+test("installPreviewCommand：普通聊天消息不匹配这条命令的 rgx", async () => {
+  const {installPreviewCommand} = await import("../scripts/player/preview.mjs");
+  const world = stubChatWorld();
+  try {
+    installPreviewCommand();
+    let called = false;
+    world.mod.api = {preview: () => { called = true; return Promise.resolve(); }};
+    for (const msg of ["<p>大家好</p>", "<p>/canim-previewX</p>", "<p>/roll 1d20</p>",
+                       "<p>说到 /canim-preview 这个命令</p>"]) {
+      assert.equal(world.send(msg), null, `"${msg}" 不该匹配 /canim-preview`);
+    }
     assert.equal(called, false);
+  } finally { world.restore(); }
+});
+
+test("installPreviewCommand：模组未成功挂载（api.preview 不存在）时给提示并仍然吞掉消息", async () => {
+  const {installPreviewCommand} = await import("../scripts/player/preview.mjs");
+  const world = stubChatWorld({withApi: false});
+  try {
+    installPreviewCommand();
+    const ret = world.send("<p>/canim-preview</p>");
+    assert.equal(ret, false, "不能放行——放行会让核心抛「Invalid command」");
+    assert.deepEqual(world.notices, ["CANIM.Preview.Unavailable"]);
+  } finally { world.restore(); }
+});
+
+test("installPreviewCommand：ChatLog.CHAT_COMMANDS 不可用时优雅退化，不抛错", async () => {
+  const {installPreviewCommand} = await import("../scripts/player/preview.mjs");
+  const prev = globalThis.foundry;
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    globalThis.foundry = {};
+    assert.equal(installPreviewCommand(), false);
+  } finally { globalThis.foundry = prev; console.warn = realWarn; }
+});
+
+
+/* -------------------------------------------- */
+/*  F 组：全兵库预览覆盖率                        */
+/* -------------------------------------------- */
+
+/** 与 runPreview 里的取用方式逐字一致：persist 走 previewEffectPlan，其余走 fixture。 */
+function previewOf(slot, rule) {
+  return slot === "persist"
+    ? previewEffectPlan(rule, target(), ENV, deps())
+    : previewActionPlan(rule, slot, origin(), target(), ENV, deps(),
+                        PREVIEW_FIXTURES[`${slot}/${rule.id}`] ?? {});
+}
+
+/**
+ * 【F 组 · 主守卫】遍历整张兵库，断言除 ALWAYS_SILENT 之外每条规则都能预览出**含自己
+ * 那条 cue** 的非空计划。
+ *
+ * 为什么必须有这条：预览宏是渲染层唯一的人工验收手段。交付时实测 28/40 非空，扣掉
+ * `persist/status.silent` 是 28/39——aftermath 整槽 0/5，也就是治疗/击杀/士气/地面残留
+ * 这四个「实战中最难按需触发」的效果，上机前谁都没见过一眼。
+ *
+ * 这条守卫也自动约束以后新增的规则：加一条规则却没给它配 fixture，这里直接红。
+ */
+test("F：全兵库每条规则（ALWAYS_SILENT 除外）都能预览出含自己 cue 的非空计划", () => {
+  const gaps = [];
+  let checked = 0;
+  for (const slot of SLOTS) {
+    for (const rule of ARMORY[slot]) {
+      const key = `${slot}/${rule.id}`;
+      if (ALWAYS_SILENT.includes(key)) continue;
+      checked++;
+      const plan = previewOf(slot, rule);
+      if (!plan) { gaps.push(key); continue; }
+      // 「非空」还不够：必须真的含这条规则自己的 cue，否则就是别的槽冒名顶替。
+      if (!plan.cues.some(c => c.rule === rule.id)) gaps.push(`${key}（计划非空但不含自己的 cue）`);
+    }
+  }
+  assert.deepEqual(gaps, [], `${gaps.length} 条规则预览不出来`);
+  assert.equal(checked, 36,
+    "兵库规则条数变了：确认新规则要么配了 fixture、要么进了 ALWAYS_SILENT，再改这个数字");
+});
+
+/**
+ * 【F 组 · 反向守卫】ALWAYS_SILENT 不是免检通道：拿**每一份** fixture 轮流喂给这几条
+ * 规则，它们必须在任何一份下都仍然为空。某条其实能出画面 = 它被错误地藏进了豁免表。
+ */
+test("F：ALWAYS_SILENT 里的规则在任何一份 fixture 下都仍然为空（豁免不是免检）", () => {
+  const wrong = [];
+  const fixtures = [{}, ...Object.values(PREVIEW_FIXTURES)];
+  for (const key of ALWAYS_SILENT) {
+    const [slot, id] = [key.slice(0, key.indexOf("/")), key.slice(key.indexOf("/") + 1)];
+    const rule = ruleIn(slot, id);
+    assert.ok(rule, `ALWAYS_SILENT 里的 ${key} 在兵库里不存在`);
+    if (slot === "persist") {
+      if (previewEffectPlan(rule, target(), ENV, deps())) wrong.push(key);
+      continue;
+    }
+    for (const f of fixtures) {
+      if (previewActionPlan(rule, slot, origin(), target(), ENV, deps(), f)) {
+        wrong.push(`${key}（fixture ${JSON.stringify(f)}）`);
+        break;
+      }
+    }
+  }
+  assert.deepEqual(wrong, [], "这些规则其实能出画面，不该留在 ALWAYS_SILENT 里");
+});
+
+/**
+ * 【F 组 · 与简报的偏差】简报把 `cast/strike.melee.heavy`、`travel/target.blast`、
+ * `aftermath/generic.aftermath` 列成「快照多样性不够」的缺口并给了快照要求。实际这三条
+ * 的 `build` 是**无条件** `() => null`，分类条件写在 `when()` 里——任何 fixture 都救不了，
+ * 它们与 status.silent 同类。这条测试直接读兵库对象钉住这个事实，免得将来有人照着简报
+ * 又去给它们配 fixture。
+ */
+test("F：三条被简报误列为「缺 fixture」的规则，其 build() 是无条件恒空", () => {
+  for (const key of ["cast/strike.melee.heavy", "travel/target.blast",
+                     "aftermath/generic.aftermath"]) {
+    const [slot, id] = [key.slice(0, key.indexOf("/")), key.slice(key.indexOf("/") + 1)];
+    const rule = ruleIn(slot, id);
+    assert.ok(rule, key);
+    assert.equal(rule.build.length, 0, `${key} 的 build() 收参数了，可能不再是恒空`);
+    assert.equal(rule.build(), null, `${key} 的 build() 不再恒返回 null`);
+    assert.ok(ALWAYS_SILENT.includes(key), `${key} 必须在 ALWAYS_SILENT 里`);
+  }
+});
+
+/**
+ * 【F 组 · 反伪造】fixture 里的模板几何必须与 tools/dump-fixtures.mjs 的 TARGET_REGION
+ * 一致——那张表的 angle 由 test/source-tables.test.mjs 直接解析 crucible 的
+ * `TARGET_TYPES.<key>.region.angle` 核对。preview 侧不能 import 那个工具（它拉了
+ * node:fs / classic-level），只能抄一份数值，所以这里把两份钉在一起。
+ */
+test("F：PREVIEW_FIXTURES 的模板几何与 TARGET_REGION 逐字段一致（不是现编的）", () => {
+  assert.deepEqual(PREVIEW_FIXTURES["travel/spell.gesture.ray"].region, TARGET_REGION.ray);
+  assert.deepEqual(PREVIEW_FIXTURES["travel/spell.gesture.cone"].region, TARGET_REGION.cone);
+  assert.deepEqual(PREVIEW_FIXTURES["aftermath/aftermath.groundResidue"].region,
+                   TARGET_REGION.cone);
+});
+
+/**
+ * 【F 组 · 逐条】aftermath 四条各自要的信号必须真的经 snapshotAction 推导出来，
+ * 而不是被直接塞进快照。断言落在**产出的 cue 与它依赖的字段**上。
+ */
+test("F：aftermath 四条各自被自己的 fixture 命中，且 cue 落在 aftermath 槽", () => {
+  for (const id of ["aftermath.healing", "aftermath.kill", "aftermath.morale",
+                    "aftermath.groundResidue"]) {
+    const rule = ruleIn("aftermath", id);
+    const plan = previewOf("aftermath", rule);
+    assert.ok(plan, `${id} 预览不出来`);
+    const own = plan.cues.filter(c => c.rule === id);
+    assert.ok(own.length > 0, `${id} 的计划里没有它自己的 cue`);
+    for (const c of own) assert.equal(c.slot, "aftermath");
+    assert.ok(own.every(c => typeof c.file === "string" && c.file.length > 0),
+      `${id} 的 cue 没有素材路径`);
+  }
+});
+
+test("F：fixture 走的是动作层而不是直接改快照——healed/damage/effects 由事件流推导", () => {
+  // 这是「不许伪造快照」的落点：如果 previewActionPlan 改成直接覆盖 snapshot 字段，
+  // 下面这些 snapshotAction 才会算出来的派生值就不再被行使，实战里照样不出画面。
+  const s = snapshotAction(probeAction(), ENV);
+  assert.equal(s.targets[0].healed, 0, "前提：默认快照没有治疗");
+  assert.equal(s.targets[0].damage, null, "前提：默认快照没有伤害");
+  assert.deepEqual(s.targets[0].effects, [], "前提：默认快照没有状态");
+
+  // 反过来，配了 fixture 的三条必须真的走通 snapshotAction 的推导，
+  // 表现为 build() 里那三个守卫（healed>0 / effects.includes("dead") / damage 非空）放行。
+  for (const id of ["aftermath.healing", "aftermath.kill", "aftermath.morale"]) {
+    assert.ok(previewOf("aftermath", ruleIn("aftermath", id)),
+      `${id} 的信号没能经事件流推导出来`);
+  }
+});
+
+/* -------------------------------------------- */
+/*  A1：重放菜单的自我禁用短路                    */
+/* -------------------------------------------- */
+
+test("installReplayMenu：模组未激活（isActive 为假）时菜单项不可见，即便卡上还留着旧 plan", () => {
+  const withPlan = {id: "m1", flags: {crucible: {metadata: {cav: {v: 1, cues: []}}}}};
+  const world = stubHooksAndMessages([withPlan]);
+  try {
+    installReplayMenu(() => false);
+    let pushed = null;
+    world.fire("getChatMessageContextOptions", {}, {push: opt => { pushed = opt; }});
+    assert.ok(pushed, "提前注册意味着条目照样在册（首渲染时冻结，之后没机会补）");
+    assert.equal(pushed.visible({dataset: {messageId: "m1"}}), false,
+      "自检失败/挂载出错时，上一场会话留在旧卡上的 plan 不该让这条菜单亮起来");
+  } finally { world.restore(); }
+});
+
+test("installReplayMenu：拿不到 isActive 时按不可用处理（fail-closed）", () => {
+  const withPlan = {id: "m1", flags: {crucible: {metadata: {cav: {v: 1, cues: []}}}}};
+  const world = stubHooksAndMessages([withPlan]);
+  try {
+    installReplayMenu();                           // 忘了传
+    let pushed = null;
+    world.fire("getChatMessageContextOptions", {}, {push: opt => { pushed = opt; }});
+    assert.equal(pushed.visible({dataset: {messageId: "m1"}}), false);
   } finally { world.restore(); }
 });

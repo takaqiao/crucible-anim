@@ -2,10 +2,14 @@
  * Task 15：persist 生命周期缺的三个钩子 + `resyncPersist`/`isPlayingPersist`。
  *
  * Task 14 只落地了 createActiveEffect / deleteActiveEffect 两端。缺的三条正是
- * `worldPersist:false` 这个选择的收益侧（见 effects.mjs 头部注释）：GM 在 token HUD
- * 上 toggle 状态（updateActiveEffect）、客户端重载/切场景回来/中途进场
+ * `worldPersist:false` 这个选择的收益侧（见 effects.mjs 头部注释）：在**角色卡效果页**
+ * 上停用/启用状态（updateActiveEffect 的 disabled 翻转——**不是** token HUD，HUD 走的
+ * 是 create/delete，见 effects.mjs 里那条订正注释）、客户端重载/切场景回来/中途进场
  * （sequencerEffectManagerReady → resyncPersist）、带状态的 token 被拖进场景
  * （createToken）。
+ *
+ * 修复轮 1 追加：A 组（钩子提前到 init + 两种到达顺序）、B 组（resync 绕过动画开关）、
+ * D 组（空测试）、E1（让路期的幂等）、E3（让路期内被停用）。
  *
  * 复用 persist-lane.test.mjs 的 stubFoundry 思路，但额外装一个会记录调用、且支持
  * `getEffects` 的 Sequencer 桩——`isPlayingPersist` 的幂等性正是靠这个方法判断。
@@ -20,7 +24,8 @@ import {installFakeSequencer} from "../tools/fake-sequencer.mjs";
 import {tokenPlaceable} from "../tools/token-mocks.mjs";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
-import {installEffectTriggers, resyncPersist} from "../scripts/trigger/effects.mjs";
+import {installEffectTriggers, installPersistResync, flushPersistResync, resyncPersist}
+  from "../scripts/trigger/effects.mjs";
 import {queueDepth} from "../scripts/trigger/dispatch.mjs";
 import {PERSIST_LEAD_MS} from "../scripts/const.mjs";
 
@@ -45,7 +50,8 @@ const afterGrace = () => bounded(sleep(PERSIST_LEAD_MS + 150));
  *   · `game.settings.get` 需要能回答 crucible 的 enableVFX 与本模组的 enabled/volume
  *     三个键（`animationsEnabled()`/`getSetting()` 都会读）。
  */
-function stubFoundry({tokens, effectAlive = () => true} = {}) {
+function stubFoundry({tokens, effectAlive = () => true, effectActive = () => true,
+                     enabled = true, crucibleVFX = true} = {}) {
   const prev = {
     Hooks: globalThis.Hooks, Actor: globalThis.Actor, game: globalThis.game,
     canvas: globalThis.canvas, fromUuidSync: globalThis.fromUuidSync,
@@ -55,12 +61,21 @@ function stubFoundry({tokens, effectAlive = () => true} = {}) {
   const playing = [];               // {origin, object} 一旦"播出"就记进这里
   globalThis.Hooks = {on: (n, fn) => { (handlers[n] ??= []).push(fn); }};
   globalThis.Actor = class FakeActor {};
+  // animationsEnabled() 读两个键：crucible 的 enableVFX 与本模组的 enabled。
+  // 两者都要能单独关掉——B 组修的就是「关掉之后 resync 仍然补满全场光环」。
   globalThis.game = {
-    settings: {get: (ns, key) => (ns === "crucible" ? true : key !== "debug")}
+    settings: {get: (ns, key) => {
+      if (ns === "crucible") return crucibleVFX;
+      if (key === "enabled") return enabled;
+      return key !== "debug";
+    }}
   };
   globalThis.canvas = {dimensions: {size: 100}, ready: true, tokens: {placeables: tokens ?? []}};
+  // ActiveEffect 侧必须带上 `active`：让路期结束后的存活复检看的是「还在**且仍然生效**」
+  // （effects.mjs 的 E3 修复），返回一个没有 active 的裸对象会让所有 persist 播放
+  // 无条件夭折，测出来的绿全是假的。
   globalThis.fromUuidSync = uuid => (uuid.includes("ActiveEffect")
-    ? (effectAlive(uuid) ? {uuid} : null)
+    ? (effectAlive(uuid) ? {uuid, active: effectActive(uuid)} : null)
     : {uuid, object: (tokens ?? [])[0]});
   globalThis.Sequencer = {
     EffectManager: {
@@ -115,7 +130,17 @@ test("updateActiveEffect：disabled 翻真时结束光环，翻假（重新生�
   } finally { world.restore(); fake.restore(); }
 });
 
-test("updateActiveEffect：非 disabled 字段更新不触发任何播放/清理", async () => {
+/**
+ * 【D 组修复】原版只 `await sleep(5)`，而 persist 播放要先过 PERSIST_LEAD_MS(500ms)
+ * 的让路期才会碰 Sequencer——5ms 之后无论实现对错都是 0 条序列，这条用例恒绿。
+ * 变异验证：删掉 effects.mjs 里 `if (!("disabled" in changed)) return;` 之后原版照样绿，
+ * 现在必须红。
+ *
+ * 同时补一条对照：同一个桩、同一个 effect，只把 changed 换成 `{disabled: false}`
+ * 就必须真的播出一份——否则「什么都没播」可能只是因为这条路径整个被别的原因堵死了
+ * （桩坏了、规则不匹配、让路期没等够），断言 0 就成了自欺。
+ */
+test("updateActiveEffect：非 disabled 字段更新不触发任何播放/清理（等满让路期）", async () => {
   const fake = installFakeSequencer();
   const token = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
   const world = stubFoundry({tokens: [token]});
@@ -125,9 +150,15 @@ test("updateActiveEffect：非 disabled 字段更新不触发任何播放/清理
     let endCalled = false;
     globalThis.Sequencer.EffectManager.endEffects = async () => { endCalled = true; };
     world.fire("updateActiveEffect", effect, {name: "改了名字"});
-    await sleep(5);
-    assert.equal(fake.sequences.length, 0);
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0, "只改了名字，不该有任何持续特效播出");
     assert.equal(endCalled, false);
+
+    // 对照组：同一条路径在 disabled 翻转时必须真的播出，证明上面的 0 不是死路。
+    world.fire("updateActiveEffect", effect, {disabled: false});
+    await afterGrace();
+    assert.equal(fake.sequences.length, 1,
+      "对照组失败：这条路径本身就播不出来，上面那个 0 什么都没证明");
   } finally { world.restore(); fake.restore(); }
 });
 
@@ -176,19 +207,92 @@ test("createToken：object 尚未渲染完成（null）时静默跳过，不抛�
 /*  sequencerEffectManagerReady → resyncPersist  */
 /* -------------------------------------------- */
 
-test("sequencerEffectManagerReady：接线后自动触发 resyncPersist，补齐场上全部 token", async () => {
-  const fake = installFakeSequencer();
+/** 场上两个 token 各带一个状态。 */
+function twoLoadedTokens() {
   const t1 = tokenPlaceable({id: "t1", center: {x: 100, y: 100}});
   const t2 = tokenPlaceable({id: "t2", center: {x: 200, y: 200}});
   Object.assign(t1, {actor: {effects: [activeEffect(t1, "burning")]}});
   Object.assign(t2, {actor: {effects: [activeEffect(t2, "chilled")]}});
-  const world = stubFoundry({tokens: [t1, t2]});
+  return [t1, t2];
+}
+
+/**
+ * 【A2 · 顺序一】deps 先装配好，钩子后到——常规顺序。
+ *
+ * 注意注册用的是 `installPersistResync`（init 段）而不是 `installEffectTriggers`：
+ * `sequencerEffectManagerReady` 每次画布加载只发一次，而 Sequencer 在 canvas.ready 之后
+ * 很快就发（sequencer.js:30875-30879 → 11953），核心的 ready 却排在
+ * `await documentIndex.index()` 与 `await canvas.initializing` 之后（game.mjs:763-779）。
+ * 挂在 ready 里 = 这一次画布加载的钩子已经播完，症状是「重载/切场景回来光环全没了」。
+ */
+test("sequencerEffectManagerReady：deps 先就绪时，钩子照常触发 resyncPersist 补齐全场", async () => {
+  const fake = installFakeSequencer();
+  const world = stubFoundry({tokens: twoLoadedTokens()});
   try {
-    installEffectTriggers(deps());
+    const d = deps();
+    installPersistResync(() => d);                 // deps 已经在手
+    installEffectTriggers(d);
     world.fire("sequencerEffectManagerReady");
     await afterGrace();
     assert.equal(fake.sequences.length, 2, "场上两个各带一个状态的 token 必须各补一份光环");
   } finally { world.restore(); fake.restore(); }
+});
+
+/**
+ * 【A2 · 顺序二】钩子先到、deps 后装配好——这正是线上真实发生的顺序。
+ * 钩子那一刻必须记账而不是丢弃（本次画布加载不会再发第二次），
+ * 装配完成后由 main.mjs 调 `flushPersistResync()` 补跑。
+ */
+test("sequencerEffectManagerReady：钩子早于 deps 到达时记账，flushPersistResync 补跑一次", async () => {
+  const fake = installFakeSequencer();
+  const world = stubFoundry({tokens: twoLoadedTokens()});
+  try {
+    let live = null;
+    installPersistResync(() => live);              // deps 还没有
+    world.fire("sequencerEffectManagerReady");     // 钩子先到
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0, "deps 还没装配好，此刻不该播任何东西");
+
+    live = deps();                                 // main.mjs 的 state.deps = deps
+    installEffectTriggers(live);
+    assert.equal(flushPersistResync(), true, "必须认账：钩子先到过，得补跑一次");
+    await afterGrace();
+    assert.equal(fake.sequences.length, 2, "补跑之后场上两个 token 必须各补一份光环");
+
+    assert.equal(flushPersistResync(), false, "补跑是一次性的，不该重复触发");
+  } finally { world.restore(); fake.restore(); }
+});
+
+/**
+ * 【A · 自我禁用短路】自检失败/挂载抛错时 main.mjs 的 `liveDeps()` 恒为 null。
+ * 提前注册的钩子仍在册，必须自己什么都不做，并且**不会**被后来的 flush 蒙混过关。
+ */
+test("sequencerEffectManagerReady：模组被自检禁用（liveDeps 恒 null）时钩子自己短路", async () => {
+  const fake = installFakeSequencer();
+  const world = stubFoundry({tokens: twoLoadedTokens()});
+  try {
+    installPersistResync(() => null);              // state.active 恒 false 的效果
+    world.fire("sequencerEffectManagerReady");
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0);
+    assert.equal(flushPersistResync(), false, "拿不到 deps 时 flush 也必须是空操作");
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0);
+  } finally { world.restore(); fake.restore(); }
+});
+
+/**
+ * 【A · 回归】钩子的注册点必须是 `installPersistResync`（init），不能退回
+ * `installEffectTriggers`（ready）。只装 ready 那一半时，钩子一个都不该在册。
+ */
+test("回归：installEffectTriggers 不再注册 sequencerEffectManagerReady（它属于 init 段）", () => {
+  const world = stubFoundry({tokens: []});
+  try {
+    installEffectTriggers(deps());
+    assert.equal(world.handlers.sequencerEffectManagerReady, undefined,
+      "这个钩子必须由 installPersistResync 在 init 注册，否则每次画布加载都会错过它");
+    assert.ok(world.handlers.createActiveEffect?.length, "对照：ready 段的钩子照常在册");
+  } finally { world.restore(); }
 });
 
 test("resyncPersist：canvas 未就绪时直接跳过，不抛错", async () => {
@@ -211,5 +315,144 @@ test("resyncPersist：本地已经在放的（isPlayingPersist 命中）直接�
     await resyncPersist(deps(), {gridSize: 100});
     await afterGrace();
     assert.equal(fake.sequences.length, 0, "已经在播的状态不该被重新播放一次");
+  } finally { world.restore(); fake.restore(); }
+});
+
+
+/* -------------------------------------------- */
+/*  B 组：resyncPersist 必须受动画开关约束        */
+/* -------------------------------------------- */
+
+/**
+ * 【B 组】关掉「启用动画」（或 Crucible 的 enableVFX）之后，切场景 / F5 仍会给全场每个
+ * 带状态的 token 补满光环，而且此后只能靠移除状态才消得掉——因为 resync 那条路上
+ * 一个 `animationsEnabled()` 都没有。闸现在落在唯一入口 `playPersist` 上。
+ *
+ * 三条一起测：本模组开关、Crucible 的 enableVFX、以及「开着的时候确实会播」的对照组。
+ * 少了对照组，两条 0 断言可以被「把 resync 整个删掉」这种变异蒙混过去。
+ */
+for (const [label, opts] of [
+  ["本模组的「启用动画」关闭", {enabled: false}],
+  ["Crucible 的 enableVFX 关闭", {crucibleVFX: false}]
+]) {
+  test(`resyncPersist：${label}时一份光环都不补`, async () => {
+    const fake = installFakeSequencer();
+    const world = stubFoundry({tokens: twoLoadedTokens(), ...opts});
+    try {
+      await resyncPersist(deps(), ENV);
+      await afterGrace();
+      assert.equal(fake.sequences.length, 0,
+        "动画开关关闭时 resync 仍然补满了全场光环——而且此后只能靠移除状态才消得掉");
+    } finally { world.restore(); fake.restore(); }
+  });
+}
+
+test("resyncPersist：对照组——开关都开着时同一批 token 确实会补上光环", async () => {
+  const fake = installFakeSequencer();
+  const world = stubFoundry({tokens: twoLoadedTokens()});
+  try {
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(fake.sequences.length, 2,
+      "对照组失败：这条路径本身就播不出来，上面两条 0 断言什么都没证明");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("createToken / updateActiveEffect：动画开关关闭时同样不播（闸在唯一入口上）", async () => {
+  const fake = installFakeSequencer();
+  const [t1] = twoLoadedTokens();
+  const world = stubFoundry({tokens: [t1], enabled: false});
+  try {
+    installEffectTriggers(deps());
+    world.fire("createToken", {parent: {isView: true}, object: t1});
+    world.fire("createActiveEffect", Object.assign(activeEffect(t1), {parent: world.actor}));
+    world.fire("updateActiveEffect",
+      Object.assign(activeEffect(t1), {parent: world.actor}), {disabled: false});
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0);
+  } finally { world.restore(); fake.restore(); }
+});
+
+/* -------------------------------------------- */
+/*  E1：让路期/preload 期的幂等                   */
+/* -------------------------------------------- */
+
+/**
+ * 【E1】`isPlayingPersist` 只查 Sequencer 的 VisibleEffects，而从 playPersist 被调用到
+ * 特效真的登记进去之间隔着整个 PERSIST_LEAD_MS 让路期（500ms）加 preload。这段窗口里
+ * 它恒为假——T=0 状态落地、T=100ms 一次 resync（切场景 / 拖 token 进场）就会给同一个
+ * (effect, token) 再排一份，两圈光环叠在一起。文档承诺的「resync 幂等、随便多调」
+ * 在这段窗口内并不成立。修法是在途登记表 `inFlight`。
+ */
+test("E1：让路期内重复调用 resyncPersist 不会叠出第二份光环", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  const world = stubFoundry({tokens: [t]});
+  try {
+    await resyncPersist(deps(), ENV);              // T=0，进入 500ms 让路期
+    await bounded(sleep(100));
+    await resyncPersist(deps(), ENV);              // T=100ms，让路期内又来一次
+    await resyncPersist(deps(), ENV);              // 再来一次，压一压
+    await afterGrace();
+    assert.equal(fake.sequences.length, 1,
+      "让路期内的重复 resync 叠出了多份光环——「随便多调」的承诺在这段窗口内不成立");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("E1：在途登记必须销账——第一份放弃播放之后，同一份仍然补得回来", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  let alive = false;                               // 第一轮：让路期结束时效果"已被移除"
+  const world = stubFoundry({tokens: [t], effectAlive: () => alive});
+  try {
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0, "前提：第一轮因为状态已被移除而放弃播放");
+
+    alive = true;                                  // 状态又回来了
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(fake.sequences.length, 1,
+      "在途登记没有销账——这一份光环在本次会话里再也补不回来了");
+  } finally { world.restore(); fake.restore(); }
+});
+
+/* -------------------------------------------- */
+/*  E3：让路期内被停用                            */
+/* -------------------------------------------- */
+
+/**
+ * 【E3】让路结束后的存活复检从前只看「文档还在不在」。在角色卡效果页上把状态停用
+ * （走 update 的 disabled 翻转）时文档仍在：`deleteActiveEffect` 与 tiedDocuments 的
+ * delete 钩子都不会触发，`updateActiveEffect` 的 endPersist 又早在我们播出之前就跑过、
+ * 扫不到还没存在的特效——照播就留下一枚只能靠**删除**这条效果才清得掉的光环。
+ */
+test("E3：让路期内被停用（文档还在但 active 翻假）时放弃播放", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  let stillActive = true;
+  const world = stubFoundry({tokens: [t], effectActive: () => stillActive});
+  try {
+    await resyncPersist(deps(), ENV);
+    await bounded(sleep(50));
+    stillActive = false;                           // 让路期内被停用
+    await afterGrace();
+    assert.equal(fake.sequences.length, 0,
+      "文档还在但已停用仍然播出了——那枚光环只能靠删除这条效果才清得掉");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("E3：对照组——让路期内一直生效时照常播出", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "t1", center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  const world = stubFoundry({tokens: [t]});
+  try {
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(fake.sequences.length, 1);
   } finally { world.restore(); fake.restore(); }
 });

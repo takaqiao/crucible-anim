@@ -392,7 +392,7 @@ test("installReplayMenu 不得使用 v14 已弃用的 ContextMenuEntry 键名", 
     `此时本守卫已失效，必须先修解析再谈通过。`);
 
   const preview = readFileSync(new URL("../scripts/player/preview.mjs", import.meta.url), "utf8");
-  const start = preview.indexOf("export function installReplayMenu()");
+  const start = preview.indexOf("export function installReplayMenu(");
   assert.ok(start > -1, "找不到 installReplayMenu");
   const end = preview.indexOf("\n}", start);
   const body = preview.slice(start, end);
@@ -406,4 +406,131 @@ test("installReplayMenu 不得使用 v14 已弃用的 ContextMenuEntry 键名", 
     assert.ok(new RegExp(`^\\s*${newKey}:`, "m").test(body),
       `重放菜单缺少 ContextMenuEntry#${newKey}——菜单项不完整`);
   }
+});
+
+
+/* -------------------------------------------- */
+/*  Foundry 核心 / Sequencer：钩子时序的三条依据   */
+/* -------------------------------------------- */
+
+const CHAT_SRC = `${CORE_ROOT}/applications/sidebar/tabs/chat.mjs`;
+const APPLICATION_SRC = `${CORE_ROOT}/applications/api/application.mjs`;
+const GAME_SRC = `${CORE_ROOT}/game.mjs`;
+const SEQUENCER_SRC = `${FOUNDRY_DATA}/modules/sequencer/dist/sequencer.js`;
+
+/** 去掉行首缩进，方便用连续子串比对多行片段。 */
+const squash = s => s.replace(/\s+/g, " ");
+
+/**
+ * 【A1 的依据】`getChatMessageContextOptions` 只在 ChatLog **首渲染**时派发一次，
+ * 条目当场冻进 ContextMenu，此后只重新求值 `visible`，从不重新征集条目。
+ * 因此这条钩子必须在 `init` 注册——只要这三条源码事实还成立。
+ *
+ * 任何一条对不上（核心改成每次右键都征集、或把 _createContextMenu 挪出 _onFirstRender）
+ * 都意味着 A1 的前提变了，那时可以重新讨论注册时机，但不能让它悄悄失效。
+ */
+test("A1 依据：getChatMessageContextOptions 只在 ChatLog 首渲染派发一次，条目当场冻结", () => {
+  const chat = squash(readFileSync(CHAT_SRC, "utf8"));
+  const firstRender = chat.indexOf("async _onFirstRender(");
+  assert.ok(firstRender > -1, "ChatLog#_onFirstRender 不见了");
+  const createMenu = chat.indexOf('hookName: "getChatMessageContextOptions"');
+  assert.ok(createMenu > firstRender,
+    "getChatMessageContextOptions 不再由 _onFirstRender 里的 _createContextMenu 派发——A1 的前提变了");
+  assert.ok(chat.slice(firstRender, createMenu).includes("_createContextMenu("),
+    "首渲染里那次 _createContextMenu 找不到了");
+
+  const app = squash(readFileSync(APPLICATION_SRC, "utf8"));
+  assert.ok(app.includes("const menuItems = this._doEvent(handler, {hookName, parentClassHooks, hookResponse: true});"),
+    "_createContextMenu 征集条目的那一行变了");
+  assert.ok(app.includes("return new ContextMenu.implementation(container, selector, menuItems,"),
+    "_createContextMenu 不再把征集到的条目直接交给 ContextMenu 构造函数");
+
+  const menu = squash(readFileSync(CONTEXT_MENU_SRC, "utf8"));
+  assert.ok(menu.includes("this.menuItems = menuItems;"),
+    "ContextMenu 不再把条目数组直接存下来——重新征集的可能性需要重新评估");
+});
+
+/**
+ * 【A1/A2 的另一半】`Hooks.callAll("ready")` 排在 `initializeUI()`（未 await，聊天栏
+ * 首渲染就在里面）之后，中间还隔着 `await documentIndex.index()` 与
+ * `await canvas.initializing`。这是「在 ready 里注册就来不及」的时间差本身。
+ */
+test("A 依据：game.setupGame 里 ready 排在 initializeUI 与两次 await 之后", () => {
+  const game = readFileSync(GAME_SRC, "utf8");
+  const ui = game.indexOf("this.initializeUI();");
+  const index = game.indexOf("await this.documentIndex.index();");
+  const canvasWait = game.indexOf("await this.canvas.initializing;");
+  const ready = game.indexOf('Hooks.callAll("ready");');
+  assert.ok(ui > -1 && index > -1 && canvasWait > -1 && ready > -1, "setupGame 的关键行找不到了");
+  assert.ok(ui < index && index < canvasWait && canvasWait < ready,
+    "setupGame 的顺序变了：initializeUI → documentIndex.index → canvas.initializing → ready");
+});
+
+/**
+ * 【A2 的依据】`sequencerEffectManagerReady` 在 `initializePersistentEffects()` 末尾
+ * 一次性派发，而后者由 canvasReady 之后的 setupModule 调起——每次画布加载只发一次。
+ * 也顺带钉住「不能改挂 canvasReady」的理由：那条路径第一件事是 tearDown 掉全部特效。
+ */
+test("A2 依据：sequencerEffectManagerReady 每次画布加载只在 initializePersistentEffects 末尾发一次", () => {
+  const seq = readFileSync(SEQUENCER_SRC, "utf8");
+  const calls = [...seq.matchAll(/Hooks\.callAll\("sequencerEffectManagerReady"\)/g)];
+  assert.equal(calls.length, 1, "这个钩子的派发点不止一处了，A2 的补跑逻辑需要重新评估");
+
+  const init = seq.indexOf("static async initializePersistentEffects()");
+  assert.ok(init > -1 && init < calls[0].index, "派发点不在 initializePersistentEffects 里了");
+  const body = squash(seq.slice(init, calls[0].index));
+  assert.ok(body.includes("await this.tearDownPersistentEffects();"),
+    "initializePersistentEffects 不再以 tearDownPersistentEffects 开头——"
+    + "「不能挂 canvasReady」这条理由需要重新核");
+  assert.ok(seq.includes("SequencerEffectManager.initializePersistentEffects();"),
+    "setupModule 不再调 initializePersistentEffects");
+});
+
+/**
+ * 【C 的依据】三件事，缺一条 `/canim-preview` 的注册方式就要重新想：
+ *   1. 钩子/解析拿到的是 HTML，核心自己在 parse() 里剥最外层 `<p>`；
+ *   2. 非 isRoll 的命令匹配的是剥过的 `html`（isRoll 才用 textContent）；
+ *   3. `fn` 返回 false 阻止消息发出。
+ * 第 1 条同时是 test/preview.test.mjs 里 CORE_HTML_STRIP 那个 helper 的出处——
+ * 复刻一行核心逻辑而不钉住它，等于自测自嗨。
+ */
+test("C 依据：ChatLog.parse 对非 isRoll 命令匹配剥过 <p> 的 html，且 fn 返回 false 阻止发送", () => {
+  const chat = readFileSync(CHAT_SRC, "utf8");
+  assert.ok(chat.includes('const html = message.replace(/^<p>|<\\/p>$/gi, "");'),
+    "核心剥最外层 <p> 的那一行变了——preview.test.mjs 的 CORE_HTML_STRIP 必须同步");
+
+  const squashed = squash(chat);
+  assert.ok(squashed.includes("const match = (isRoll ? text : html).match(rgx);"),
+    "parse() 的单行命令匹配对象变了（非 isRoll 应当匹配 html）");
+  assert.ok(squashed.includes("const result = await fn?.call(this, command, match, chatData, createOptions); if ( result === false ) return;"),
+    "processMessage 不再靠 fn 返回 false 来阻止消息发出");
+  assert.ok(squashed.includes("static CHAT_COMMANDS ="),
+    "ChatLog.CHAT_COMMANDS 注册表不见了");
+});
+
+/**
+ * 【E2 的依据】token HUD 上点状态图标走的是 create/delete，不是 update——
+ * effects.mjs 那条被订正的注释就靠这两条钉住。
+ */
+test("E2 依据：token HUD 的状态 toggle 走 Actor#toggleStatusEffect 的 create/delete", () => {
+  const hud = squash(readFileSync(`${CORE_ROOT}/applications/hud/token-hud.mjs`, "utf8"));
+  assert.ok(hud.includes("await this.actor.toggleStatusEffect(statusId, {"),
+    "TokenHUD 的状态 toggle 不再调 Actor#toggleStatusEffect");
+
+  const actor = squash(readFileSync(`${CORE_ROOT}/documents/actor.mjs`, "utf8"));
+  const fn = actor.indexOf("async toggleStatusEffect(statusId,");
+  assert.ok(fn > -1, "Actor#toggleStatusEffect 不见了");
+  const body = actor.slice(fn, fn + 2000);
+  assert.ok(body.includes('await this.deleteEmbeddedDocuments("ActiveEffect", existing);'),
+    "toggleStatusEffect 的移除分支不再是 deleteEmbeddedDocuments");
+  assert.ok(body.includes("return ActiveEffect.create(effect.toObject(), {parent: this, keepId: true});"),
+    "toggleStatusEffect 的新增分支不再是 ActiveEffect.create");
+  assert.ok(!/disabled\s*:/.test(body),
+    "toggleStatusEffect 里出现了 disabled——HUD 现在可能真的走 update 了，注释要再订正一次");
+
+  // 而 disabled 翻转的真实来源是 Crucible 的角色卡效果页。
+  const sheet = squash(readFileSync(
+    `${FOUNDRY_DATA}/systems/crucible/module/applications/sheets/base-actor-sheet.mjs`, "utf8"));
+  assert.ok(sheet.includes("await effect.update({disabled: !effect.disabled});"),
+    "Crucible 角色卡的效果 toggle 变了——updateActiveEffect 分支的来源需要重新核");
 });

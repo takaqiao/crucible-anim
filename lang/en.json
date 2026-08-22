@@ -16,7 +16,12 @@
     "Replay": "Replay animation",
     "Preview": {
       "Title": "Animation preview", "NoToken": "Select a token first.",
-      "Disabled": "Animations are turned off in settings; the preview macro will not play anything."
+      "Disabled": "Animations are turned off in settings; the preview macro will not play anything.",
+      "Unavailable": "Crucible Anim is not ready (self-check failed or mounting errored); the preview macro is unavailable.",
+      "UnknownSlot": "Unknown slot \"{slot}\". Available: {slots}",
+      "Playing": "Now playing: {slot} / {rule}",
+      "Done": "Preview finished: {played} played.",
+      "DoneSkipped": "Preview finished: {played} played, {skipped} skipped (see console)."
     }
   }
 }

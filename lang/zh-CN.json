@@ -16,7 +16,12 @@
     "Replay": "重放动画",
     "Preview": {
       "Title": "动画预览", "NoToken": "请先选中一个 token。",
-      "Disabled": "动画已被设置关闭，预览宏不会播放任何内容。"
+      "Disabled": "动画已被设置关闭，预览宏不会播放任何内容。",
+      "Unavailable": "Crucible 动画补齐尚未就绪（自检失败或挂载出错），预览宏不可用。",
+      "UnknownSlot": "未知槽位「{slot}」，可选：{slots}",
+      "Playing": "正在播放：{slot} / {rule}",
+      "Done": "预览完成，共播放 {played} 条",
+      "DoneSkipped": "预览完成，共播放 {played} 条，跳过 {skipped} 条（见控制台）"
     }
   }
 }

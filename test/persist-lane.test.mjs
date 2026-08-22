@@ -280,8 +280,10 @@ function stubFoundry({tokens, effectAlive = () => true}) {
   // （resolveRefIn 靠 `fromUuidSync(uuid)?.object` 拿 placeable，拿不到就退化成裸坐标，
   // 而带 attachTo 的 persist cue 在裸坐标上会被 play.mjs 整条丢掉——那会让本用例
   // 因为一个与被测行为无关的原因「通过」）。
+  // ActiveEffect 侧带上 `active`：让路期结束后的存活复检是「还在**且仍然生效**」
+  // （effects.mjs 的 E3 修复）。
   globalThis.fromUuidSync = uuid => (uuid.includes("ActiveEffect")
-    ? (effectAlive(uuid) ? {uuid} : null)
+    ? (effectAlive(uuid) ? {uuid, active: true} : null)
     : {uuid, object: tokens[0]});
   globalThis.Sequencer = {EffectManager: {endEffects: async () => {}}};
   const actor = Object.assign(new globalThis.Actor(), {getActiveTokens: () => tokens});
