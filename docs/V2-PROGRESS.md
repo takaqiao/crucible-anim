@@ -325,6 +325,45 @@ trove 给 Rapier / Staff / Halberd 用的正是 `jb2a.rapier.melee.01.white` /
 本模组只做派发、不附带素材，缺哪个包哪一族就解析不到。`relationships.requires` 补上
 `jb2a_patreon` / `eskie-effects` / `blfx-assets-pack01` / `psfx-patreon`，开本模组时会连带
 提示启用。（MGS 音效是 Data 下的裸目录不是模块，声明不了。）
+## 三点七、音效层 + 第四块空白（第五轮）
+
+### 音效层
+
+改造前 434 个动作里**只有 11 个有声音**。现在 **99 个**。挥出去有风声（按武器轻重）、
+打中有命中音（按伤害类型）、打空有划空声——MISS 结果层此前完全静音。
+
+**这一层最容易做错的事：把「开始播」当成「听见」。** psfx 家族起音中位数 200ms，
+`psfx.impacts.bludgeoning.v1` 更是 210-240ms 才有声、峰值 250ms。按命中时刻直接排，
+玩家会在刀收招之后四分之一秒才听见。口径改成 `delay = 想让它响的时刻 − 响度峰值`；
+来不及时用 `startTime` 跳进音频，**只跳到起音为止**（那段是纯静音，跳过去不损失声音；
+再往后跳会削掉起振，而起振正是「打中」的听感来源）。
+
+量测直接否掉两条选材：`psfx.impacts.magicaleffects.lightning` **在否决清单里**
+（三次放电、峰值 1020ms，会听成打了三下），`generic` 峰值 470-950ms 对不上节拍。
+都换成 MGS 的 `slingshot_<元素>_hit`——同一族的完整元素集，峰值一致 350-420ms。
+
+### 第四块空白：非武器非法术动作
+
+**这是本仓库最大的一块，而原计划里没有它。** 434 个动作里武器 69、法术 204，
+剩下 161 条「其它」中 **104 条只播通用兜底**——按条数比法术与状态加起来还多。
+
+它们不是没有判别信息：104 条在快照原始字段上能区分出 **77 种**。形状高度集中：
+self 51 / single 21 / pulse 12 / summon 8 / aura 7。
+
+新增 `cast/self.shape` 规则，按五簇分：
+
+| 簇 | 判据 | 素材 |
+| --- | --- | --- |
+| 四大元素架势 | **动作 id**（这四条既无 damageType 也无元素标签，id 是唯一判据） | `jb2a.on_token_buff.002.001` + 元素色 |
+| 英雄气概 | `cost.heroism > 0` | `eskie.buff.one_shot.attack`（升腾的剑） |
+| 吟唱光环 | `vocal` + aura/pulse | `jb2a.soundwave.02`（song 蓝 / dirge 红） |
+| 召唤 | `target.type === "summon"` | `jb2a.magic_signs.circle.02.conjuration.intro` |
+| 自身增益 | `target.type === "self"` 且花动作点 | `eskie.buff.one_shot.simple` |
+
+并把区域形状规则放开到非武器动作（`corruptingDeathBurst` 这类脉冲形状判据一模一样）。
+
+**全兜底动作 105 → 39。** 剩下的 39 条**不打算硬凑**：系统默认动作（move / delay /
+escape）与无标签天赋，快照上没有可算的判据，配一个错的不如让它走兜底。
 ## 四、待办## 四、待办
 
 ### B 线（架构清理，B2 已完成）

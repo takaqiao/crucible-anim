@@ -227,6 +227,10 @@ export const PREVIEW_FIXTURES = Object.freeze({
     isRanged: true, tags: ["strike", "ranged", "piercing"],
     damageType: "piercing", strikeCategory: "projectile1"
   }),
+  // 自身画面：默认快照是攻击型，打不到非武器非法术那一簇
+  "cast/self.shape": Object.freeze({
+    isAttack: false, targetType: "self", tags: [], resource: "health"
+  }),
   // 连段：默认快照不带 mainhand+offhand，也不花 2 个动作点
   "travel/strike.melee.combo": Object.freeze({
     tags: ["strike", "melee", "mainhand", "offhand"], strikeCategory: "balanced1",

@@ -443,7 +443,9 @@ export default [
    */
   {
     id: "strike.shape.area", pri: 670, once: true,
-    when: s => s.cost?.weapon === true && !s.spell && !!shapeOfAction(s),
+    // **不限武器动作**：`corruptingDeathBurst` / `radiantDeathBurst` / `horrificCritical`
+    // 这类非武器脉冲同样是「以自己为中心炸开」，形状判据一模一样，此前全落在兜底上。
+    when: s => !s.spell && !!shapeOfAction(s),
     build: (s, ctx, target) => {
       const shape = shapeOfAction(s);
       const color = ctx.damageColor() ?? shape.neutral;
@@ -460,7 +462,7 @@ export default [
       // 时长优先按实测（裁掉空尾），没量到才退回手裁的节奏
       const duration = clip?.durationMs ?? (shape.path === RAY_GENERIC ? 500
                      : shape.path === CONE_VOLLEY ? 1500 : 1200);
-      return {
+      const area = {
         file: fx.file,
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         objectScale: 1 * ctx.geom.sizeScale(),
@@ -477,6 +479,8 @@ export default [
         // 命中时刻算——wuf 是相对**实际播放时长**的偏移，两者可以分开定。
         waitUntilFinished: clip ? clip.contactMs - duration : -300, zIndex: 100
       };
+      // 音效排在画面之前（见 strike.melee 里对 parallelizeTargets 顺序的说明）
+      return [...strikeSounds(s, ctx, target, clip?.contactMs ?? duration / 2, s.strikes?.[0]), area];
     }
   },
   /**
@@ -519,7 +523,7 @@ export default [
     build: (s, ctx, target) => {
       const fx = ctx.pick(MOVE_TRAIL);
       if (!fx || !target) return null;
-      return {
+      const trail = {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         at: originAnchor(s),
@@ -533,6 +537,8 @@ export default [
         waitUntilFinished: -200, zIndex: 90,
         belowTokens: true
       };
+      // 冲锋的「打中」是撞上的那一刻，即轨迹铺到目标的时候
+      return [...strikeSounds(s, ctx, target, 650, s.strikes?.[0]), trail];
     }
   },
   {
@@ -571,7 +577,7 @@ export default [
       const fx = shape && ctx.pick(shape.path);
       if (!fx) return null;
       const clip = clipOf(fx.file);
-      return {
+      const shot = {
         file: fx.file, objectScale: 1 * ctx.geom.sizeScale(),
         at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
@@ -583,6 +589,8 @@ export default [
         waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -300, zIndex: 100,
         elevation: target.elevation
       };
+      // 飞行物的「打中」是箭到的那一刻（亮度峰值就是命中炸开那一帧）
+      return [...strikeSounds(s, ctx, target, clip?.contactMs ?? 500, w), shot];
     }
   },
   {

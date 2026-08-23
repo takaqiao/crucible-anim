@@ -62,6 +62,16 @@ const mk = () => createAssets(offlineBackend(index));
  * | 武器动作无 travel | 55/69 | **1/69** |
  * | `strike.unarmed` / `strike.melee` | 0 / 4 | **66 / 64** |
  *
+ * ## 2026-08-23 三次下调：39 / 144 / 307
+ *
+ * 补上「非武器非法术动作」这一块之后——它是本仓库最大的空白：434 个动作里武器 69、
+ * 法术 204，剩下 161 条「其它」中**104 条只播通用兜底**，按条数比法术与状态加起来还多。
+ * 新增 `self.shape` 规则（元素架势 / 英雄气概 / 吟唱光环 / 召唤 / 自身增益五簇）并把
+ * 区域形状规则放开到非武器动作，全兜底动作 **105 → 39**。
+ *
+ * ⚠ 剩下的 39 条**不打算硬凑**：它们是系统默认动作（move / delay / escape）与无标签
+ * 天赋，快照上没有可算的判据，配一个错的不如让它走兜底。
+ *
  * ## 2026-08-23 二次下调：191 / 363
  *
  * 线 A 第二轮新增 `strike.ranged.weapon`（8 件远程武器按弓/弩/枪分飞行物）之后，
@@ -73,9 +83,9 @@ const mk = () => createAssets(offlineBackend(index));
  * 立刻报警，逼着基线跟着下调，而不是让旧数字继续替新现实背书。
  */
 const BASELINE = Object.freeze({
-  actionsAllFallback: 105,   // 全部 cue 都来自兜底的动作数
-  actionsAnyFallback: 191,   // 至少一条 cue 来自兜底的动作数
-  fallbackCues: 363          // 兜底 cue 总条数
+  actionsAllFallback: 39,    // 全部 cue 都来自兜底的动作数
+  actionsAnyFallback: 144,   // 至少一条 cue 来自兜底的动作数
+  fallbackCues: 307          // 兜底 cue 总条数
 });
 
 /** 跑一遍全量语料，统计兜底命中。 */

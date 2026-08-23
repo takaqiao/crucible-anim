@@ -1,3 +1,5 @@
+import {selfShapeFor} from "./self-shapes.mjs";
+
 /**
  * S1 cast：动作开始，锚在施法者。
  * 规则按 pri 降序匹配，取第一个命中者。高优先级规则加在数组前部。
@@ -196,6 +198,36 @@ export default [
    * @30fps 里的 1.27s），duration 截在 1300ms；源画幅 1200x1200 且能量集中在
    * 中心一半区域，按 token 尺寸直接贴显小，故放大 objectScale。
    */
+  /**
+   * 非武器非法术动作的自身画面 —— **本仓库最大的一块空白**。
+   *
+   * 全量语料 434 个动作里，武器 69 条、法术 204 条，剩下 161 条「其它动作」中
+   * **104 条只播通用兜底**。按条数它比法术与状态加起来还多。
+   *
+   * 它们不是没有判别信息：这 104 条在快照原始字段上能区分出 77 种。本规则按
+   * `armory/self-shapes.mjs` 的表分四簇——元素架势（按动作 id）、英雄气概（按
+   * `cost.heroism`）、吟唱光环（`vocal` + aura/pulse）、召唤（`target.type`），
+   * 其余自身增益走一支克制的升腾光条。**表里没有的仍然走兜底，不硬凑。**
+   *
+   * pri 400 夹在 `tag.healing`（420）与 `tag.skill`（380）之间：治疗有自己的语义，
+   * 优先级更高；技能检定比「对自己做了什么」更泛，让位。
+   */
+  {
+    id: "self.shape", pri: 400,
+    when: s => !!selfShapeFor(s),
+    build: (s, ctx) => {
+      const shape = selfShapeFor(s);
+      const fx = ctx.pick(shape.path, shape.color ? {color: shape.color} : {});
+      if (!fx) return null;
+      return {
+        file: fx.file,
+        filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
+        objectScale: 1.1 * ctx.geom.sizeScale(),
+        fadeIn: 150, fadeOut: 300,
+        zIndex: 40
+      };
+    }
+  },
   {
     id: "tag.skill", pri: 380,
     when: s => s.tags?.includes("skill"),
