@@ -94,3 +94,37 @@
 ⚠ 它们的 `objectScale: 4` + `anchorX: 1` + `spriteAnchorX: 1` 是一套**整体的锚定方案**
 （附着施法者、锚点在贴图右缘）。本仓库是锚在目标 + 偏移，两套不能混抄——单独把 `objectScale`
 搬过来会让挥击大四倍且位置错。
+
+## 七、四个来源的最终交代（2026-08-23 复查）
+
+| 来源 | 在哪 | 形态 | 状态 |
+| --- | --- | --- | --- |
+| pf2e-jb2a-macros | `Aug-2026-...GlobalMenu-pf2e.json` + `packs/macros`（63 宏，41 带路径） | autorec + 宏 | ✅ 已挖 |
+| trigger animations trove | `pf2e-trigger-animations-trove/animations.json` | 节点图 | ✅ 已挖 |
+| blfx | **`boss-loot-assets-premium/packs/macros`**，13 个 `blfx \| ...` 宏 | 宏 | ✅ 已挖 |
+| eskie macro | —— | 宏合集 | ❌ **本机没有**，需另行安装 |
+
+⚠ `boss-loot-assets-premium/scripts/apps/CustomAutoRec*.js` 是 autorec 的**导入机制**，
+不含配方数据（DB 路径命中 0）。blfx 的配方在它的宏包里。
+
+### blfx 宏的拼法（13 个宏逐个读过）
+
+三段结构与本仓库的槽位一一对应：`ANIMATION1` 锚在源 token（= cast）、`ANIMATION2` 是射线
+（= travel）、`ANIMATION3` 落在目标或模板（= impact）。每段各配一条**独立的 `.sound()` 轨**
+（自己的 delay 与自己的 conditionalWait），与本仓库 `kind: "sound"` 的 cue 设计一致。
+
+交棒点默认值：cast −600、ray −500 / −100、on-target −700、circles2 −900。
+缩放用 `scaleToObject(1.5~2)`——blfx 素材是 1200×1200，这是它们的常量。
+
+### pf2e-jb2a-macros 宏的拼法（41 个带路径的宏）
+
+几条本仓库还没用上的手法：
+
+1. **同一素材多层叠加做丰富度**：Cone Hands 把 `jb2a.cone_of_cold` 铺六层，各层
+   `rotate(±10/±20)` + 不同 `hue` + `opacity 0.8`。一条素材当六条用。
+2. **`.repeats(n, delayMin, delayMax)`**：Sequencer 原生的重复播放。`repeats(2)` 就是打两下，
+   `repeats(50, 0, 500)` 是撒 50 道。**连击不一定要找连段素材，重复播单击也行**——
+   本仓库的连段规则是另一条路，两者可以并存（长兵器用连段、短兵器用重复）。
+3. **音效带淡入淡出**：`.fadeInAudio(500).fadeOutAudio(500)` + `volume(0.3)`。
+   本仓库现在的 sound cue 没有音频淡入淡出。
+4. `scaleToObject(2 * tokenScale)`：按 token 体型缩放，与本仓库的 `ctx.geom.sizeScale()` 同义。
