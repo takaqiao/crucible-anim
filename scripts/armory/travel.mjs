@@ -163,7 +163,7 @@ const isMultiHit = s => {
 };
 import {shapeOfAction, CONE_VOLLEY, RAY_GENERIC, PULSE_BURST,
         SWEEP_RING, MOVE_TRAIL} from "./action-shapes.mjs";
-import {pickFor, comboFor, trailFor, trailColorFor, TALISMAN_SHAPE, talismanColorFor,
+import {pickFor, comboFor, trailFor, trailColorFor, ammoFor, TALISMAN_SHAPE, talismanColorFor,
         RANGED_SHAPE, RANGED_CATEGORY} from "./weapon-shapes.mjs";
 
 export default [
@@ -583,8 +583,9 @@ export default [
                s.strikes.some(w => RANGED_SHAPE[w.identifier] || RANGED_CATEGORY[w.category]),
     build: (s, ctx, target) => {
       const w = s.strikes.find(x => RANGED_SHAPE[x.identifier] || RANGED_CATEGORY[x.category]);
-      const shape = pickFor(w);
-      const fx = shape && ctx.pick(shape.path);
+      // 弹药跟着**动作**的元素走：flamingArrow 的火来自动作，弓仍是弓。
+      const path = ammoFor(w, s.usage?.damageType);
+      const fx = path && ctx.pick(path);
       if (!fx) return null;
       const clip = clipOf(fx.file);
       const shot = {
@@ -615,7 +616,7 @@ export default [
       const fx = ctx.pick(family, {color: talismanColorFor(w)});
       if (!fx) return null;
       const clip = clipOf(fx.file);
-      return {
+      const cue = {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
@@ -627,6 +628,7 @@ export default [
         elevation: target.elevation,
         waitUntilFinished: clip ? clip.contactMs - (clip.durationMs ?? 933) : -400
       };
+      return [...strikeSounds(s, ctx, target, clip?.contactMs ?? 533, w), cue];
     }
   },
   {
@@ -786,7 +788,7 @@ export default [
     build: (s, ctx, target) => {
       const fx = ctx.pick("blfx.weapon.range.dagger1.throw1.color1.30ft");
       if (!fx) return null;
-      return {
+      const cue = {
         file: fx.file,
         at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
@@ -799,6 +801,8 @@ export default [
         selfFlash: {from: 367, at: 500, to: 667},
         waitUntilFinished: -750
       };
+      // 交棒点就是画面上「打中」的时刻（duration + waitUntilFinished）
+      return [...strikeSounds(s, ctx, target, 417, s.strikes?.[0]), cue];
     }
   },
 

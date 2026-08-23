@@ -84,6 +84,55 @@ export const MISS_SOUND = "canim.mgs.basic.weapons.sword_miss";
 export const SWING_LIGHT = "psfx.weapon-swooshes.light.v1.group01";
 export const SWING_HEAVY = "psfx.weapon-swooshes.heavy.v1.group01";
 
+/**
+ * 元素挥击风声：**火焰武器挥起来该有火声**。
+ *
+ * MGS 有一个 4 元素 × 6 武器类的完整矩阵（`<元素>_<武器类>_whoosh`，24 条），
+ * 响度峰值一致落在 180-260ms，节拍很齐。元素取**动作**的伤害类型
+ * ——`flamingArrow` 的火来自动作，不是弓自带的。
+ *
+ * 只有这四个元素（flaming / icy / electrical / acid）。腐蚀 / 虚空 / 心灵 / 光耀 /
+ * 毒没有对应的风声，退回按轻重分的 psfx 物理风声——**这是缺口不是选择**。
+ */
+const ELEMENTAL_WHOOSH = Object.freeze({
+  flaming: Object.freeze({
+    sword: "canim.mgs.basic.weapons.flaming_sword_whoosh", two_handed_sword: "canim.mgs.basic.weapons.flaming_two_handed_sword_whoosh", axe: "canim.mgs.basic.weapons.flaming_axe_whoosh",
+    dagger: "canim.mgs.basic.weapons.flaming_dagger_whoosh", hammer: "canim.mgs.basic.weapons.flaming_hammer_whoosh", staff: "canim.mgs.basic.weapons.flaming_staff_whoosh"
+  }),
+  icy: Object.freeze({
+    sword: "canim.mgs.basic.weapons.icy_sword_whoosh", two_handed_sword: "canim.mgs.basic.weapons.icy_two_handed_sword_whoosh", axe: "canim.mgs.basic.weapons.icy_axe_whoosh",
+    dagger: "canim.mgs.basic.weapons.icy_dagger_whoosh", hammer: "canim.mgs.basic.weapons.icy_hammer_whoosh", staff: "canim.mgs.basic.weapons.icy_staff_whoosh"
+  }),
+  electrical: Object.freeze({
+    sword: "canim.mgs.basic.weapons.electrical_sword_whoosh", two_handed_sword: "canim.mgs.basic.weapons.electrical_two_handed_sword_whoosh", axe: "canim.mgs.basic.weapons.electrical_axe_whoosh",
+    dagger: "canim.mgs.basic.weapons.electrical_dagger_whoosh", hammer: "canim.mgs.basic.weapons.electrical_hammer_whoosh", staff: "canim.mgs.basic.weapons.electrical_staff_whoosh"
+  }),
+  acid: Object.freeze({
+    sword: "canim.mgs.basic.weapons.acid_sword_whoosh", two_handed_sword: "canim.mgs.basic.weapons.acid_two_handed_sword_whoosh", axe: "canim.mgs.basic.weapons.acid_axe_whoosh",
+    dagger: "canim.mgs.basic.weapons.acid_dagger_whoosh", hammer: "canim.mgs.basic.weapons.acid_hammer_whoosh", staff: "canim.mgs.basic.weapons.acid_staff_whoosh"
+  })
+});
+
+/** Crucible 武器 → MGS 的武器类。先按具名武器，再按分类。 */
+const MGS_CLASS_BY_ID = Object.freeze({
+  shortsword: "sword", longsword: "sword", scimitar: "sword", katana: "sword",
+  falchion: "sword", bastardSword: "sword",
+  rapier: "dagger", sai: "dagger", stiletto: "dagger", dagger: "dagger", katar: "dagger",
+  handAxe: "axe", battleAxe: "axe", greataxe: "axe", pickaxe: "axe",
+  warhammer: "hammer", mace: "hammer", club: "hammer", clawHammer: "hammer",
+  greathammer: "hammer", greatclub: "hammer", spikedGreatclub: "hammer",
+  greatsword: "two_handed_sword",
+  boStaff: "staff", quarterstaff: "staff", glaive: "staff", halberd: "staff",
+  spear: "staff", javelin: "staff", warlance: "staff"
+});
+
+const MGS_CLASS_BY_CATEGORY = Object.freeze({
+  light1: "dagger", balanced1: "sword", balanced2: "staff",
+  simple1: "hammer", simple2: "hammer", heavy1: "axe", heavy2: "two_handed_sword",
+  // 法器是杖形，flameStaff / iceStaff 挥起来该有火声冰声
+  talisman1: "staff", talisman2: "staff"
+});
+
 /** 走重档风声的武器分类：双手与重型。其余走轻档。 */
 const HEAVY_CATEGORIES = new Set(["heavy1", "heavy2", "balanced2", "simple2",
                                   "shieldHeavy", "projectile2", "mechanical2", "talisman2"]);
@@ -93,7 +142,28 @@ const HEAVY_CATEGORIES = new Set(["heavy1", "heavy2", "balanced2", "simple2",
  * @param {{category: string|null}|null|undefined} w
  * @returns {string}
  */
-export const swingSoundFor = w => HEAVY_CATEGORIES.has(w?.category) ? SWING_HEAVY : SWING_LIGHT;
+/**
+ * 这件武器挥出去该是什么风声。
+ *
+ * 元素武器优先走 MGS 的元素风声（火剑有火声、冰斧有冰声）；对不上就退回按轻重分的
+ * psfx 物理风声。
+ *
+ * @param {{category: string|null, identifier: string|null}|null|undefined} w
+ * @param {string|null} [damageType] 伤害类型（动作的，没有则武器的）
+ * @returns {string}
+ */
+export function swingSoundFor(w, damageType) {
+  const el = ELEMENTAL_WHOOSH[
+    damageType === "fire" ? "flaming" : damageType === "cold" ? "icy"
+    : damageType === "electricity" ? "electrical" : damageType === "acid" ? "acid" : ""];
+  // **天生武器不吃这张表**：爪牙不是刀剑，让獠牙发出「火剑挥击」的金属风声是错的，
+  // 而 MGS 没有爪牙类的元素风声。退回物理风声。
+  if (el && !w?.properties?.includes("natural") && w?.category !== "unarmed") {
+    const cls = MGS_CLASS_BY_ID[w?.identifier] ?? MGS_CLASS_BY_CATEGORY[w?.category];
+    if (cls && el[cls]) return el[cls];
+  }
+  return HEAVY_CATEGORIES.has(w?.category) ? SWING_HEAVY : SWING_LIGHT;
+}
 
 /**
  * 这一下打中该听见什么。
@@ -140,7 +210,9 @@ export function strikeSounds(s, ctx, target, contactMs, weapon) {
   const impactAt = impact && soundAt(impact.file, contactMs);
   const impactHeard = impactAt ? contactMs + impactAt.lateBy : contactMs;
 
-  const swing = ctx.sound(swingSoundFor(weapon));
+  // 元素既可能来自动作（flamingArrow 的火），也可能来自武器本身（flameStaff 的火）。
+  // 取法与命中音的伤害链同源：动作优先，武器兜底。
+  const swing = ctx.sound(swingSoundFor(weapon, s?.usage?.damageType ?? weapon?.damageType));
   if (swing) {
     const t = soundAt(swing.file, Math.max(0, contactMs - 150));
     const heard = t ? Math.max(0, contactMs - 150) + t.lateBy : 0;

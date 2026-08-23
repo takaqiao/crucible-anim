@@ -160,3 +160,66 @@ test("武器基线必须贴着实测值", () => {
 test("线 A 终点：92 件武器没有一件是哑的", {skip: m.silent.length ? `还有 ${m.silent.length} 件不出画面` : false}, () => {
   assert.equal(m.silent.length, 0);
 });
+
+/**
+ * 弹药跟着**动作**的元素走。
+ *
+ * `flamingArrow`（灼热箭）此前射的是一支普通箭——武器是弓，火来自动作，而选材只看了
+ * 武器。`jb2a.arrow` / `jb2a.bolt` 各有 cold / fire / lightning / poison / physical
+ * 五支元素分支，同结构同色系。
+ *
+ * 判据独立算：直接看命中的文件名里有没有该元素，不引用 `AMMO_ELEMENT` 表——
+ * 引用它就退化成同义反复。
+ */
+test("元素弹药：远程动作带元素时射对应的箭矢", () => {
+  const base = corpus.find(s => s.id === "weapon:projectile2:longbow");
+  assert.ok(base, "语料里应有长弓");
+  const cases = [["fire", /Fire/i], ["cold", /Cold/i], ["electricity", /Lightning/i],
+                 ["poison", /Poison/i]];
+  const bad = [];
+  for (const [dmg, want] of cases) {
+    const s = {...base, usage: {...base.usage, damageType: dmg}};
+    const plan = resolve(s, {assets: mk(), armory: ARMORY});
+    const c = (plan?.cues ?? []).find(x => x.slot === "travel" && x.kind !== "sound" && x.file);
+    if (!c) { bad.push(`${dmg}: 没有 travel 画面`); continue; }
+    if (!want.test(c.file)) bad.push(`${dmg}: 射的是 ${c.file.split("/").pop()}`);
+  }
+  // 没有元素时必须仍是物理箭——元素表不能把普通射击也染了
+  const plain = resolve(base, {assets: mk(), armory: ARMORY});
+  const pc = (plain?.cues ?? []).find(x => x.slot === "travel" && x.kind !== "sound" && x.file);
+  if (!/Physical/i.test(pc?.file ?? "")) bad.push(`无元素时射的是 ${pc?.file?.split("/").pop()}`);
+  assert.deepEqual(bad, [], `${bad.length} 种元素的弹药没跟上`);
+});
+
+/**
+ * 元素挥击风声：火焰武器挥起来该有火声。
+ *
+ * MGS 有 4 元素 × 6 武器类的完整矩阵。元素取「动作的伤害类型 → 武器的伤害类型」，
+ * 与命中音同源。
+ *
+ * ⚠ **天生武器不吃这张表**：爪牙不是刀剑，让獠牙发出金属风声是错的，而 MGS 没有
+ * 爪牙类的元素风声。这一条也一并钉住。
+ */
+test("元素挥击风声：制式武器带元素时出对应风声，天生武器不出", () => {
+  const bad = [];
+  const swordish = corpus.find(s => s.id === "weapon:balanced1:scimitar");
+  const natural = corpus.find(s => s.id === "weapon:balanced1:burningBite");
+  assert.ok(swordish && natural, "语料里应有弯刀与灼热咬击");
+
+  for (const [dmg, want] of [["fire", /Flaming/i], ["cold", /Icy/i],
+                             ["electricity", /Electrical/i], ["acid", /Acid/i]]) {
+    const s = {...swordish, usage: {...swordish.usage, damageType: dmg}};
+    const plan = resolve(s, {assets: mk(), armory: ARMORY});
+    const snd = (plan?.cues ?? []).filter(x => x.kind === "sound");
+    if (!snd.some(c => want.test(c.file))) {
+      bad.push(`${dmg}: 弯刀没出对应风声，实际 ${snd.map(c => c.file.split("/").pop()).join(" / ")}`);
+    }
+  }
+  // 天生武器：`burningBite` 的武器伤害类型就是 fire，但它不该发出金属火剑的风声
+  const nPlan = resolve(natural, {assets: mk(), armory: ARMORY});
+  const nSnd = (nPlan?.cues ?? []).filter(x => x.kind === "sound");
+  if (nSnd.some(c => /Flaming.*(Sword|Axe|Dagger|Hammer|Staff)/i.test(c.file))) {
+    bad.push("天生武器 burningBite 发出了金属元素风声——爪牙不该有刀剑的风声");
+  }
+  assert.deepEqual(bad, [], `${bad.length} 项元素风声不对`);
+});

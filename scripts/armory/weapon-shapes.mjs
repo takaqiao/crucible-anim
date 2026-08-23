@@ -156,6 +156,53 @@ export const RANGED_SHAPE = Object.freeze({
   sling:         "jb2a.bullet.01.red.30ft"
 });
 
+/**
+ * 元素弹药：**箭矢跟着动作的元素走**。
+ *
+ * `flamingArrow`（灼热箭）此前射的是一支普通箭——武器是弓，火来自动作，而选材只看了
+ * 武器。`jb2a.arrow` / `jb2a.bolt` 各有 cold / fire / lightning / poison / physical 五支
+ * 元素分支，同结构同色系，正好接 `usage.damageType`。
+ *
+ * 颜色按元素取语义色（火橙、冰蓝、电蓝、毒紫——箭矢那一族的 poison 没有绿色 30ft 分支），不走 pickColor——这一族的颜色是
+ * **弹药本身的颜色**而不是可染色的中性素材，取错色会得到一支绿色的火箭。
+ *
+ * 对不上的元素（腐蚀 / 虚空 / 心灵 / 光耀）落回 physical：**这是缺口不是选择**，
+ * 那四种没有对应的箭矢分支，配一支绿毒箭去表示「光耀」比射普通箭更糟。
+ */
+export const AMMO_ELEMENT = Object.freeze({
+  arrow: Object.freeze({
+    fire:        "jb2a.arrow.fire.orange.30ft",
+    cold:        "jb2a.arrow.cold.blue.30ft",
+    electricity: "jb2a.arrow.lightning.blue.30ft",
+    poison:      "jb2a.arrow.poison.purple.30ft",
+    acid:        "jb2a.arrow.poison.purple.30ft"
+  }),
+  bolt: Object.freeze({
+    fire:        "jb2a.bolt.fire.orange.30ft",
+    cold:        "jb2a.bolt.cold.blue.30ft",
+    electricity: "jb2a.bolt.lightning.blue.30ft",
+    poison:      "jb2a.bolt.poison.purple.30ft",
+    acid:        "jb2a.bolt.poison.purple.30ft"
+  })
+});
+
+/**
+ * 这一发该射什么弹药。先看动作的元素，没有元素就用武器自己的形制。
+ *
+ * @param {{identifier: string|null, category: string|null}|null} w
+ * @param {string|null} damageType 动作的伤害类型（`usage.damageType`）
+ * @returns {string|null}
+ */
+export function ammoFor(w, damageType) {
+  const base = RANGED_SHAPE[w?.identifier] ?? RANGED_CATEGORY[w?.category];
+  if (!base) return null;
+  // 只有箭与弩矢有元素分支；弹丸（bullet）没有，火枪射火弹这件事素材里不存在。
+  // 取路径的第二段而不是写 `startsWith("jb2a.arrow.")`：那种半截串会被
+  // `test/armory-assets.test.mjs` 的路径抽取当成一条 DB 路径，而它根本解析不到。
+  const fam = base.split(".")[1];
+  return AMMO_ELEMENT[fam]?.[damageType] ?? base;
+}
+
 /** 远程分类兜底：认不出具体武器时按分类给（弩类走弩矢，其余走箭）。 */
 export const RANGED_CATEGORY = Object.freeze({
   projectile1: "jb2a.arrow.physical.orange.30ft",
