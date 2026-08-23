@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test \"test/*.test.mjs\"",
     "index": "node tools/index-sfx.mjs && node tools/extract-db.mjs",
+    "clips": "node tools/gen-clip-table.mjs",
     "weapons": "node tools/dump-weapons.mjs",
     "fixtures": "node tools/dump-fixtures.mjs",
     "index:sfx": "node tools/index-sfx.mjs",

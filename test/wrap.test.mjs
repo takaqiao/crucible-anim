@@ -7,6 +7,7 @@ import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 import {tokenDoc} from "../tools/token-mocks.mjs";
 import {buildPlanFor} from "../scripts/trigger/wrap.mjs";
+import {clipOf} from "../scripts/armory/clip-table.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
@@ -140,14 +141,28 @@ test("Critical-1：token 是 TokenDocument 时，坐标/贴身/左右一路传�
     "at 必须冻结 TokenDocument 的真实中心；读成 (0,0) 说明又按 placeable 的 token.center 取了");
   assert.equal(near.at.uuid, "Scene.s.Token.t1");
   assert.deepEqual([near.aim.towards.x, near.aim.towards.y], [600, 500]);
-  assert.equal(near.duration, 933, "贴身分支（短剑）");
+  // duration 现在**逐文件**从量测里取（armory/clip-table.mjs），不再是常数 933——
+  // 短剑那一支的四个变体可播时长是 800-967ms 不等，而 ctx.pick 按种子随机取一个。
+  // 这里只断言「取到了表里的值、且落在这一族的实测区间内」，不钉死某个数字：
+  // 钉死等于把随机变体的选择也钉死，那是另一回事。
+  assert.ok(near.duration >= 800 && near.duration <= 967,
+    `贴身分支（短剑）时长 ${near.duration}ms 不在实测区间 800-967ms 内`);
+  // 交棒点必须与所选变体的实测命中时刻一致，不是常数
+  const clip = clipOf(near.file);
+  assert.ok(clip, "短剑素材必须在时序表里");
+  assert.equal(near.waitUntilFinished, clip.contactMs - clip.durationMs,
+    "交棒点要按这一支素材自己的命中时刻算");
   assert.equal(near.mirrorY, false);
 
   // 隔 9 格：adjacent 必须为假，否则就是「恒贴身」的老 bug
   const far = melee(buildPlanFor(mockAction({targetCenter: {x: 1500, y: 500}}), ENV, deps(),
     {nativeConfig: null}));
   assert.deepEqual([far.at.x, far.at.y], [1500, 500]);
-  assert.equal(far.duration, 767, "隔格分支（野太刀）；仍是 933 说明 adjacent 恒真");
+  // 分支判据改成看**素材本身**，不再看时长：两支的时长现在都从量测里逐文件取
+  // （armory/clip-table.mjs），恰好可能相同，用它区分分支已经失效——而「选到了哪一支」
+  // 本来就是这条测试真正要查的东西。
+  assert.match(far.file, /Nodachi/i, "隔格分支必须是野太刀；选到短剑说明 adjacent 恒真");
+  assert.match(near.file, /ShortSword/i, "贴身分支必须是短剑");
   assert.notEqual(far.file, near.file, "贴身与隔格必须选到不同的素材");
 
   // 紧邻左侧：mirrorY 必须翻真（旧实现 onLeft 恒假，挥击永不镜像）

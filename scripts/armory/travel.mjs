@@ -142,6 +142,7 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             uuid: s.origin?.uuid ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
+import {clipOf} from "./clip-table.mjs";
 import {shapeOfAction, CONE_VOLLEY, RAY_GENERIC, PULSE_BURST} from "./action-shapes.mjs";
 import {pickFor, TALISMAN_SHAPE, talismanColorFor,
         RANGED_SHAPE, RANGED_CATEGORY} from "./weapon-shapes.mjs";
@@ -429,6 +430,7 @@ export default [
       const color = ctx.damageColor() ?? shape.neutral;
       const fx = ctx.pick(shape.path, color ? {color} : {});
       if (!fx) return null;
+      const clip = clipOf(fx.file);
       const isRay = shape.path === RAY_GENERIC;
       // 各族实测长度：箭雨 92-120 帧、锥形 69 帧、火花环 64 帧、贯穿线 15 帧（@30fps）。
       // 除贯穿线外都远长于一次攻击该占的时间，统一裁到 1200ms。
@@ -447,7 +449,9 @@ export default [
              missed: isRay && target.results.some(r => r.result === 0 || r.result === 1)}
           : null,
         duration,
-        waitUntilFinished: -300, zIndex: 100
+        // duration 是手裁的节奏（区域特效整段 2-4 秒，太长），但交棒点仍按实测的
+        // 命中时刻算——wuf 是相对**实际播放时长**的偏移，两者可以分开定。
+        waitUntilFinished: clip ? clip.contactMs - duration : -300, zIndex: 100
       };
     }
   },
@@ -460,15 +464,17 @@ export default [
       const shape = pickFor(w);
       const fx = shape && ctx.pick(shape.path);
       if (!fx) return null;
+      const clip = clipOf(fx.file);
       return {
         file: fx.file, objectScale: 1 * ctx.geom.sizeScale(),
         at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
         aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y},
               missed: target.results.some(r => r.result === 0 || r.result === 1)},
-        // 与兜底同口径：这几支的 ft 档位定的是飞行时间，30ft 档实测 19-43 帧 @30fps
-        duration: 800,
-        waitUntilFinished: -300, zIndex: 100,
+        // 飞行时间逐文件取：ft 档位定的是飞行距离，19 帧的弹丸与 43 帧的弩矢不该
+        // 用同一个 800ms。命中时刻取亮度峰值——对飞行物那正是箭到目标炸开的那一帧。
+        duration: clip?.durationMs ?? 800,
+        waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -300, zIndex: 100,
         elevation: target.elevation
       };
     }
@@ -484,17 +490,18 @@ export default [
       // 与其余元素通路同一套（见 resolver/context.mjs 的 pick）。
       const fx = ctx.pick(family, {color: talismanColorFor(w)});
       if (!fx) return null;
+      const clip = clipOf(fx.file);
       return {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
         mirrorY: ctx.geom.onLeft(target),
         aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y}, missed: false},
-        // 与 strike.melee 同口径裁掉空尾：两族都是 39-51 帧 @30fps，命中峰在 f16-f20
-        duration: 933,
+        // 与 strike.melee 同口径：时序逐文件取（见 armory/clip-table.mjs）
+        duration: clip?.durationMs ?? 933,
         zIndex: 100,
         elevation: target.elevation,
-        waitUntilFinished: -400
+        waitUntilFinished: clip ? clip.contactMs - (clip.durationMs ?? 933) : -400
       };
     }
   },
@@ -518,6 +525,7 @@ export default [
         ? ctx.pick(shape?.path ?? "jb2a.melee_attack.01.shortsword.01",
                    shape?.color ? {color: shape.color} : {})
         : ctx.pick("jb2a.melee_attack.05.nodachi.01");
+      const clip = clipOf(fx?.file);
       if (!fx) return null;
       return {
         file: fx.file,
@@ -525,10 +533,14 @@ export default [
         offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
         mirrorY: ctx.geom.onLeft(target),
         aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y}, missed: false},
-        duration: adjacent ? 933 : 767,
+        // 时序**逐文件**取，不再是常数：一条规则现在服务 20 多种形制，命中时刻从
+        // 咬击 167ms 到巨剑 633ms；连同一形制的四个变体峰值也差 233ms（短剑是
+        // f16/f10/f9/f11），而 ctx.pick 是随机取一个。见 armory/clip-table.mjs。
+        // 表里没有这个文件时退回旧常数，不静默按 0 算。
+        duration: clip?.durationMs ?? (adjacent ? 933 : 767),
         zIndex: 100,
         elevation: target.elevation,
-        waitUntilFinished: -400
+        waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -400
       };
     }
   },
