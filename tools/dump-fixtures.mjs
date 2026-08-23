@@ -98,6 +98,77 @@ export const RUNE_RESOURCE = {
  * 这两条动作的 targets[].damage 仍保持 null（tags 里没有伤害类型词），正是为了让第 3 级
  * 回退在真实语料上被行使到，而不是被第 1 级抢先。
  */
+/**
+ * Crucible 的标签传播表，逐条取自 `const/action.mjs` 的 `TAGS[...].propagate`。
+ *
+ * **不复刻这张表，整条武器通路就永远测不到。** 天赋物品上写的是 `melee` / `twohand` /
+ * `thrown` 这些标签，**没有一个带字面 `strike`**；运行时由传播补上，而这份语料从前直接
+ * 读原始标签，于是 `tags.includes("strike")` 恒假、`usage.strikes` 恒为 `[]`。
+ *
+ * 后果实测：69 条 `cost.weapon === true` 的动作里 **55 条一条 travel cue 都不出**，
+ * `strike.melee` 只服务于 `strike` / `reactiveStrike` 两个默认动作（全语料命中 4 次）、
+ * `strike.unarmed` **命中 0 次**。整个武器天赋空间从未被任何测试执行过。
+ *
+ * `armory/travel.mjs:349` 的注释早就写着「现有 fixture 的 strikes 恒为 [] 正好掩盖了
+ * 这个实战 bug」——知道，但没人回头补语料。
+ */
+const TAG_PROPAGATE = {
+  projectile: ["ranged"], mechanical: ["ranged"], talisman: ["strike"],
+  unarmed: ["melee"], rest: ["noncombat"], melee: ["strike"], ranged: ["strike"],
+  mainhand: ["strike"], twohand: ["strike"], offhand: ["strike"], thrown: ["melee"],
+  natural: ["melee"]
+};
+
+/** 传递闭包：`thrown → melee → strike`、`projectile → ranged → strike` 都要走到底。 */
+function propagateTags(tags) {
+  const out = new Set(tags);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const t of [...out]) {
+      for (const n of TAG_PROPAGATE[t] ?? []) if (!out.has(n)) { out.add(n); changed = true; }
+    }
+  }
+  return [...out];
+}
+
+/**
+ * 按标签合成一件**合理的**武器。
+ *
+ * 从前一律 `balanced1 / slashing`，于是 16 个武器分类里只有 1 个、12 种伤害类型里只有
+ * 1 种被语料行使到。武器派发规则按 category 分支，用单一 category 的语料测它等于没测。
+ *
+ * 全部**确定性**推导，不掷骰：语料要能逐字复现（`npm run fixtures` 两次结果必须相同）。
+ */
+const DAMAGE_TAGS = ["bludgeoning", "piercing", "slashing", "poison", "acid", "fire",
+                     "cold", "electricity", "corruption", "psychic", "radiant", "void"];
+
+function synthWeapon(tags) {
+  const t = new Set(tags);
+  // 分类：按最具体的标签定，顺序即优先级
+  const category =
+    t.has("natural") || t.has("unarmed") ? "unarmed"
+    : t.has("mechanical") ? (t.has("twohand") ? "mechanical2" : "mechanical1")
+    : t.has("talisman")   ? (t.has("twohand") ? "talisman2"   : "talisman1")
+    : t.has("projectile") || t.has("ranged") ? (t.has("twohand") ? "projectile2" : "projectile1")
+    : t.has("twohand")  ? "heavy2"
+    : t.has("brute")    ? "heavy1"
+    : t.has("offhand") || t.has("finesse") ? "light1"
+    : t.has("shield")   ? "shieldLight"
+    : "balanced1";
+
+  // 伤害类型：动作自带伤害类型标签就用它（Crucible 的 TAGS[<damageType>] 会写
+  // usage.damageType），否则按分类的常见形制给
+  const explicit = DAMAGE_TAGS.find(d => t.has(d));
+  const byCategory = {
+    unarmed: "bludgeoning", light1: "piercing", balanced1: "slashing", heavy1: "slashing",
+    heavy2: "slashing", shieldLight: "bludgeoning",
+    projectile1: "piercing", projectile2: "piercing",
+    mechanical1: "piercing", mechanical2: "piercing",
+    talisman1: "radiant", talisman2: "fire"
+  };
+  return [{category, damageType: explicit ?? byCategory[category] ?? "bludgeoning"}];
+}
+
 const DEFAULT_STRIKES = {
   strike: [{category: "balanced1", damageType: "slashing"}],
   reactiveStrike: [{category: "light1", damageType: "piercing"}]
@@ -232,15 +303,17 @@ if (isMain) {
         if (seenSig.has(sig)) continue;
         seenSig.add(sig);
         seen.add(id);
+        // 先补传播标签，再判「是不是攻击 / 要不要武器」——两者都依赖传播后的结果
+        const full = propagateTags(tags);
         out.push(baseSnapshot(id, {
-          tags, target, range, cost,
-          strikes: tags.includes("strike")
-            ? [{category: tags.includes("natural") ? "unarmed" : "balanced1",
-                damageType: "slashing"}]
-            : [],
+          tags: full, target, range, cost,
+          // `cost.weapon` 是物品自己声明的「这个动作要不要武器」，比标签更权威；
+          // 传播出来的 strike 标签作为第二判据（Crucible 的 strike.prepare() 正是
+          // 在 usage.strikes 为空时把手上的武器塞进去）
+          strikes: (cost?.weapon === true || full.includes("strike")) ? synthWeapon(full) : [],
           usage: {
-            isAttack: tags.some(t => ["strike", "spell", "skill"].includes(t)),
-            isRanged: tags.includes("ranged")
+            isAttack: full.some(t => ["strike", "spell", "skill"].includes(t)),
+            isRanged: full.includes("ranged")
           }
         }));
       }
@@ -252,8 +325,11 @@ if (isMain) {
     if (seen.has(id)) continue;
     seen.add(id);
     out.push(baseSnapshot(id, {
-      tags: DEFAULT_STRIKES[id] ? [id === "reactiveStrike" ? "reaction" : "strike", "melee"]
-                                : [id === "move" ? "movement" : "generic"],
+      // 同样要过传播：reactiveStrike 的原始标签是 ["reaction","melee"]，
+      // 不传播就没有 strike，按 strike 匹配的规则对它不可达（与天赋动作同一个坑）
+      tags: propagateTags(DEFAULT_STRIKES[id]
+        ? [id === "reactiveStrike" ? "reaction" : "strike", "melee"]
+        : [id === "move" ? "movement" : "generic"]),
       target: DEFAULT_STRIKES[id] ? {type: "single", number: 1, distance: 1, scope: 3}
                                   : {type: "self", number: 0, distance: 0, scope: 1},
       range: {minimum: 0, maximum: 1},

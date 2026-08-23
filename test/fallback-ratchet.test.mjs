@@ -37,15 +37,38 @@ const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json")
 const mk = () => createAssets(offlineBackend(index));
 
 /**
- * 基线：2026-08-23 V2 开工时的实测值。**目标是全部降到 0。**
+ * 基线。**目标是全部降到 0。**
  *
- * 当时的分布：`generic.impact` 240 + `generic.travel` 192 + `generic.cast` 184 = 616 条 cue，
- * 落在 270 个动作上（其中 180 个动作的 cue **全部**来自兜底）。
+ * ## 2026-08-23 修订：第一版基线是在一份坏掉的语料上量的
+ *
+ * 初版写的是 180 / 270 / 616。那组数字**低估了现有兵库**，因为
+ * `tools/dump-fixtures.mjs` 合成快照时漏掉了 Crucible 的**标签传播**——
+ * 天赋物品上写的是 `melee` / `twohand` / `thrown`，**没有一个带字面 `strike`**，
+ * 而运行时 `melee → strike` 是靠传播补的（`const/action.mjs` 的 `TAGS[].propagate`）。
+ * 于是 `tags.includes("strike")` 恒假、69 条 `cost.weapon === true` 的动作
+ * `usage.strikes` **全部是 `[]`**。
+ *
+ * 后果：那 69 条里 **55 条一条 travel cue 都不出**，`strike.unarmed` 命中 **0 次**、
+ * `strike.melee` 只服务两个默认动作（4 次）。**整个武器天赋空间从未被任何测试执行过。**
+ * （`armory/travel.mjs:349` 的注释早就写着这件事，只是没人回头补语料。）
+ *
+ * 补上传播 + 按标签合成合理武器之后，**一条新规则都没写**，兜底就降了 37%：
+ *
+ * | | 坏语料 | 修好之后 |
+ * | --- | --- | --- |
+ * | 全兜底动作 | 180 | **105** |
+ * | 沾兜底动作 | 270 | **203** |
+ * | 兜底 cue | 616 | **387** |
+ * | 武器动作无 travel | 55/69 | **1/69** |
+ * | `strike.unarmed` / `strike.melee` | 0 / 4 | **66 / 64** |
+ *
+ * 这条订正本身就是「基线必须贴着实测值」那条守卫的第一次实战——它在语料修好后
+ * 立刻报警，逼着基线跟着下调，而不是让旧数字继续替新现实背书。
  */
 const BASELINE = Object.freeze({
-  actionsAllFallback: 180,   // 全部 cue 都来自兜底的动作数
-  actionsAnyFallback: 270,   // 至少一条 cue 来自兜底的动作数
-  fallbackCues: 616          // 兜底 cue 总条数
+  actionsAllFallback: 105,   // 全部 cue 都来自兜底的动作数
+  actionsAnyFallback: 203,   // 至少一条 cue 来自兜底的动作数
+  fallbackCues: 387          // 兜底 cue 总条数
 });
 
 /** 跑一遍全量语料，统计兜底命中。 */

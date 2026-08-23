@@ -65,3 +65,92 @@ test("每个 token 几何都带 uuid —— 缺了它一批断言会退化成同
     assert.ok(g.uuid.includes(g.tokenId), `${g.uuid} 与 tokenId ${g.tokenId} 对不上`);
   }
 });
+
+/* ================================================================
+ * 武器通路的语料覆盖（2026-08-23 补）
+ *
+ * 这组守卫补的是一个**存在了整个 V1 期、但没有任何测试能发现**的语料缺陷：
+ *
+ * Crucible 的天赋物品上写的是 `melee` / `twohand` / `thrown` 这些标签，
+ * **没有一个带字面 `strike`**——运行时由 `TAGS[].propagate` 补上（`melee → strike`、
+ * `thrown → melee → strike`、`projectile → ranged → strike`）。而 dump-fixtures 从前
+ * 直接读原始标签，于是 `tags.includes("strike")` 恒假、69 条 `cost.weapon === true` 的
+ * 动作 `usage.strikes` 全是 `[]`。
+ *
+ * 后果：那 69 条里 55 条一条 travel cue 都不出，`strike.unarmed` 命中 0 次、
+ * `strike.melee` 只服务两个默认动作。**整个武器天赋空间从未被执行过**，
+ * 而覆盖率、判别度、兜底率所有指标都照常给出「看起来合理」的数字。
+ *
+ * `test/fallback-ratchet.test.mjs` 能间接抓到回归（兜底率会涨），但它只说
+ * 「兜底涨了」，不说为什么。下面三条直接钉在根因上。
+ * ================================================================ */
+
+/** 与 `const/action.mjs` 的 `TAGS[].propagate` 逐条对应；改这里之前先去读那张表。 */
+const PROPAGATE = {
+  projectile: ["ranged"], mechanical: ["ranged"], talisman: ["strike"],
+  unarmed: ["melee"], rest: ["noncombat"], melee: ["strike"], ranged: ["strike"],
+  mainhand: ["strike"], twohand: ["strike"], offhand: ["strike"], thrown: ["melee"],
+  natural: ["melee"]
+};
+
+test("语料已应用 Crucible 的标签传播（melee → strike 等）", () => {
+  const missing = [];
+  for (const a of actions) {
+    const tags = new Set(a.tags ?? []);
+    for (const [src, dsts] of Object.entries(PROPAGATE)) {
+      if (!tags.has(src)) continue;
+      for (const d of dsts) {
+        if (!tags.has(d)) missing.push(`${a.id}: 有 ${src} 却没有传播出的 ${d}`);
+      }
+    }
+  }
+  assert.deepEqual(missing.slice(0, 8), [],
+    `${missing.length} 处标签传播没做。天赋物品上没有字面 strike 标签，` +
+    "不做传播的话按 strike/ranged 匹配的兵库规则在语料上永远不可达——" +
+    "而所有覆盖率指标仍会给出看起来合理的数字。");
+});
+
+test("绑武器的动作都带得动武器（strikes 非空）", () => {
+  const wb = actions.filter(a => !a.spell && a.cost?.weapon === true);
+  assert.ok(wb.length >= 60, `绑武器动作只有 ${wb.length} 条，语料是不是缺了？`);
+  const naked = wb.filter(a => !(a.strikes ?? []).length).map(a => a.id);
+  assert.deepEqual(naked.slice(0, 10), [],
+    `${naked.length}/${wb.length} 条 cost.weapon===true 的动作没有武器。` +
+    "Crucible 的 strike.prepare() 会在 usage.strikes 为空时把手上的武器塞进去，" +
+    "语料不合成武器就等于让整条武器通路测不到。");
+});
+
+test("语料行使到多种武器分类与伤害类型，不是单一值", () => {
+  const cats = new Set(), dmgs = new Set();
+  for (const a of actions) for (const w of (a.strikes ?? [])) {
+    if (w.category) cats.add(w.category);
+    if (w.damageType) dmgs.add(w.damageType);
+  }
+  assert.ok(cats.size >= 6,
+    `武器分类只行使到 ${cats.size} 种（${[...cats].join(",")}）。` +
+    "Crucible 有 16 个分类，武器派发规则按 category 分支——" +
+    "单一分类的语料测它等于没测。");
+  assert.ok(dmgs.size >= 6,
+    `武器伤害类型只行使到 ${dmgs.size} 种（${[...dmgs].join(",")}）。` +
+    "impact 的 ELEMENT_LAYER 有 12 支，靠武器决定伤害类型是它的第 3 级回退。");
+});
+
+test("武器动作确实产出 travel cue（不是解析出来就完事）", async () => {
+  const {offlineBackend, createAssets} = await import("../scripts/resolver/assets.mjs");
+  const {resolve} = await import("../scripts/resolver/resolve.mjs");
+  const {ARMORY} = await import("../scripts/armory/index.mjs");
+  const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
+  const mk = () => createAssets(offlineBackend(index));
+
+  const wb = actions.filter(a => !a.spell && a.cost?.weapon === true);
+  const silent = [];
+  for (const s of wb) {
+    const plan = resolve(s, {assets: mk(), armory: ARMORY});
+    if (!(plan?.cues ?? []).some(c => c.slot === "travel")) silent.push(s.id);
+  }
+  // 修复前是 55/69；留 5 条余量给「本来就不该有 travel 的」（如纯自身增益）
+  assert.ok(silent.length <= 5,
+    `${silent.length}/${wb.length} 条武器动作一条 travel cue 都不出：` +
+    `${silent.slice(0, 10).join(", ")}。` +
+    "这正是语料缺武器时的症状——规则写得再好也够不着。");
+});

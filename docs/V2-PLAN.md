@@ -103,6 +103,73 @@ balanced2 7、heavy2 8、projectile1 4、talisman1 2、mechanical1 4、projectil
 mechanical2 6、shieldLight 2、shieldHeavy 3。）
 `eskie.attack.melee.generic.01.<伤害类型>.<重量>.<8色>.<速度>.<01-03>` = **1250 个文件，V1 一个没用**。
 
+#### D1 订正（2026-08-23，owner 指出）：武器不带动作，动作由天赋给
+
+初版把武器派发写成「按 `snapshot.id` 命中专属规则」。**那是错的**，两处：
+
+**(1) Crucible 里所有武器攻击都走同一个 `strike` 动作**（`const/action.mjs:680`），
+所以 `snapshot.id` 永远是 `"strike"`，按动作 id 根本区分不了武器。
+
+**(2) 而且不止 `strike`。** 实测语料里 `cost.weapon === true` 的动作有 **69 个**——
+`heavyStrike`（强力打击）、`cleave`、`executionersStrike`、`backstab`、`flurry`、
+`whirlwind`、`ferociousLeap`… 全都绑武器。武器本身没有动作，动作是天赋给的。
+
+于是派发空间是 **69 个动作 × 92 件武器 = 6,348 种组合**，枚举不可能。
+
+#### 拆解：武器给「挥的是什么」，动作给「怎么挥」
+
+标签已经把这件事说清楚了：
+
+| 动作 | 标签 | 动作贡献的 |
+| --- | --- | --- |
+| `cleave` | melee, **twohand** | 大范围横扫 |
+| `executionersStrike` | melee, twohand, **deadly** | 过顶终结 |
+| `backstab` | **finesse, flanking**, deadly | 从背后、贴身 |
+| `flurry` | **dualwield**, mainhand, offhand | 多次快击 |
+| `heavyStrike` | melee, mainhand, **empowered** | 单次重击 |
+| `flyingKick` | unarmed, **movement, jump** | 跃起 |
+
+所以 **92 件武器素材 + 69 条动作修饰 = 161 份要写的东西**，不是 6,348 份。
+
+#### 可行性已经验过，不是设想
+
+**(a) cue 结构现成支持全部修饰，不用改 schema**（`resolver/resolve.mjs` 的 `CUE_DEFAULTS`）：
+
+| 动作要表达的 | 现成字段 |
+| --- | --- |
+| 挥砍方向（过顶/横扫） | `angle` / `aim` |
+| 主手 / 副手、左右 | `mirrorY` / `randomizeMirrorY` |
+| 力度（`empowered`） | `objectScale` |
+| 方位（`flanking` 背刺、贴身） | `offset` + `gridUnits` |
+| 快慢（`flurry` vs 重击） | `playbackRate` |
+| 多次连击 | 多条 cue + `delay` |
+| 附魔 / 元素叠色 | `tint` / `filter` |
+
+**(b) jb2a 的具名武器素材朝向一致。** 12 种武器的峰值帧拼图实测：
+全部左→右挥、武器头在前缘，差别只在弧形（短剑/锤是浅平扫、武士刀/弯刀是深 C 弧、
+战斧/镰刀是带钩陡弧）。**朝向一致才谈得上「按动作加 angle」——不一致的话没有共同基准。**
+
+#### 现状：一条规则扛了 25 种武器 × 69 个动作
+
+`armory/travel.mjs` 的 `strike.melee` 现在只按「贴身 / 隔格」在两个写死的素材间二选一
+（`shortsword.01` / `nodachi.01`）。这一条就是 A1 要拆开的地方。
+
+#### A1 的任务顺序（选材排在最后）
+
+1. **快照带上武器身份** —— 现在 `snapshot.mjs:241` 只留了 `category` 与 `damageType`，
+   没有 id。而 `usage.strikes` 里装的是**真实的武器 Item 文档**（源码在用 `w.config.category`），
+   所以 `w._stats.compendiumSource` 拿得到。**这一步不做，后面全白做。**
+2. **武器素材级联**：`compendiumSource` → `damageType × 重量 × 速度`（eskie 正交矩阵）→ 兜底
+3. **动作修饰表**：69 条，键是 `snapshot.id`，值是上表那些字段的修饰量
+4. **组合**：一条 travel 规则服务全部 69 × 92
+
+#### 还没想清楚的
+
+- **不是「挥」的绑武器动作**：`ferociousLeap`（跃踢）、`interruptingThrow`（反应投掷）
+  需要的不是修饰而是别的槽位组合，得单独看
+- **`natural` 标签 23 条**：敌人的天生武器（bite/claw/tail），走 39 件 adversary-equipment，
+  jb2a 的具名武器族对不上，要另找素材
+
 ### D2 · 「多重」按分量分档，不是一刀切
 
 现在平均 4.19 cue/动作。V2 按动作分量分三档：

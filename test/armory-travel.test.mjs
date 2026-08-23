@@ -15,6 +15,19 @@ const mk = () => createAssets(offlineBackend(index));
 const byId = id => actions.find(a => a.id === id);
 const travelCues = s => resolve(s, {assets: mk(), armory: ARMORY})?.cues.filter(c => c.slot === "travel") ?? [];
 
+/**
+ * 砍成单目标。
+ *
+ * 交棒点在计划里有两种表示法：单目标是 `waitUntilFinished`（相对片尾的负偏移），
+ * ≥2 目标会被 `resolver/resolve.mjs` 的 `parallelizeTargets` 改写成下一槽 cue 上的
+ * **绝对 delay**——那是在修「线性队列让两个目标的挥击排队、首目标血溅迟到中位 503ms」
+ * 的实战 bug。语料里的快照一律带 2 个目标，所以要断言规则自己写的那个负偏移常数，
+ * 得先把目标砍到 1 个。
+ *
+ * 断言规则常数用这个；要断言「实际交棒时刻」请直接读绝对 delay，别绕回相对式。
+ */
+const oneTarget = s => ({...s, targets: s.targets.slice(0, 1)});
+
 const melee = () => ({
   ...byId("strike"),
   strikes: [{category: "balanced1", damageType: "slashing"}],
@@ -383,7 +396,7 @@ test("脉冲跟符文色、抹掉硬起手、裁掉空转尾，且随体型放�
 });
 
 test("法术飞弹用自己的投射物素材，不是远程兜底那一枚", () => {
-  const s = byId("spell.storm.arrow");
+  const s = oneTarget(byId("spell.storm.arrow"));
   const c = travelCues(s)[0];
   assert.equal(c?.rule, "spell.gesture.arrow");
   assert.ok(filesOf("jb2a.ranged.01.projectile.01.dark_purple.30ft").includes(c.file));

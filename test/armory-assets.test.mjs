@@ -79,7 +79,9 @@ function armoryFiles() {
  * `jb2a` 排在 `jb2a-extras` 前面会把后者从中间截断。
  */
 const DB_PREFIXES = ["jb2a-extras", "jb2a", "eskie", "blfx", "psfx",
-                     "animated-spell-effects-cartoon", "ggg-sfx", "ggg-vfx", "jaamod"];
+                     "animated-spell-effects-cartoon", "ggg-sfx", "ggg-vfx", "jaamod",
+                     // canim 是本模组自己注册的裸路径音效命名空间（tools/index-sfx.mjs）
+                     "canim"];
 const DB_PREFIX_ALT = DB_PREFIXES.join("|");
 
 /**
@@ -109,7 +111,10 @@ function stripComments(src) {
  */
 function pickedPaths(src) {
   const stripped = stripComments(src);
-  const re = new RegExp(`["']((?:${DB_PREFIX_ALT})\\.[a-zA-Z0-9_.-]+)["']`, "g");
+  // 三种引号都要认。**反引号是 2026-08-23 补的**：此前只认单双引号，于是连不含插值的
+  // 常量模板字面量都完全看不见——用反引号写的规则会同时绕过「必须有 ASSET-NOTES 依据」
+  // 「不在否决清单」「不引用死链」三条守卫。这个洞是一轮架构评审的对抗核实挖出来的。
+  const re = new RegExp("[\"'`]((?:" + DB_PREFIX_ALT + ")\\.[a-zA-Z0-9_.-]+)[\"'`]", "g");
   const out = [];
   let m;
   while ((m = re.exec(stripped))) out.push(m[1]);
@@ -125,10 +130,11 @@ function pickedPaths(src) {
  * 对不上，自查断言变红——这正是它区别于「拿同一个正则再跑一遍」的地方。
  */
 function allQuotedLiterals(stripped) {
-  const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g;
+  // 反引号是 2026-08-23 补的（见 pickedPaths 的说明）。第三个捕获组是模板字面量。
+  const re = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
   const out = [];
   let m;
-  while ((m = re.exec(stripped))) out.push(m[1] ?? m[2]);
+  while ((m = re.exec(stripped))) out.push(m[1] ?? m[2] ?? m[3]);
   return out;
 }
 function looksLikeDbPath(literal) {
@@ -327,6 +333,42 @@ test("兵库文件里的 DB 路径不得以字符串拼接的形式出现（禁�
  *   3. 兵库路径是死链的**子路径**——死链本身是个中间节点时（数组成员形如
  *      `x.y[3]`，其父 `x.y` 整条不可靠，因为 ctx.pick 会随机取到缺失的那个）
  */
+/**
+ * 带插值的模板字面量不得用来构造 DB 路径。
+ *
+ * 与「禁止字符串拼接」是同一件事的另一种写法：模板插值出来的路径在静态扫描下
+ * **无法还原成具体值**，于是「有没有 ASSET-NOTES 依据」「是不是死链」「在不在否决清单」
+ * 三条全部无从判定——守卫不是被绕过，是根本没有可判定的对象。
+ *
+ * 一轮架构评审里有一份方案整个机制就建立在「地址拼出来」上，对抗核实指出它能让
+ * armory-assets 从新规则里抽出 0 条路径。那不是那份方案的问题，是这里少了一条禁令。
+ *
+ * 不含插值的模板字面量与普通字符串等价，不在禁止之列（pickedPaths 已经认它）。
+ */
+test("兵库不得用带插值的模板字面量构造 DB 路径", () => {
+  /*
+   * 先抓整段反引号内容，**再在 JS 里判有没有 `${`** —— 不在正则里写 `\$\{`。
+   *
+   * 初版把插值判据写进正则，结果在「JS 字符串 → 正则源」这层转义上栽了：
+   * `"\\$\\{"` 经过一次转义变成 `${`，而正则里的 `$` 是行尾锚点，于是**永不匹配**。
+   * 变异验证时插值那条溜了过去（守卫全绿），是被抓出来的。
+   * 判据搬到 JS 里就没有第二层转义，也就没有这类坑。
+   */
+  const re = new RegExp("`((?:" + DB_PREFIX_ALT + ")\\.[^`]*)`", "g");
+  const bad = [];
+  for (const file of armoryFiles()) {
+    const stripped = stripComments(readFileSync(file, "utf8"));
+    const r = new RegExp(re.source, "g");
+    let m;
+    while ((m = r.exec(stripped))) {
+      if (m[1].includes("${")) bad.push(basename(file) + ": `" + m[1] + "`");
+    }
+  }
+  assert.deepEqual(bad, [],
+    "DB 路径不得由模板插值拼出——静态扫描还原不了它，ASSET-NOTES 依据 / 死链 / 否决清单 " +
+    "三条守卫会对它整体失效。要按参数选材，请把候选写成完整字面量的表，由代码挑其中一条。");
+});
+
 test("兵库不引用任何死链", () => {
   const dead = index.deadLinks;
   assert.ok(Array.isArray(dead), "data/asset-index.json 没有 deadLinks 字段——重跑 npm run index");

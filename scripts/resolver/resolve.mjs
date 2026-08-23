@@ -169,6 +169,113 @@ function runBuild(rule, snapshot, ctx, target, built, slot, at, forTarget = null
 }
 
 /**
+ * 多目标：把「靠 waitUntilFinished 逐条交棒」改写成「每个目标各一条并行的绝对时间轴」。
+ *
+ * ## 这是在修一个实战 bug，不是优化
+ *
+ * `Sequence.play()`（sequencer.js:27772-27776）是**一条线性队列**：
+ * `if (section.shouldWaitUntilFinished) promises.push(await section._execute())`——
+ * 带交棒点的一段会卡住整个 for 循环。而每目标规则是**每个目标各出一条 cue**，
+ * 于是两个目标的挥击不是同时挥，而是排队：
+ *
+ *   travel(A) dur=933 wuf=-400   → 队列在 t=533 放行
+ *   travel(B) dur=767 wuf=-400   → B 的挥击从 t=533 才开始，队列在 t=900 放行
+ *   impact(A) delay=0            → **A 的血溅打在 t=900**
+ *
+ * A 的交棒点本该是 t=533（挥击 933ms、提前 400ms 出血），实际晚了 367ms——
+ * 那时 A 的挥击（t=933 结束）几乎已经收招。全量语料实测 177 个动作中招，
+ * 首目标迟到中位 503ms、最大 636ms；其中 fan/aura/pulse/cone/blast/ray 这些
+ * **系统里真的会打到多个目标**的类型占 53 个。`fanOfArrows` 现在是一支箭飞完再射下一支。
+ *
+ * ## 为什么改成绝对 delay 是安全的
+ *
+ * `waitUntilFinished` 的好处是**不需要提前知道时长**——播放端等素材自己播完。换成绝对
+ * delay 就必须在出手端算出时长。全量语料实测：354 条每目标阻塞 cue **全部带显式
+ * `duration`**，无一条 persist、无一条 sound。前提成立才敢改。
+ *
+ * 等待量取 `delay + duration + wuf`：`Section._execute()`（21506-21538）把整段包在
+ * `setTimeout(..., this._basicDelay)` 里，所以 delay 计入；`EffectSection.run()`
+ * （25008-25014）是 `totalDuration = _currentWaitTime + await duration` 再 setTimeout，
+ * 而那个 duration 是 `_totalDuration`（16112），**不含 delay**。
+ *
+ * ## 只在 ≥2 目标时改写
+ *
+ * 单目标下线性队列与并行时间轴**本来就等价**，改写只会白白丢掉「不知道时长也能交棒」
+ * 这个好处。所以单目标计划逐字节不变，既有基线与测试全部照旧。
+ *
+ * ## 交棒锚点：为什么末尾那条要留一个 waitUntilFinished
+ *
+ * 非阻塞段的 promise **不覆盖播放时长**：`_execute()`（21526）对非 async 段是裸
+ * `this.run()` 不 await，`play()` 末尾的 `Promise.allSettled` 于是可能在画面还在播时就
+ * 兑现，信号量（player/semaphore.mjs）会提前放行、让下一个动作叠上来。Sequencer 自己靠
+ * `_waitAnyway`（21247）给**最后一段**兜了这个底，这里把它显式写进计划，免得依赖一个
+ * 看不见的实现细节。
+ *
+ * ⚠ 与单目标时一样，这个覆盖是**近似**的：末尾那条不一定是最后结束的那条（分支长短
+ * 不一，A 的挥击 933ms、B 的 767ms）。这不是本次改写引入的，今天的单目标计划同样如此。
+ *
+ * ## 一致性优先于「能省则省」
+ *
+ * 初版对「阻塞 cue 不足 2 条」的计划提前返回——反正不会互相顶，何必改写。结果是同一批
+ * 多目标计划里两种表示法并存，任何守卫都得先分辨「这份改写了没有」，而那个判据只能从
+ * 改写留下的痕迹反推，是循环论证。现在一律改写：**≥2 目标的计划恒为绝对式、恒有且只有
+ * 一条带交棒点、且它就是起播最晚的那条**，不变式没有特例。
+ *
+ * @param {object[]} cues  原地改写（会重排：交棒锚点被挪到队尾）
+ * @param {number} targetCount
+ * @param {object} [ctx]  只用来发告警
+ */
+function parallelizeTargets(cues, targetCount, ctx) {
+  if (targetCount < 2) return;
+
+  // 每个目标一条独立时间轴。forTarget == null 的是共享内容（cast 槽、once 规则），
+  // 它对所有分支都可见：分支要等共享前奏跑完，共享内容也要等所有分支跑完。
+  const branch = new Map();
+  let shared = 0;
+  const startAt = new Map();
+
+  for (const c of cues) {
+    const key = c.forTarget;
+    if (key == null) {
+      // 共享 cue 排在所有已开分支之后（STS 形状：cast → 每目标 travel → 共享 impact）
+      for (const t of branch.values()) shared = Math.max(shared, t);
+    } else if (!branch.has(key)) {
+      branch.set(key, shared);            // 分支从共享前奏结束处起跑
+    }
+    const cur = key == null ? shared : branch.get(key);
+    const start = cur + (c.delay ?? 0);
+    startAt.set(c, start);
+    if (c.waitUntilFinished === null) continue;
+    // 这里是唯一一处「本来不必知道时长、现在必须知道」的地方。全量语料实测多目标计划里
+    // 每一条带交棒点的 cue 都有显式 duration，所以下面这条告警今天一次都不会响——
+    // 但**不能静默按 0 算**：真有规则漏写时长时，交棒点会悄悄塌到 0，画面错得无人知晓。
+    if (c.duration == null) {
+      ctx?.warn?.(`[${c.slot}] 规则 "${c.rule}" 在多目标计划里带交棒点却没有显式 duration，`
+                + `时长按 0 计——多目标下交棒点要在出手端算成绝对时刻，算不出来。`);
+    }
+    const end = start + (c.duration ?? 0) + c.waitUntilFinished;
+    if (key == null) shared = end; else branch.set(key, end);
+  }
+
+  for (const c of cues) {
+    c.delay = Math.max(0, Math.round(startAt.get(c)));
+    c.waitUntilFinished = null;
+  }
+
+  // 交棒锚点：挑**起播最晚**的那条，挪到队尾，给它一个交棒点。
+  //
+  // 挑最晚而不是就用队尾那条：分支长短不一（A 的挥击 933ms、B 的 767ms），发出顺序的
+  // 最后一条是 B 分支的尾巴，比 A 分支的尾巴早收工——实测 strike 差 166ms。
+  // 挪到队尾是因为带交棒点的一段会卡住队列，排在它后面的 cue 会被整体推迟；
+  // 此时所有 delay 都已是绝对时刻，谁排在前面都无所谓，只有它必须最后。
+  let anchor = 0;
+  for (let i = 1; i < cues.length; i++) if (cues[i].delay >= cues[anchor].delay) anchor = i;
+  const [a] = cues.splice(anchor, 1);
+  a.waitUntilFinished = 0;
+  cues.push(a);
+}
+
+/**
  * 施法者锚点。带上 tokenId/uuid/x/y 而不是只写 `{ref:"origin"}`——裸 ref 里既没有身份
  * 也没有坐标，播放层的 resolveRef（Task 14 的 resolveRefIn）除了返回 null 无事可做，
  * 整槽 cue 会被 play.mjs 的 `if (!target) continue` 静默吞掉。`ref` 仍留着，它决定的是
@@ -244,6 +351,7 @@ export function resolve(snapshot, {assets, armory, onWarn}) {
   }
 
   if (!cues.length) return drainWarnings(ctx, onWarn);
+  parallelizeTargets(cues, targets.length, ctx);
   return {
     v: PLAN_VERSION, seed: snapshot.seed, source: snapshot.id, region: snapshot.region ?? null,
     cues, warnings: ctx.warnings

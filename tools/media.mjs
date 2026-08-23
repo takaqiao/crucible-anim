@@ -137,12 +137,51 @@ export function alphaDecoder(codec) {
  * @param {(frame: Buffer, w: number, h: number, n: number) => void} cb  每帧一次，frame 是 w*h*4 的 RGBA
  * @returns {Promise<{w: number, h: number, frames: number}>}
  */
-export function eachFrame(file, cb) {
-  const {codec, width: w, height: h} = probeVideo(file);
+export function eachFrame(file, cb, {maxDim = 0} = {}) {
+  const {codec, width: srcW, height: srcH} = probeVideo(file);
   const dec = alphaDecoder(codec);
+
+  /*
+   * `maxDim` —— 在 **ffmpeg 里**先缩再出流，不是在 Node 里跳像素。
+   *
+   * 实测出来的必要性：jb2a 的帧数中位 47（最多 213），还有 4000×400 这类宽条素材，
+   * 一个文件要通过管道传 90 MB 的 RGBA；全库 11,700 个就是 1 TB 的管道流量。
+   * 瓶颈在 IPC，不在计算——只调 Node 侧的采样步长（step）一点用都没有。
+   * 缩到 240px 宽后管道流量降到 1/16，实测 3.5 s/文件 → 0.2 s/文件。
+   *
+   * 为什么可以缩：profile-family 算的量全部是**比值或帧序号**——
+   * contentRatio 是包围盒÷画幅、flashRatio 是亮度比、darkLuma 是内容区均值、
+   * peak/leadEmpty/tailEmpty 是帧号。它们对分辨率不敏感。
+   * （这句话由 test/profile-scale.test.mjs 对着全分辨率量测结果逐项核，不是口头保证。）
+   *
+   * 回报的 w/h 仍是**原始**尺寸：调用方要的是素材的真实画幅。
+   */
+  let w = srcW, h = srcH;
+  const vf = [];
+  if (maxDim > 0 && srcW * srcH > maxDim * maxDim) {
+    /*
+     * 按**面积**限制，不是按最长边。
+     *
+     * 实测踩出来的：初版按最长边缩到 240，jb2a 的 `4000×400` 宽条素材会变成 `240×24`
+     * ——只剩 5760 个像素，空帧判据（alphaSum 相对峰值的比例）和暗底均值直接失真。
+     * 抽样 40 条对全分辨率基线：tailEmpty 只有 33/40 一致、darkLuma 最大差 22%、
+     * loopDelta 最大差 100%。
+     *
+     * 改成「总像素数 ≤ maxDim²」并保持长宽比之后，宽条素材缩成 `1096×110` 而不是 `240×24`，
+     * 像素数与方形素材同量级，阈值类判据才可比。
+     */
+    const k = Math.sqrt((maxDim * maxDim) / (srcW * srcH));
+    // 缩到偶数：部分滤镜链对奇数尺寸挑剔，且 rawvideo 的 stride 要能整除
+    w = Math.max(2, Math.round(srcW * k / 2) * 2);
+    h = Math.max(2, Math.round(srcH * k / 2) * 2);
+    vf.push(`scale=${w}:${h}`);
+  }
+  vf.push("format=rgba");
+
   const stride = w * h * 4;
   return new Promise((res, rej) => {
-    const p = spawn(FFMPEG, ["-v", "error", ...dec, "-i", file, "-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
+    const p = spawn(FFMPEG, ["-v", "error", ...dec, "-i", file,
+      "-vf", vf.join(","), "-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
     let tail = null, n = 0;
     p.stdout.on("data", d => {
       const buf = tail ? Buffer.concat([tail, d]) : d;
@@ -152,6 +191,8 @@ export function eachFrame(file, cb) {
     });
     p.stderr.on("data", d => process.stderr.write(d));
     p.on("error", rej);
-    p.on("close", c => c === 0 ? res({w, h, frames: n}) : rej(new Error(`ffmpeg exit ${c} on ${file}`)));
+    p.on("close", c => c === 0
+      ? res({w: srcW, h: srcH, scaledW: w, scaledH: h, frames: n})
+      : rej(new Error(`ffmpeg exit ${c} on ${file}`)));
   });
 }

@@ -113,9 +113,22 @@ if (isMain) {
       // （f5 @ 29.97fps 是 0.167s）。overlay 走 framesync，两边时间轴对不上就
       // 什么都不输出——实测拼出来是一张纯底色的空网格。contact-sheet.sh 里有同一句，
       // 那边的注释记的是「30fps 素材被按 25fps 重采样，14 帧掉成 11 帧」。
-      const vf = `[0:v]select='eq(n\\,${peak})',scale=${size}:-1,format=rgba,setpts=N/TB[fg];` +
-                 `color=c=${BG}:s=16x16:r=1,format=rgb24[bgsrc];` +
-                 `[bgsrc][fg]scale2ref[bg][fg2];[bg][fg2]overlay=shortest=1:format=rgb,format=rgb24`;
+      /*
+       * 每格统一装进 size×size 的方框（等比缩放后居中留边），**不是**只定宽度。
+       *
+       * 拼图那一步用的是 `concat`，它要求所有输入的尺寸与 SAR 完全一致。只定宽度时
+       * 不同长宽比的素材会得到不同高度——同族素材尺寸统一所以前几次没暴露，
+       * 一混用（400×400 的冲击 + 1600×400 的箭矢）就报
+       * `Input link parameters do not match the corresponding output link`。
+       *
+       * 顺带好处：留边之后各格视觉基线一致，一眼能看出哪条素材内容占比大。
+       */
+      const vf = `[0:v]select='eq(n\\,${peak})',` +
+                 `scale=${size}:${size}:force_original_aspect_ratio=decrease,` +
+                 `pad=${size}:${size}:(ow-iw)/2:(oh-ih)/2:color=${BG}@0,` +
+                 `format=rgba,setpts=N/TB[fg];` +
+                 `color=c=${BG}:s=${size}x${size}:r=1,format=rgb24[bg];` +
+                 `[bg][fg]overlay=shortest=1:format=rgb,format=rgb24,setsar=1`;
       execFileSync(FFMPEG, ["-y", "-v", "error", ...dec, "-i", abs,
         "-filter_complex", vf, "-frames:v", "1", "-vsync", "0", still],
         {stdio: ["ignore", "ignore", "pipe"]});
@@ -157,6 +170,15 @@ if (isMain) {
  *     这也正是游戏里实际看到的：兵库对 eskie.damage 用 `startTime: 234ms`
  *     ≈ 29.97fps 的第 7 帧，就是在跳过闪爆。
  *   · < 2 视为无闪爆 → 峰值帧就是主体。
+ *
+ * ⚠ **这条启发式不是普适的，用之前先想清楚这一族的「闪爆」是什么。**
+ *
+ * 对 `eskie.damage`：闪爆是叠在主体上的白光，会把颜色冲掉，所以要躲开它。
+ * 对 `jb2a.melee_attack`：**闪爆本身就是那一挥**（挥砍弧的亮轨，flashRatio 实测 3–62），
+ * 残留只是挥完之后静止的武器。用 auto 拼出来的 12 格全是「挥完的武器停在那里」，
+ * 看不出弧形——**判断朝向与弧形必须 `--at peak`**。
+ *
+ * 一句话：素材的主体是「持续的形状」时用 auto，主体是「一瞬间的轨迹」时用 peak。
  *
  * @returns {[number, string]} [帧号, 来源说明]
  */

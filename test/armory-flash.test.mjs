@@ -102,6 +102,25 @@ function byTarget(snapshot) {
   return out;
 }
 
+/**
+ * 砍成单目标。
+ *
+ * 交棒点在计划里有两种表示法：单目标是 `waitUntilFinished`（相对片尾的负偏移），
+ * ≥2 目标会被 `resolver/resolve.mjs` 的 `parallelizeTargets` 改写成绝对 delay。
+ * 而**语料里一个单目标快照都没有**（113 个零目标、321 个双目标），所以要断言规则
+ * 自己写的那个负偏移常数，得先把目标砍到 1 个。
+ *
+ * ## 为什么不改成「从绝对 delay 反推交棒点」
+ *
+ * 试过，读不回来：交棒点是**槽的入场时刻**，而 impact 槽里每条 cue 还各带自己的
+ * 槽内偏移。`spell.gesture.arrow` 交棒点是 467ms，但自带闪爆规则会压掉 impact 的
+ * 结果层（T1），只剩 delay 再 +200 的元素层，从外面读到的是 667ms——多出来的 200
+ * 是槽内偏移，与交棒点无从分离。
+ *
+ * 所以分工：**这条守规则常数**，`parallelizeTargets` 把常数搬对了没有由
+ * `test/resolve-parallel.test.mjs` 守。
+ */
+const oneTarget = s => ({...s, targets: s.targets.slice(0, 1)});
 /** travel 里落在目标身上的那条自带闪爆（origin/region 锚点的不占目标这一层）。 */
 const targetFlash = slots => slots.travel.find(c => c.selfFlash && (c.selfFlash.anchor ?? "target") === "target");
 
@@ -220,7 +239,7 @@ test("T3 交棒点必须锚在自带闪爆那一段上（两个数都来自同�
   const seen = new Set();
   for (const a of actions) {
     if (!a.targets?.length) continue;
-    for (const [, slots] of byTarget(asResult(a))) {
+    for (const [, slots] of byTarget(oneTarget(asResult(a)))) {
       for (const c of slots.travel) {
         const f = c.selfFlash;
         if (!f || seen.has(c.rule)) continue;
