@@ -128,3 +128,53 @@
 3. **音效带淡入淡出**：`.fadeInAudio(500).fadeOutAudio(500)` + `volume(0.3)`。
    本仓库现在的 sound cue 没有音频淡入淡出。
 4. `scaleToObject(2 * tokenScale)`：按 token 体型缩放，与本仓库的 `ctx.geom.sizeScale()` 同义。
+
+## 八、eskie-macros（2026-08-23 用户装上后补挖）
+
+模块 id `eskie-macros`（Eskie Macro Pack），两个宏包 + `src/` 里约 100 个 JS 配方，
+**543 条不同 DB 路径**。
+
+### 它不是 autorec 那种形态
+
+`src/integration/autoanimations/defaultMenuSettings.js` 虽然是 AA 菜单格式，但**每个分区
+只有 1 条**（melee/range/ontoken/templatefx/aura/preset/aefx 各 1），是模板不是配方库。
+两个 compendium 宏包里的 4 个宏也只是 AA 的**接线**（`AA | Effect` / `Target` / `Template` /
+`Token`），零素材路径。
+
+配方在 `src/animation/effects/` 的 JS 里，按用途分目录：
+
+| 目录 | 数量 | 对本项目的用处 |
+| --- | --- | --- |
+| `target` | 22 | 打到目标身上的效果 |
+| `token` / `on-target` | 18 / 11 | token 层效果 |
+| `template` | 18 | 区域模板 |
+| **`active-effect`** | **18** | **逐状态动画（bless / charmed / dash / drunk / petrified / hide…）——第三层的直接素材** |
+| `emote` / `multi-token` / `aura` / `tile` | 7 / 3 / 1 / 1 | 其它 |
+
+### 一条现在就该记的接线细节
+
+`AA | Target` 宏里这段与本仓库的贴身/隔格分支是同一个设计：
+
+```js
+const distance = canvas.grid.measurePath([actionSource, actionTargets]).euclidean ?? 0;
+if (distance > 5 && config.animation.ranged) config.animation = config.animation.ranged;
+if (distance <= 5 && config.animation.melee) config.animation = config.animation.melee;
+```
+
+它按 **5 尺**切换远近两套动画——本仓库 `ctx.geom.adjacent()` 的贴身判定同义。
+
+### `showcase/attack-attack.js`：eskie 的攻击矩阵
+
+用的是 `eskie.attack.melee.generic.01.<伤害类型>.<轻重>.<色>.<速度>.<变体>`——
+**一个完全正交的矩阵**：3 伤害类型 × 3 轻重（light/medium/heavy）× 9 色 × 3 速度 × 3 变体。
+
+这与 jb2a 的路子**互补而不是重复**：
+
+| | 按什么组织 | 适合表达 |
+| --- | --- | --- |
+| jb2a `melee_attack.<形制>` / `<武器>.melee` | 武器身份 | 「这是把巨剑」 |
+| eskie `attack.melee.generic` | 伤害类型 × 轻重 × 速度 | 「这一下有多重、什么质感」 |
+
+本仓库现在用 jb2a 管身份；**强度轴（empowered / 多动作点）如果要做得更细，eskie 的
+轻重 × 速度维度比再叠一层拖尾更贴切**。已登记的 `eskie.attack.melee.generic.01.slashing.light`
+族就是这个矩阵的一角。
