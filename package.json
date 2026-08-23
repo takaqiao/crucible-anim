@@ -1,11 +1,11 @@
 {
   "name": "crucible-anim",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Crucible 系统动画补齐模组的开发工具与测试",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test \"test/*.test.mjs\"",
     "index": "node tools/index-sfx.mjs && node tools/extract-db.mjs",
     "weapons": "node tools/dump-weapons.mjs",
     "fixtures": "node tools/dump-fixtures.mjs",
