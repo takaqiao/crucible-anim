@@ -301,7 +301,28 @@
 - **`jb2a.glint.blue.few`** — 作为技能检定闪光否掉：111 帧里只是 2-3 颗四角星在 200x200 框内随机位置随机闪烁，没有起-止结构，也不锚定施法者中心（星点散落在整个框里，有几帧中心什么都没有）。而且 blue 分支实测几乎是纯白，看不出蓝。挂在 token 上像「屏幕上有灰尘」，读不出「检定触发了」。改用 `blfx.spell.cast.light_flare.1.center.color3`。
 - **`blfx.spell.cast.light_flare.1.center.color1`** — color1 不是一个色相，而是彩虹色散版——每根光针是不同颜色（红/绿/蓝/品红交错），中心核是青白色。这种素材没法跟着 12 种符文色走，任何 tint 上去都会脏。同一节点下的 color2-color7 才是单色版（已确认 color3=红、color5=绿），改用 color3。
 
-### travel 槽
+### persist 槽 · 状态标记
+
+- **`jaamod.condition.*`（整族大部分）** —— 34 个具名状态的 token 循环，名字与 Crucible 的
+  46 个状态几乎一一对应（blinded / deafened / stunned / prone / frightened / invisible /
+  paralyzed / poisoned / burning / frozen / flying / raging / grappled / diseased /
+  incapacitated / petrified / blessed / charmed / cursed / exhaustion），看起来是状态层的
+  现成解。**读图后整族大部分否掉：英文单词直接烤进了画面。** 峰值帧上明晃晃写着
+  DEAFENED / STUNNED / PRONE / FRIGHTENED / INVISIBLE / PARALYZED / POISONED / BURNING /
+  FROZEN / FLYING / RAGING / DISEASED / GRAPPLED / BLESSED / CHARMED / CURSED /
+  EXHAUSTION 1 / PETRIFIED / INCAPACITATED。本项目跑的是中文本地化的场（crucible-cn +
+  Babele），token 上顶着英文词既跳戏又翻不了——素材里的文字不是文案，改不动。
+
+  **少数无文字的可用**，逐条列出以免后人重翻：`dead_faint`（红色血爆）、`asleep`（飘 Z，
+  Z 是通用符号不算英文词）、`restrained`（暗色锁链十字）、`blood_drips` /
+  `blood_drips_circle`（血滴）、`concentration`（白色纸片旋绕）、`fire_shield`（橙色盾）、
+  `magic_shield`（蓝色盾）、`hexed`（橙色五芒星）、`unconscious`（白色碎片）、
+  `dead_curse`（血爆加符号）。
+
+  ⚠ 同族的 `jaamod.spells_effects.*` / `jaamod.misc.*` 未逐条读图，不知道有没有同样的问题，
+  **用之前先看图**。
+
+### travel 槽### travel 槽
 
 
 ### impact 槽 · 攻击结果层
