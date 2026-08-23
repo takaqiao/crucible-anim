@@ -201,3 +201,30 @@ export function spellCastSound(s, ctx) {
   return [{kind: "sound", file: fx.file, volume: 0.55,
            delay: 0, duration: t?.effectiveMs ?? null}];
 }
+
+/**
+ * 法术打中 / 打空的音效 cue。
+ *
+ * 与 `strikeSounds` 的区别只有一条：**不出挥击风声**——法术没有挥击。命中音走同一张
+ * `HIT_SOUND` 表（按伤害类型），落空走同一条划空声。
+ *
+ * 法术的伤害类型在**目标身上**：`usage.damageType` 对法术恒为 undefined（Crucible 的
+ * models/spell-action.mjs 不写它），结算把符文的伤害类型写进 `target.damage.type`。
+ *
+ * @param {object} s 动作快照
+ * @param {object} ctx
+ * @param {object|null} target
+ * @param {number} contactMs 画面上「打中」的时刻（= 该规则的 duration + waitUntilFinished）
+ * @returns {object[]} 0-1 条 sound cue
+ */
+export function spellImpactSound(s, ctx, target, contactMs) {
+  if (!s?.spell || !target) return [];
+  const missed = (target.results ?? []).some(r => r.result === 0 || r.result === 1);
+  const dmg = target.damage?.type ?? s.usage?.damageType ?? null;
+  const fx = ctx.sound(missed ? MISS_SOUND : hitSoundFor(dmg));
+  if (!fx) return [];
+  const t = soundAt(fx.file, contactMs);
+  return [{kind: "sound", file: fx.file, volume: 0.7,
+           delay: t?.delay ?? contactMs, startTime: t?.startTime ?? 0,
+           duration: t?.effectiveMs ?? null}];
+}

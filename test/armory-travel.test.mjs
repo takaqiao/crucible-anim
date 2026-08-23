@@ -319,13 +319,13 @@ test("锥形张角按半宽之比撑 scale.y（60°/120° 在贴图可撑范围�
   // 贴图是 53.13° 的 5e 锥（600x600 画幅 / _template=[100,0,0] / 抽帧实测斜率 0.49-0.53）。
   // 倍率 = tan(区域半角) / tan(26.565°) = tan(A/2) / 0.5。
   const p60 = planOf(withRegion("spell.flame.cone", {angle: 60}));
-  const c60 = p60.cues.filter(x => x.slot === "travel")[0];
+  const c60 = p60.cues.filter(x => x.slot === "travel" && x.kind !== "sound")[0];
   assert.equal(c60.scale.x, 1, "scale.x 必须留 1：Sequencer 会拿它去除距离");
   assert.equal(c60.scale.y, 1.154701, "60° 模板要把 53.13° 的贴图撑宽 15%");
   assert.deepEqual(p60.warnings, [], "60° 在贴图可撑范围内，不该有截断告警");
 
   const p120 = planOf(withRegion("spell.flame.cone", {angle: 120}));
-  const c120 = p120.cues.filter(x => x.slot === "travel")[0];
+  const c120 = p120.cues.filter(x => x.slot === "travel" && x.kind !== "sound")[0];
   assert.equal(c120.scale.y, 3.464102, "120° 要 tan60/0.5=3.46，角度比 120/60=2 只能撑到 90°");
   assert.deepEqual(p120.warnings, [], "120° 仍在 CONE_YSCALE_MAX=4 以内，不该有截断告警");
 
@@ -353,7 +353,7 @@ test("张角 60/120/180/210/360 五点锁：scale.y 恒为有限正数，≥180�
   ];
   for (const {angle, y, warns} of cases) {
     const plan = planOf(withRegion("spell.flame.cone", {angle}));
-    const c = plan.cues.filter(x => x.slot === "travel")[0];
+    const c = plan.cues.filter(x => x.slot === "travel" && x.kind !== "sound")[0];
     assert.equal(c.scale.x, 1, `angle=${angle} scale.x 必须为 1`);
     assert.ok(Number.isFinite(c.scale.y), `angle=${angle} scale.y 不能是 NaN/Infinity，实际 ${c.scale.y}`);
     assert.ok(c.scale.y > 0, `angle=${angle} scale.y 不能是负数或 0，实际 ${c.scale.y}`);
@@ -366,7 +366,7 @@ test("张角 60/120/180/210/360 五点锁：scale.y 恒为有限正数，≥180�
 test("张角输入非有限数字（NaN/Infinity/坏字符串）时退回默认 60°，不产生 NaN", () => {
   for (const bad of [NaN, Infinity, -Infinity, "not-a-number"]) {
     const plan = planOf(withRegion("spell.flame.cone", {angle: bad}));
-    const c = plan.cues.filter(x => x.slot === "travel")[0];
+    const c = plan.cues.filter(x => x.slot === "travel" && x.kind !== "sound")[0];
     assert.ok(Number.isFinite(c.scale.y), `angle=${bad} scale.y 不能是 NaN/Infinity，实际 ${c.scale.y}`);
     assert.equal(c.scale.y, 1.154701, `angle=${bad} 应退回默认 60° 的倍率`);
   }

@@ -195,7 +195,8 @@ test("T1d 射线的星爆记在模板末端，不替沿途每个目标的命中�
   const s = asResult(actions.find(a => a.id === "spell.frost.ray"), RESULT.HIT);
   assert.ok(s.targets.length > 1, "这条断言需要多目标射线");
   const cues = resolve(s, {assets: mk(), armory: ARMORY}).cues;
-  const beam = cues.filter(c => c.slot === "travel");
+  // 只数**画面** cue：法术现在还会发一条命中音，它也在 travel 槽里
+  const beam = cues.filter(c => c.slot === "travel" && c.kind !== "sound");
   assert.equal(beam.length, 1, "射线是 once 规则，一次动作只有一条光束");
   assert.equal(beam[0].selfFlash?.anchor, "region",
     "射线的自带星爆必须记在模板末端（region），记成 target 会连坐沿途所有目标");

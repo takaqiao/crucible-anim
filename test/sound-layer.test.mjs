@@ -33,6 +33,14 @@ const mk = () => createAssets(offlineBackend(index));
 /** 目标：一路涨到全语料。**只许增不许减。** */
 const BASELINE = Object.freeze({actionsWithSound: 303});
 
+/**
+ * 用**素材亮度峰值**定命中点的规则——也就是走 `clip-table` 那一套的挥击规则。
+ * 法术规则不在此列：它们的交棒点是手调的、锚在自带闪爆窗口上。
+ */
+const CLIP_DRIVEN = new Set([
+  "strike.melee", "strike.unarmed", "strike.melee.combo", "strike.ranged.weapon"
+]);
+
 /** 一条音效 cue 实际**响**在第几毫秒。 */
 const heard = c => (c.delay ?? 0) + (SFX[c.file][0] - (c.startTime ?? 0));
 
@@ -72,6 +80,12 @@ test("命中音的响点落在画面的命中点上，晚了必须是物理上�
       const visual = visuals[visuals.length - 1];
       const sounds = own.filter(c => c.kind === "sound" && SFX[c.file]);
       if (!visual || !sounds.length) continue;
+      // **只核挥击类规则。** 这条守卫的判据是「画面命中点 = 素材的亮度峰值」，
+      // 那是挥击规则的构造方式（`waitUntilFinished = contactMs - durationMs`）。
+      // 法术规则的交棒点是**手调**的、锚在素材自带闪爆的窗口上，与亮度峰值不是一回事
+      // ——实测 `spell.control.arrow` 的亮度峰值在 1567ms 而交棒点在 1667ms，
+      // 拿峰值当参照会把排得完全正确的声音判成晚了 100ms。
+      if (!CLIP_DRIVEN.has(visual.rule)) continue;
       const clip = clipOf(visual.file);
       if (!clip) continue;
       checked++;

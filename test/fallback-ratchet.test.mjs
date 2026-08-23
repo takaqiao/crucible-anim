@@ -94,7 +94,10 @@ function measure() {
   const worst = [];
   for (const s of actions) {
     const plan = resolve(s, {assets: mk(), armory: ARMORY});
-    const rules = (plan?.cues ?? []).map(c => c.rule ?? "?");
+    // 只数**画面** cue。音效 cue 挂在发它的那条规则名下，而 `generic.travel` 现在也
+    // 发法术命中音——把它算成「兜底 cue」会让这条棘轮凭空涨 168，而画面派发一点没变差。
+    // 这条棘轮量的是画面派发质量，声音有自己的棘轮（test/sound-layer.test.mjs）。
+    const rules = (plan?.cues ?? []).filter(c => c.kind !== "sound").map(c => c.rule ?? "?");
     if (!rules.length) continue;
     total += rules.length;
     const fb = rules.filter(r => String(r).startsWith("generic"));

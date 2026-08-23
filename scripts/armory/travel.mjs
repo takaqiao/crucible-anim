@@ -143,7 +143,7 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
 import {clipOf, leastDeadAir} from "./clip-table.mjs";
-import {strikeSounds} from "./sounds.mjs";
+import {strikeSounds, spellImpactSound} from "./sounds.mjs";
 
 /**
  * 这个动作是不是「打好几下」。
@@ -198,12 +198,12 @@ export default [
   {
     id: "spell.gesture.ray", pri: 780, once: true,
     when: s => s.spell?.gesture === "ray" && s.region?.type === "line",
-    build: (s, ctx) => {
+    build: (s, ctx, target) => {
       const end = templateEnd(s.region);
       if (!end) return null;
       const fx = ctx.pick("jb2a.ranged.beam.001.01.blue.30ft");
       if (!fx) return null;
-      return {
+      const rayCue = {
         file: fx.file,
         at: templateAnchor(s),
         stretchTo: end,
@@ -213,6 +213,8 @@ export default [
         selfFlash: {from: 967, at: 967, to: 2100, anchor: "region", sustained: true},
         waitUntilFinished: -300
       };
+      // 命中音：交棒点就是画面上「打中」的时刻（duration + waitUntilFinished）
+      return [...spellImpactSound(s, ctx, target, 1800), rayCue];
     }
   },
 
@@ -235,12 +237,12 @@ export default [
   {
     id: "spell.gesture.cone", pri: 780, once: true,
     when: s => s.spell?.gesture === "cone" && s.region?.type === "cone",
-    build: (s, ctx) => {
+    build: (s, ctx, target) => {
       const end = templateEnd(s.region);
       if (!end) return null;
       const fx = ctx.pick("jb2a.breath_weapons.fire.cone", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const coneCue = {
         file: fx.file,
         at: templateAnchor(s),
         stretchTo: end,
@@ -250,6 +252,8 @@ export default [
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -300
       };
+      // 命中音：交棒点就是画面上「打中」的时刻（duration + waitUntilFinished）
+      return [...spellImpactSound(s, ctx, target, 3366), coneCue];
     }
   },
 
@@ -270,10 +274,10 @@ export default [
   {
     id: "spell.gesture.pulse", pri: 770, once: true,
     when: s => s.spell?.gesture === "pulse",
-    build: (s, ctx) => {
+    build: (s, ctx, target) => {
       const fx = ctx.pick("eskie.pulse.energy.01", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const pulseCue = {
         file: fx.file,
         objectScale: 1.2 * ctx.geom.sizeScale(),
         fadeIn: 100, fadeOut: 200, zIndex: 85,
@@ -281,6 +285,8 @@ export default [
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -200
       };
+      // 命中音：交棒点就是画面上「打中」的时刻（duration + waitUntilFinished）
+      return [...spellImpactSound(s, ctx, target, 434), pulseCue];
     }
   },
 
@@ -307,10 +313,10 @@ export default [
   {
     id: "spell.gesture.surge", pri: 770, once: true,
     when: s => s.spell?.gesture === "surge",
-    build: (s, ctx) => {
+    build: (s, ctx, target) => {
       const fx = ctx.pick("eskie.casting.physical.01.center.one_shot", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const surgeCue = {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         zIndex: 85,
@@ -319,6 +325,8 @@ export default [
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -300
       };
+      // 命中音：交棒点就是画面上「打中」的时刻（duration + waitUntilFinished）
+      return [...spellImpactSound(s, ctx, target, 825), surgeCue];
     }
   },
 
@@ -342,7 +350,7 @@ export default [
     build: (s, ctx, target) => {
       const fx = ctx.pick("jb2a.ranged.01.projectile.01.dark_purple.30ft");
       if (!fx) return null;
-      return {
+      const arrowCue = {
         file: fx.file,
         at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
@@ -354,6 +362,8 @@ export default [
         selfFlash: {from: 467, at: 467, to: 633},
         waitUntilFinished: -1200
       };
+      // 命中音：交棒点就是画面上「打中」的时刻（duration + waitUntilFinished）
+      return [...spellImpactSound(s, ctx, target, 467), arrowCue];
     }
   },
 
@@ -834,7 +844,7 @@ export default [
       if (!s.usage.isRanged) return null;
       const fx = ctx.pick("eskie.attack.ranged.arrow.ray.physical.blue.30ft");
       if (!fx) return null;
-      return {
+      const shot = {
         file: fx.file, objectScale: 1 * ctx.geom.sizeScale(),
         at: originAnchor(s),
         stretchTo: {x: target.x, y: target.y},
@@ -843,6 +853,9 @@ export default [
         duration: 800,
         waitUntilFinished: -300, zIndex: 100
       };
+      // 这条兜底也服务 84 条法术（无手势专属规则的那些），给它们补上命中音。
+      // 非法术走这里的是「远程但没有武器」的技能类动作，`spellImpactSound` 自己会返回空。
+      return [...spellImpactSound(s, ctx, target, 500), shot];
     }
   }
 ];
