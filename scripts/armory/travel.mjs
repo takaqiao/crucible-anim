@@ -142,6 +142,7 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             uuid: s.origin?.uuid ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
+import {shapeOfAction, CONE_VOLLEY, RAY_GENERIC, PULSE_BURST} from "./action-shapes.mjs";
 import {pickFor, TALISMAN_SHAPE, talismanColorFor,
         RANGED_SHAPE, RANGED_CATEGORY} from "./weapon-shapes.mjs";
 
@@ -394,6 +395,62 @@ export default [
    * 个半身位」——这就是「射歪了」。近战三条规则写 `missed: false` 是同一个道理的另一面：
    * 它们用 aim.towards，写 true 也只会换来一条告警，打偏由 impact 的 MISS 层去表达。
    */
+  /**
+   * 区域形状的武器动作：锥形喷吐 / 直线贯穿 / 自身一圈。**这是「动作轴」的第一条规则**——
+   * 前面所有规则问的都是「拿的什么武器」，这一条问「做的什么动作」。
+   *
+   * 判据是 Crucible 动作自己的 `target.type`。改造前这 11 条动作全部落到按武器选的单体
+   * 挥击上，而且**每个目标各挥一次**：
+   *
+   *   tailSweep（尾巴横扫一圈）  → 一记拳击 ×2
+   *   acidSpray（喷一口酸）      → 一记拳击 ×2
+   *   penetratingShot（贯穿射击）→ 一发普通子弹 ×2
+   *   fanOfArrows（扇形箭雨）    → 一支普通箭 ×2
+   *
+   * `once: true`：区域动作一次只该出一份画面，锥形打中 5 个人不该叠 5 份锥形。
+   *
+   * ## 不依赖模板几何
+   *
+   * 这些动作的快照 `region` 是 null（Crucible 的武器区域动作不走 MeasuredTemplate），
+   * 所以锚在施法者、朝代表目标定向，不像 `spell.gesture.cone` 那样吃模板起点。
+   * 直线用 `stretchTo` 拉到目标（顺带让 `.missed()` 生效），锥形与脉冲用 `aim.towards`
+   * 转向——脉冲其实不需要朝向，但给了也无害，且保留了「朝主要威胁转身」的读法。
+   *
+   * ## 颜色走动作而不是武器
+   *
+   * `ctx.damageColor()` 读的正是 `usage.damageType`——喷酸的酸来自动作，不是牙。
+   * 物理伤害在 DAMAGE_COLOR 里是 null，退回各族中性色（见 action-shapes.mjs 的 NEUTRAL）。
+   */
+  {
+    id: "strike.shape.area", pri: 670, once: true,
+    when: s => s.cost?.weapon === true && !s.spell && !!shapeOfAction(s),
+    build: (s, ctx, target) => {
+      const shape = shapeOfAction(s);
+      const color = ctx.damageColor() ?? shape.neutral;
+      const fx = ctx.pick(shape.path, color ? {color} : {});
+      if (!fx) return null;
+      const isRay = shape.path === RAY_GENERIC;
+      // 各族实测长度：箭雨 92-120 帧、锥形 69 帧、火花环 64 帧、贯穿线 15 帧（@30fps）。
+      // 除贯穿线外都远长于一次攻击该占的时间，统一裁到 1200ms。
+      const duration = shape.path === RAY_GENERIC ? 500
+                     : shape.path === CONE_VOLLEY ? 1500 : 1200;
+      return {
+        file: fx.file,
+        filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
+        objectScale: 1 * ctx.geom.sizeScale(),
+        at: originAnchor(s),
+        ...(isRay && target
+          ? {stretchTo: {x: target.x, y: target.y}}
+          : {}),
+        aim: target
+          ? {towards: {tokenId: target.tokenId, x: target.x, y: target.y},
+             missed: isRay && target.results.some(r => r.result === 0 || r.result === 1)}
+          : null,
+        duration,
+        waitUntilFinished: -300, zIndex: 100
+      };
+    }
+  },
   {
     id: "strike.ranged.weapon", pri: 640,
     when: s => !s.tags?.includes("thrown") &&

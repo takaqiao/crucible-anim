@@ -420,7 +420,7 @@ test("F：全兵库每条规则（ALWAYS_SILENT 除外）都能预览出含自�
     }
   }
   assert.deepEqual(gaps, [], `${gaps.length} 条规则预览不出来`);
-  assert.equal(checked, 38,
+  assert.equal(checked, 39,
     "兵库规则条数变了：确认新规则要么配了 fixture、要么进了 ALWAYS_SILENT，再改这个数字");
 });
 

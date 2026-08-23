@@ -8,20 +8,24 @@
  * 「每件武器都有为它选的画面」里的「每件」就是这 92 件，定义域必须来自枚举而不是
  * 手写清单——本项目已经在「本机装了哪些模块」上栽过一次。
  *
- * ## 2026-08-23 第二轮之后
+ * ## 2026-08-23 第三轮之后
  *
- * | | 起点 | 一轮 | 二轮 |
- * | --- | --- | --- | --- |
- * | 不同 travel 素材 | 6 | 43 | **58** |
- * | 最大碰撞桶 | 20 | 8 | **6** |
- * | 哑的武器 | 14 | 5 | **0** |
+ * ⚠ **本轮换过度量口径**：`distinctTravel` 从「不同文件数」改成「不同 DB 路径数」。
+ * 原口径把变体随机性当成了派发区分度——`ctx.pick` 在同一节点的 4 个变体里按种子取一个，
+ * 于是「短剑类武器都落在 shortsword」这**一个**决策被算成 4 种素材。所以下表第三列的
+ * 43 与第二列的 58 **不可直接比较**，43 才是真实的「兵库做了多少种不同的选择」。
  *
- * 二轮做的：39 件天生武器从骨棒改到 `jb2a.bite.400px`（獠牙大口 7 色）与
- * `jb2a.claws.400px`（抓痕 8 色），元素变体落在颜色轴上；5 面盾接上盾撞；
- * 8 件远程武器按弓/弩/枪分成箭矢、弩矢、弹丸三类。
+ * | | 起点 | 一轮 | 二轮 | 三轮 |
+ * | --- | --- | --- | --- | --- |
+ * | 不同 travel 素材（旧口径·文件） | 6 | 43 | 58 | — |
+ * | 不同 travel 路径（新口径） | — | — | — | **43** |
+ * | 最大碰撞桶 | 20 | 8 | 6 | **6** |
+ * | 哑的武器 | 14 | 5 | 0 | **0** ✅ |
  *
- * 剩下的碰撞桶**都是语义正确的复用**：6 个物理爪共用褐色抓痕、5 个物理咬共用红色獠牙、
- * 4 个毒酸肢共用绿爪。再往下拆没有意义。
+ * 三轮做的：突刺武器（刺剑/短击剑/细身匕/长矛/标枪/骑枪）改用
+ * `jb2a.melee_generic.piercing.*`——早先说的「素材库里没有突刺动画」是错的，只是找错了族。
+ *
+ * 剩下的四个大桶**都是语义正确的复用**：6 个物理爪、5 个物理咬、5 件单手突刺、5 面盾。
  *
  * ## 起点
  *
@@ -58,9 +62,34 @@ const mk = () => createAssets(offlineBackend(index));
 /** 目标：silent → 0，distinctTravel → 上升，biggestBucket → 下降。 */
 const BASELINE = Object.freeze({
   silent: 0,           // 一条 travel cue 都不出的武器数 —— **已归零**
-  distinctTravel: 58,  // 92 件武器命中的不同 travel 素材数
-  biggestBucket: 6     // 最大的一个「多件武器共用同一素材」桶
+  distinctTravel: 43,  // 92 件武器命中的不同 travel **DB 路径**数（不是文件数，见 buildFileToPath）
+  biggestBucket: 6     // 最大的一个「多件武器共用同一路径」桶
 });
+
+/**
+ * 文件 → 它所在的 DB 节点路径。
+ *
+ * **不能拿文件数当派发区分度。** `ctx.pick` 会在同一个节点的变体数组里按种子随机取一个
+ * （短剑那一支有 4 个变体 = 4 种挥击方向），于是「所有短剑类武器都落在 shortsword」这
+ * **一个**派发决策，会被文件计数算成 4 种不同素材。初版棘轮正是这么数的，结果是：把 6 件
+ * 突刺武器从「散落在短剑/木棒/巨剑的随机变体上」改成「统一刺出去」——一个明确的改进——
+ * 反而让数字从 58 掉到 57，棘轮报了假警。
+ *
+ * 按节点路径数就没有这个问题：它数的是「兵库做了多少种不同的选择」，正是这条棘轮想说的。
+ */
+function buildFileToPath() {
+  const out = new Map();
+  const walk = (node, path) => {
+    if (typeof node === "string") { out.set(node, path); return; }
+    if (Array.isArray(node)) { for (const f of node) if (typeof f === "string") out.set(f, path); return; }
+    if (node && typeof node === "object") {
+      for (const k of Object.keys(node)) if (!k.startsWith("_")) walk(node[k], path ? `${path}.${k}` : k);
+    }
+  };
+  walk(index.tree, "");
+  return out;
+}
+const FILE_TO_PATH = buildFileToPath();
 
 function measure() {
   const files = new Map();
@@ -69,7 +98,8 @@ function measure() {
     const plan = resolve(s, {assets: mk(), armory: ARMORY});
     const travel = (plan?.cues ?? []).filter(c => c.slot === "travel" && c.file);
     if (!travel.length) { silent.push(s.id); continue; }
-    files.set(s.id, travel[0].file);
+    // 记的是派发到哪个 DB 节点，不是随机到哪个变体文件（见 buildFileToPath）
+    files.set(s.id, FILE_TO_PATH.get(travel[0].file) ?? travel[0].file);
   }
   const buckets = new Map();
   for (const [id, f] of files) {

@@ -62,6 +62,18 @@ export const WEAPON_SHAPE = Object.freeze({
   spikedGreatclub: "jb2a.melee_attack.03.greatclub.01",
   greathammer: "jb2a.melee_attack.03.maul.01",
 
+  // —— 突刺 ——
+  // **`melee_attack` 整族没有突刺，但 `melee_generic` 有。** 早先「素材库里没有突刺动画」
+  // 那句话是错的，只是找错了族：`jb2a.melee_generic.piercing.one_handed` 是一记横向直刺
+  // （亮尖前突），two_handed 是弧线冲刺。刺剑 / 短击剑 / 细身匕 / 长矛 / 标枪本来都被
+  // 分类兜底成短剑横斩，现在各自刺出去。
+  rapier:   "jb2a.melee_generic.piercing.one_handed",
+  sai:      "jb2a.melee_generic.piercing.one_handed",
+  stiletto: "jb2a.melee_generic.piercing.one_handed",
+  spear:    "jb2a.melee_generic.piercing.one_handed",
+  javelin:  "jb2a.melee_generic.piercing.one_handed",
+  warlance: "jb2a.melee_generic.piercing.two_handed",
+
   // —— 长柄 ——
   // 木杆类用巨木棒（峰值帧看得见整根褐色木棒），带刃的用镰刀（看得见柄与弯刃）
   boStaff:     "jb2a.melee_attack.03.greatclub.01",

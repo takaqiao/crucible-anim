@@ -227,6 +227,11 @@ export const PREVIEW_FIXTURES = Object.freeze({
     isRanged: true, tags: ["strike", "ranged", "piercing"],
     damageType: "piercing", strikeCategory: "projectile1"
   }),
+  // 区域形状：默认快照是 single，打不到按 target.type 分锥/线/环的那条规则
+  "travel/strike.shape.area": Object.freeze({
+    targetType: "cone", tags: ["strike", "melee", "acid"], damageType: "acid",
+    strikeCategory: "balanced1", weapon: "scimitar"
+  }),
   // 远程武器：默认快照是近战单目标，打不到按武器分弓/弩/枪的那条规则
   "travel/strike.ranged.weapon": Object.freeze({
     isRanged: true, tags: ["strike", "ranged", "piercing"],
