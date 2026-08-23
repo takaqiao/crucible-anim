@@ -246,7 +246,20 @@ test("区域与自身姿态在零目标动作上照样出内容", () => {
   }
 });
 
-test("全量扫描：once 规则任何动作都不超 1 条，其余规则不超目标数", () => {
+/**
+ * 会分层的规则**必须在这里报备层数**。
+ *
+ * 上限从「每目标 1 条」放宽到「每目标 N 条」时不能含糊——那正是这条守卫要防的
+ * 失控生成。报备制的意思是：分层是一个被审过的事实，而不是把上限调松。
+ *
+ * `strike.melee` 2 层：`empowered`（强力打击）在挥击之上再叠一道逐帧对齐的彩色拖尾。
+ * 普通打击仍然只出 1 条，所以这是上限不是常量。
+ */
+const LAYERED = new Map([
+  ["strike.melee", 2]
+]);
+
+test("全量扫描：once 规则任何动作都不超 1 条，其余规则不超「目标数 × 报备层数」", () => {
   const onceIds = new Set(travel.filter(r => r.once === true).map(r => r.id));
   assert.ok(onceIds.size >= 4, `声明 once 的规则只有 ${onceIds.size} 条，少于区域/自身姿态的条数`);
   const bad = [];
@@ -254,7 +267,7 @@ test("全量扫描：once 规则任何动作都不超 1 条，其余规则不超
     const n = new Map();
     for (const c of travelCues(s)) n.set(c.rule, (n.get(c.rule) ?? 0) + 1);
     for (const [rule, count] of n) {
-      const cap = onceIds.has(rule) ? 1 : Math.max(s.targets.length, 1);
+      const cap = onceIds.has(rule) ? 1 : Math.max(s.targets.length, 1) * (LAYERED.get(rule) ?? 1);
       if (count > cap) bad.push(`${s.id} / ${rule}：${count} 条 > 上限 ${cap}`);
     }
   }
@@ -411,8 +424,12 @@ test("拳击三项几何修正齐全，且颜色锁死在 29 帧的安全分支"
   const base = unarmed();
   const c = travelCues(base)[0];
   assert.equal(c?.rule, "strike.unarmed");
-  assert.ok(filesOf("jb2a.unarmed_strike.no_hit.01.blue").includes(c.file),
-    "拳击必须用不自带命中爆闪的 no_hit 分支，命中闪光交给 impact 层");
+  // 素材改了：这条规则现在按**部位**选（见 armory/weapon-shapes.mjs 的 pickFor）——
+  // 咬→獠牙大口、爪→抓痕、拳/指虎→拳影弧。改造前 14 个动作共用一支蓝色拳影，
+  // `necroticBite`（腐蚀咬击）播的也是它。这里的合成快照是 unarmed 分类无 identifier，
+  // 走「拳」那一支。
+  assert.ok(filesOf("jb2a.melee_generic.creature_attack.fist.001.red").includes(c.file),
+    "徒手默认走拳影弧；换成别的说明部位路由被绕过了");
   assert.equal(c.gridUnits, true, "offset 是格数不是像素");
   const big = travelCues({...base, origin: {...base.origin, width: 3}})[0];
   assert.ok(big.objectScale > c.objectScale, "大体型应放大");

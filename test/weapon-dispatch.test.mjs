@@ -63,7 +63,9 @@ const mk = () => createAssets(offlineBackend(index));
 const BASELINE = Object.freeze({
   silent: 0,           // 一条 travel cue 都不出的武器数 —— **已归零**
   distinctTravel: 43,  // 92 件武器命中的不同 travel **DB 路径**数（不是文件数，见 buildFileToPath）
-  biggestBucket: 6     // 最大的一个「多件武器共用同一路径」桶
+  // 6 → 7：`unarmed/claws` 也接进了爪痕路由（此前掉在徒手那支拳影上）。桶变大是
+  // **正确的复用**——7 件都是物理爪，共用同一张爪痕本来就对。
+  biggestBucket: 7     // 最大的一个「多件武器共用同一路径」桶
 });
 
 /**

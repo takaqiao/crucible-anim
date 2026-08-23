@@ -162,7 +162,7 @@ const isMultiHit = s => {
 };
 import {shapeOfAction, CONE_VOLLEY, RAY_GENERIC, PULSE_BURST,
         SWEEP_RING, MOVE_TRAIL} from "./action-shapes.mjs";
-import {pickFor, comboFor, TALISMAN_SHAPE, talismanColorFor,
+import {pickFor, comboFor, trailFor, trailColorFor, TALISMAN_SHAPE, talismanColorFor,
         RANGED_SHAPE, RANGED_CATEGORY} from "./weapon-shapes.mjs";
 
 export default [
@@ -631,7 +631,7 @@ export default [
         : ctx.pick("jb2a.melee_attack.05.nodachi.01");
       const clip = clipOf(fx?.file);
       if (!fx) return null;
-      return {
+      const swing = {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
@@ -646,6 +646,30 @@ export default [
         elevation: target.elevation,
         waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -400
       };
+
+      // 强度层：`empowered`（强力打击）在同一记挥击上再叠一道彩色拖尾。
+      // trail 与挥击**逐帧对齐**（Group01 的 trail 46/40/39/41 与 shortsword.01 逐位相同），
+      // 所以只多一道颜色、不改画面也不改节拍。改造前 7 条 empowered 动作与普通打击
+      // 的画面完全一样。
+      if (!s.tags?.includes("empowered")) return swing;
+      const trailPath = trailFor(shape?.path);
+      if (!trailPath) return swing;
+      const tr = ctx.pick(trailPath, {color: trailColorFor(s.usage?.damageType)});
+      if (!tr) return swing;
+      // 变体对齐：拖尾的 4 个文件与挥击的 4 个变体逐位对应，两边各摇一次会画出
+      // 两道不同的弧。按挥击文件在自己数组里的下标取。
+      const vi = fx.files?.indexOf(fx.file) ?? -1;
+      const trFile = (vi >= 0 && tr.files?.[vi]) || tr.file;
+      const trClip = clipOf(trFile);
+      return [swing, {
+        ...swing,
+        file: trFile,
+        filter: tr.hue ? {type: "ColorMatrix", data: {hue: tr.hue}} : null,
+        duration: trClip?.durationMs ?? swing.duration,
+        // 叠加层不再交棒：交棒点由下面那记挥击定，两条都挂会让 impact 等两次
+        waitUntilFinished: null,
+        zIndex: 101
+      }];
     }
   },
 
@@ -678,18 +702,28 @@ export default [
     id: "strike.unarmed", pri: 610,
     when: s => s.strikes.some(w => w.category === "unarmed"),
     build: (s, ctx, target) => {
-      const fx = ctx.pick("jb2a.unarmed_strike.no_hit.01.blue");
+      // **按部位选，不再是一支拳影包打天下。** 改造前这条规则服务 14 个动作、全部
+      // 共用 `jb2a.unarmed_strike.no_hit.01.blue`——`necroticBite`（腐蚀咬击）播的是
+      // 一记蓝色拳影。现在 `pickFor` 对 unarmed 分类也走部位路由：咬→獠牙大口、
+      // 爪→抓痕、拳/指虎→拳影弧，颜色跟伤害类型。
+      const shape = pickFor(s.strikes?.find(w => w.category === "unarmed") ?? s.strikes?.[0]);
+      const fx = shape
+        ? ctx.pick(shape.path, shape.color ? {color: shape.color} : {})
+        : ctx.pick("jb2a.unarmed_strike.no_hit.01.blue");
       if (!fx) return null;
+      const clip = clipOf(fx.file);
       return {
         file: fx.file,
+        filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         objectScale: 1 * ctx.geom.sizeScale(),
         offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
         mirrorY: ctx.geom.onLeft(target),
         aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y}, missed: false},
         zIndex: 100,
         elevation: target.elevation,
-        duration: 900,
-        waitUntilFinished: -267
+        // 逐文件取时序；退回的 900/-267 是原来那支 no_hit.01.blue 手调过的值
+        duration: clip?.durationMs ?? 900,
+        waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -267
       };
     }
   },

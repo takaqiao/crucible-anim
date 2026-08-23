@@ -20,6 +20,10 @@ export const COLOR_HUE = Object.freeze({
   // grey 归 -1（灰阶，可显式指定但不作为任何饱和色的近似）。
   bright_blue: 215, bright_green: 120, bright_orange: 30, bright_purple: 275,
   bright_yellow: 55, brown: 25, grey: -1,
+  // melee_attack 各组的 trail（强度叠加层）只有这三支，其中两支原先也不在表里，
+  // pickColor 会把它们过滤掉、只剩 blueyellow 一支可选。orangered 取红橙之间、
+  // pinkpurple 取紫粉之间。
+  orangered: 10, pinkpurple: 300,
 });
 
 /** 12 个符文的主色。取自各符文的意象：storm 用蓝黄电光、earth 用土绿、soul 用青、oblivion 用暗紫。 */

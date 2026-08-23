@@ -112,6 +112,8 @@ export const CATEGORY_SHAPE = Object.freeze({
  */
 const BITE_PARTS = /bite|fangs|jaws|beak/i;
 const CLAW_PARTS = /claw|talon|pincer|limb|thorn|stinger/i;
+/** 拳套 / 指虎 / 徒手。`katar` 是拳刃、`spikedKnuckles` 是指虎，都靠拳出手。 */
+const FIST_PARTS = /fist|knuckle|katar|gauntlet|hoof|hooves/i;
 
 /**
  * 认不出部位的天生武器（尾、蹄、触手、伪足、角、獠牙冲撞）退回骨棒。
@@ -182,6 +184,55 @@ export const TALISMAN_COLORS = Object.freeze({
   "jb2a.melee_attack.01.magic_sword": ["dark_green", "dark_purple", "blue", "orange", "yellow"],
   "jb2a.melee_attack.03.magical_greatsword": ["dark_green", "dark_purple", "blue", "orange"]
 });
+
+/**
+ * 强度叠加层：**同一记挥击，加一道彩色拖尾**。
+ *
+ * `jb2a.melee_attack.<组>.trail` 是 JB2A 给每组挥击配的拖尾，**逐帧与挥击对齐**——
+ * Group01 的 trail 四个变体帧数是 46/40/39/41，与 shortsword.01 逐位相同，峰值帧也对上
+ *（trail f17 对挥击 f16）。所以它是天然的叠加层：不换画面、只多一道颜色。
+ *
+ * 用途是 `empowered`（强力打击）这类**强度修饰**：改造前 7 条带 empowered 的动作与
+ * 同武器的普通打击画面完全一样，`heavyStrike`（重击）和普通挥击看不出区别。
+ *
+ * ⚠ 路径要写到 `.trail.01` 这一级：`trail` 下一级是**变体**（01-04）不是颜色，写到 `trail`
+ * 的话 `colorsUnder` 拿到的是变体号、全被 pickColor 过滤掉，颜色静默失效。
+ *
+ * ⚠ **变体必须与挥击对齐**：`trail.01.<色>` 是 4 文件数组，帧数与该组挥击的 4 个变体
+ * 逐位相同（Group01 都是 46/40/39/41）。`ctx.pick` 对两边各摇一次的话会画出两道不同的弧，
+ * 所以规则里按挥击文件在自己数组里的下标去取拖尾文件。
+ *
+ * ⚠ 只有 Group01-05 有 trail，Group06（盾）没有。查不到就返回 null，不硬凑。
+ */
+// 键是**组号**不是路径前缀：写成 `"jb2a.melee_attack.01."` 那种半截串会被
+// `test/armory-assets.test.mjs` 的路径抽取当成一条 DB 路径，而它根本解析不到。
+const TRAIL_BY_GROUP = Object.freeze({
+  "01": "jb2a.melee_attack.01.trail.01",
+  "02": "jb2a.melee_attack.02.trail.01",
+  "03": "jb2a.melee_attack.03.trail.01",
+  "04": "jb2a.melee_attack.04.trail.01",
+  "05": "jb2a.melee_attack.05.trail.01"
+});
+
+/**
+ * 这记挥击的拖尾层在哪。
+ *
+ * 按前缀查表而不是拼字符串：DB 路径必须是完整字面量，插值拼出来的路径静态扫描
+ * 还原不了，`test/armory-assets.test.mjs` 的三条依据守卫会整体失效。
+ *
+ * @param {string|null} shapePath  挥击素材的路径
+ * @returns {string|null}
+ */
+export function trailFor(shapePath) {
+  const seg = String(shapePath ?? "").split(".");
+  return seg[0] === "jb2a" && seg[1] === "melee_attack" ? TRAIL_BY_GROUP[seg[2]] ?? null : null;
+}
+
+/**
+ * 强度层该染成什么颜色。跟动作的伤害类型走；没有配色时用 orangered——
+ * 「更用力」读作暖色，而 trail 族只有 blueyellow / orangered / pinkpurple 三支。
+ */
+export const trailColorFor = dmg => DAMAGE_COLOR[dmg] ?? "orangered";
 
 /**
  * 连段素材：**同一件武器打好几下**。
@@ -270,12 +321,23 @@ export function pickFor(w) {
   if (!w) return null;
   const id = w.identifier ?? "";
 
-  if (w.properties?.includes("natural")) {
+  // **部位路由要覆盖 `unarmed` 分类，不能只看 `natural` 属性。**
+  // Crucible 的 `unarmed` 分类里有 claws / fists / katar / spikedKnuckles，其中只有
+  // fists 带 natural 属性；而语料合成的天生武器动作（necroticBite 之类）也一律落在
+  // unarmed 分类上。只认 natural 属性的话，这些全部漏进 `strike.unarmed` 那条
+  // 只有一支拳影素材的规则——实测 14 条动作共用同一支，腐蚀咬击播的是蓝色拳影。
+  if (w.properties?.includes("natural") || w.category === "unarmed") {
     // 部位决定形状，伤害类型只决定颜色。物理伤害在 DAMAGE_COLOR 里是 null——
-    // 咬击退回 red（血），抓痕退回 brown（本色爪），两者都是族内实际存在的分支。
+    // 咬击退回 red（血），抓痕退回 brown（本色爪），拳击退回 red（creature_attack 族里
+    // 实际存在的分支），三者都是族内真有的颜色。
     const color = DAMAGE_COLOR[w.damageType] ?? null;
     if (BITE_PARTS.test(id)) return {path: "jb2a.bite.400px", color: color ?? "red"};
     if (CLAW_PARTS.test(id)) return {path: "jb2a.claws.400px", color: color ?? "brown"};
+    // 拳套 / 指虎 / 徒手：用 creature_attack 的拳影弧（12 条同规格，带颜色分支），
+    // 比 unarmed_strike 那支单色单文件多一个元素维度。trove 给 Gauntlet 用的正是它。
+    if (FIST_PARTS.test(id) || w.category === "unarmed") {
+      return {path: "jb2a.melee_generic.creature_attack.fist.001", color: color ?? "red"};
+    }
     const blunt = NATURAL_BLUNT[w.category];
     return blunt ? {path: blunt, color: null} : null;
   }
