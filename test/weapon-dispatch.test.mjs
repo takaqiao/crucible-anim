@@ -98,7 +98,7 @@ function measure() {
   const silent = [];
   for (const s of corpus) {
     const plan = resolve(s, {assets: mk(), armory: ARMORY});
-    const travel = (plan?.cues ?? []).filter(c => c.slot === "travel" && c.file);
+    const travel = (plan?.cues ?? []).filter(c => c.slot === "travel" && c.file && c.kind !== "sound");
     if (!travel.length) { silent.push(s.id); continue; }
     // 记的是派发到哪个 DB 节点，不是随机到哪个变体文件（见 buildFileToPath）
     files.set(s.id, FILE_TO_PATH.get(travel[0].file) ?? travel[0].file);

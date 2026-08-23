@@ -140,7 +140,9 @@ test("多目标：各目标的 travel 同时起播，没有被排成队", () => 
     if (!plan) continue;
     const heads = new Map();
     for (const c of plan.cues) {
-      if (c.slot !== "travel" || c.forTarget == null) continue;
+      // 只看画面 cue：音效 cue 的 delay 是按「让它在命中时刻响」算的，各支素材的
+      // 响度峰值不同，起播时刻本来就该不同，拿它比起跑线没有意义。
+      if (c.slot !== "travel" || c.forTarget == null || c.kind === "sound") continue;
       if (!heads.has(c.forTarget)) heads.set(c.forTarget, c.delay ?? 0);
     }
     if (heads.size < 2) continue;

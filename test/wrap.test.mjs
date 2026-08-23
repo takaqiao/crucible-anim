@@ -132,7 +132,8 @@ test("plan.warnings 非空时会经 warn() 冒出来，规则本身的产出不�
  * 恒贴身、恒不镜像、恒 (0,0)——本用例的三段断言会同时变红。
  */
 test("Critical-1：token 是 TokenDocument 时，坐标/贴身/左右一路传到计划里", () => {
-  const melee = plan => plan.cues.find(c => c.rule === "strike.melee");
+  // 只取画面 cue：strike.melee 现在还会发风声与命中音，它们排在画面之前
+  const melee = plan => plan.cues.find(c => c.rule === "strike.melee" && c.kind !== "sound");
 
   // 紧邻右侧：origin(500,500) 与 target(600,500) 边缘相接
   const near = melee(buildPlanFor(mockAction(), ENV, deps(), {nativeConfig: null}));

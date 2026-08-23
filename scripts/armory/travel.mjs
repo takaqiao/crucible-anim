@@ -143,6 +143,7 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
 import {clipOf, leastDeadAir} from "./clip-table.mjs";
+import {strikeSounds} from "./sounds.mjs";
 
 /**
  * 这个动作是不是「打好几下」。
@@ -544,7 +545,8 @@ export default [
       const fx = ctx.pick(combo.path, {color: combo.color});
       if (!fx) return null;
       const clip = clipOf(fx.file);
-      return {
+      const snd = strikeSounds(s, ctx, target, clip?.contactMs ?? 800, w);
+      return [...snd, {
         file: fx.file,
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         objectScale: 1 * ctx.geom.sizeScale(),
@@ -556,7 +558,7 @@ export default [
         zIndex: 100,
         elevation: target.elevation,
         waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -800
-      };
+      }];
     }
   },
   {
@@ -651,17 +653,28 @@ export default [
       // trail 与挥击**逐帧对齐**（Group01 的 trail 46/40/39/41 与 shortsword.01 逐位相同），
       // 所以只多一道颜色、不改画面也不改节拍。改造前 7 条 empowered 动作与普通打击
       // 的画面完全一样。
-      if (!s.tags?.includes("empowered")) return swing;
+      // 音效：风声 + 命中/落空。命中时刻用这一支素材自己的（见 clip-table）。
+      // 音效：风声 + 命中/落空。命中时刻用这一支素材自己的（见 clip-table）。
+      // **音效 cue 必须排在挥击之前**：`parallelizeTargets` 按数组顺序推进分支游标，
+      // 挥击带交棒点会把游标推到命中时刻，排在它后面的音效会被整体推迟一个交棒量
+      // （实测风声被推到 556ms，而它该在 23ms 起播）。音效不带交棒点，排在前面
+      // 不影响挥击的起播时刻。
+      const snd = strikeSounds(s, ctx, target, clip?.contactMs ?? 500, s.strikes?.[0]);
+
+      if (!s.tags?.includes("empowered")) return [...snd, swing];
       const trailPath = trailFor(shape?.path);
-      if (!trailPath) return swing;
+      if (!trailPath) return [...snd, swing];
       const tr = ctx.pick(trailPath, {color: trailColorFor(s.usage?.damageType)});
-      if (!tr) return swing;
+      if (!tr) return [...snd, swing];
       // 变体对齐：拖尾的 4 个文件与挥击的 4 个变体逐位对应，两边各摇一次会画出
       // 两道不同的弧。按挥击文件在自己数组里的下标取。
       const vi = fx.files?.indexOf(fx.file) ?? -1;
       const trFile = (vi >= 0 && tr.files?.[vi]) || tr.file;
       const trClip = clipOf(trFile);
-      return [swing, {
+      // 拖尾也必须排在挥击**之前**，理由与音效相同：挥击带交棒点会把分支游标推到
+      // 命中时刻，排在它后面的拖尾会整体晚 533ms 起播——而拖尾是逐帧与挥击对齐的，
+      // 晚半秒等于两道弧完全错开。zIndex 101 > 100 保证它仍画在挥击之上。
+      return [...snd, {
         ...swing,
         file: trFile,
         filter: tr.hue ? {type: "ColorMatrix", data: {hue: tr.hue}} : null,
@@ -669,7 +682,7 @@ export default [
         // 叠加层不再交棒：交棒点由下面那记挥击定，两条都挂会让 impact 等两次
         waitUntilFinished: null,
         zIndex: 101
-      }];
+      }, swing];
     }
   },
 
@@ -712,7 +725,8 @@ export default [
         : ctx.pick("jb2a.unarmed_strike.no_hit.01.blue");
       if (!fx) return null;
       const clip = clipOf(fx.file);
-      return {
+      const snd = strikeSounds(s, ctx, target, clip?.contactMs ?? 500, s.strikes?.[0]);
+      return [...snd, {
         file: fx.file,
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         objectScale: 1 * ctx.geom.sizeScale(),
@@ -724,7 +738,7 @@ export default [
         // 逐文件取时序；退回的 900/-267 是原来那支 no_hit.01.blue 手调过的值
         duration: clip?.durationMs ?? 900,
         waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -267
-      };
+      }];
     }
   },
 

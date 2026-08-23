@@ -13,7 +13,16 @@ const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8
 const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json"), "utf8"));
 const mk = () => createAssets(offlineBackend(index));
 const byId = id => actions.find(a => a.id === id);
-const travelCues = s => resolve(s, {assets: mk(), armory: ARMORY})?.cues.filter(c => c.slot === "travel") ?? [];
+/**
+ * travel 槽的**画面** cue。音效 cue 另走 `travelSounds`——它们排在画面之前
+（见 armory/travel.mjs 里对 parallelizeTargets 顺序的说明），拿 `[0]` 会取到声音。
+ */
+const travelCues = s => resolve(s, {assets: mk(), armory: ARMORY})?.cues
+  .filter(c => c.slot === "travel" && c.kind !== "sound") ?? [];
+
+/** travel 槽的音效 cue。 */
+const travelSounds = s => resolve(s, {assets: mk(), armory: ARMORY})?.cues
+  .filter(c => c.slot === "travel" && c.kind === "sound") ?? [];
 
 /**
  * 砍成单目标。
@@ -256,7 +265,8 @@ test("区域与自身姿态在零目标动作上照样出内容", () => {
  * 普通打击仍然只出 1 条，所以这是上限不是常量。
  */
 const LAYERED = new Map([
-  ["strike.melee", 2]
+  // 2 层画面（挥击 + empowered 拖尾）+ 2 条音效（风声 + 命中/落空）
+  ["strike.melee", 4]
 ]);
 
 test("全量扫描：once 规则任何动作都不超 1 条，其余规则不超「目标数 × 报备层数」", () => {
