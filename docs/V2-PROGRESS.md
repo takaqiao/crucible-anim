@@ -272,6 +272,59 @@ Crucible 里**武器自己没有动作**，动作是天赋给的，而且所有�
 - **元素弹药**：`jb2a.arrow.{fire,cold,lightning,poison}` 都在，可按动作伤害类型选
 - `jb2a.melee_generic` 的 `creature_attack.{claw,fist,pincer}` 是攻击弧线，比现用的
   `jb2a.claws`（抓痕，更像命中标记）更适合 travel 槽，可考虑对调
+## 三点六、借鉴成品配方（第四轮）
+
+### 挖了什么
+
+本机装着几个社区「成品菜」，里面是手工调过的「动作 → 素材 + 参数」映射。枚举后确认
+可挖的是 `pf2e-trigger-animations-trove/animations.json`——**224 个具名动画图、631 处引用、
+374 个不同素材路径**。其余几个（`pf2e-trigger-trove` / `trigger-animations` / `autoanimations`）
+要么是纯触发逻辑、要么把配方编进了 JS 包，素材引用接近于零。
+
+### 它验证了什么
+
+trove 给 battleaxe / katana / scimitar / scythe 的选择与本仓库**逐条相同**；`Bite` 用的是
+`jb2a.bite.400px.red`，**连默认色都一样**；`Greatpick` 用 `jb2a.melee_generic.piercing.two_handed`，
+正是本仓库上一轮翻出来的那一支。
+
+### 它暴露了什么
+
+**`jb2a.<武器>.melee.*` 是与挥击族并列的另一族，20 件武器，本仓库整族没发现。**
+trove 给 Rapier / Staff / Halberd 用的正是 `jb2a.rapier.melee.01.white` /
+`jb2a.quarterstaff.melee.01.white` / `jb2a.halberd.melee.01.white`。两族的差别是长度：
+
+| | 帧数 | 是什么 |
+| --- | --- | --- |
+| `melee_attack.<形制>` | 39-51（1.3-1.7s） | 一记挥击 |
+| `<武器>.melee.01` | 66-86（2.2-2.9s） | 一套连段（2-3 下） |
+
+正好对上「连击」这一类。其中 9 件还带 `.fire` 分支（火焰武器版），留作元素弹药那一轮。
+
+### 本轮落地的三条新规则
+
+| 规则 | 判据 | 覆盖 | 之前播的 |
+| --- | --- | --- | --- |
+| `strike.melee.combo` | `mainhand`+`offhand` / `dualwield` / 单体且 ≥2 动作点 | 7 条 | 一记单挥 |
+| `strike.shape.charge` | `target.type === "movement"` | 5 条 | 原地挥击 |
+| `strike.shape.area` 扩 fan/blast | `target.type` ∈ {fan, blast} | 2 条 | 每目标各挥一次 |
+
+冲扑用 `jb2a.gust_of_wind.veryfast`（1200×200 尘团横条，自己从左走到右）stretchTo 从施法者
+铺到目标；横扫用 `jb2a.melee_generic.whirlwind.01`（绕身 360° 刀光环）。
+
+### 两个必须记住的坑
+
+1. **`whirlwind.01` 的叶子把 84 帧与 24 帧混在同一个数组里**（前者前 733ms 全空），
+   `ctx.pick` 均匀随机取——写到节点等于一半概率白等 0.73 秒。为此给时序表补了 `leadMs`，
+   并加了 `leastDeadAir()` 按空头帧挑。族级守卫也如实拦下了它（离散度 0.71），改成逐条记录。
+2. **拼图默认看到的不是规则会播的**：`family-sheet` 取叶子第一个文件（字母序 =
+   `dark_orangepurple`），而规则取的是 `white`。第一张图全是品红色能量弧，重新按 white 渲染
+   才看到实际画面（干净白色挥弧、长柄类看得见杆身）。**看图要看规则真会取的那一支。**
+
+### module.json 声明素材依赖
+
+本模组只做派发、不附带素材，缺哪个包哪一族就解析不到。`relationships.requires` 补上
+`jb2a_patreon` / `eskie-effects` / `blfx-assets-pack01` / `psfx-patreon`，开本模组时会连带
+提示启用。（MGS 音效是 Data 下的裸目录不是模块，声明不了。）
 ## 四、待办## 四、待办
 
 ### B 线（架构清理，B2 已完成）

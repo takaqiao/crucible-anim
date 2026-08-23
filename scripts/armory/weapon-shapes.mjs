@@ -184,6 +184,82 @@ export const TALISMAN_COLORS = Object.freeze({
 });
 
 /**
+ * 连段素材：**同一件武器打好几下**。
+ *
+ * `jb2a.<武器>.melee.*` 是与 `jb2a.melee_attack.*` 并列的另一族，20 件武器各有 5-6 色 ×
+ * 6 变体。两族的差别是**长度**：
+ *
+ *   melee_attack.<形制>       39-51 帧（1.3-1.7s）  一记挥击
+ *   <武器>.melee.01           66-86 帧（2.2-2.9s）  一套连段（2-3 下）
+ *
+ * 这一族是照 `pf2e-trigger-animations-trove` 的成品配方翻出来的——它给 Rapier / Staff /
+ * Halberd 用的正是 `jb2a.rapier.melee.01.white` / `jb2a.quarterstaff.melee.01.white` /
+ * `jb2a.halberd.melee.01.white`，而本仓库此前整族没发现。
+ *
+ * 部分武器只有 `standard` 一支（单文件无颜色分支），路径逐字写死，不做拼接。
+ */
+export const COMBO_SHAPE = Object.freeze({
+  shortsword:      "jb2a.shortsword.melee.01",
+  longsword:       "jb2a.shortsword.melee.01",
+  bastardSword:    "jb2a.sword.melee.01",
+  greatsword:      "jb2a.greatsword.melee.standard",
+  katana:          "jb2a.scimitar.melee.01",
+  scimitar:        "jb2a.scimitar.melee.01",
+  rapier:          "jb2a.rapier.melee.01",
+  sai:             "jb2a.rapier.melee.01",
+  stiletto:        "jb2a.rapier.melee.01",
+  dagger:          "jb2a.dagger.melee.02",
+  handAxe:         "jb2a.handaxe.melee.standard",
+  battleAxe:       "jb2a.handaxe.melee.standard",
+  greataxe:        "jb2a.greataxe.melee.standard",
+  warhammer:       "jb2a.warhammer.melee.01",
+  greathammer:     "jb2a.maul.melee.standard",
+  mace:            "jb2a.mace.melee.01",
+  club:            "jb2a.club.melee.01",
+  greatclub:       "jb2a.club.melee.01",
+  spikedGreatclub: "jb2a.club.melee.01",
+  clawHammer:      "jb2a.hammer.melee.01",
+  pickaxe:         "jb2a.hammer.melee.01",
+  boStaff:         "jb2a.quarterstaff.melee.01",
+  quarterstaff:    "jb2a.quarterstaff.melee.01",
+  glaive:          "jb2a.glaive.melee.01",
+  halberd:         "jb2a.halberd.melee.01",
+  spear:           "jb2a.spear.melee.01",
+  javelin:         "jb2a.spear.melee.01"
+});
+
+/**
+ * 徒手与天生武器的连段。`jb2a.flurry_of_blows` 字面就是「连击」——一串拳影连打。
+ *
+ * 用 `magical.02` 而不是 `physical` 或 `magical.01`：**只有这一支七个颜色分支都是 50 帧**
+ * （physical 是 36/41 混排、magical.01 是 50/54 混排），换色不会连带改变时长。
+ */
+export const COMBO_UNARMED = "jb2a.flurry_of_blows.magical.02";
+
+/**
+ * 这个动作要打好几下时，该出什么。
+ *
+ * 颜色跟武器自己的伤害类型走；物理伤害退回 white（本族的中性档，`sword` 那支没有 white
+ * 时 pickColor 会落到 available[0]）。
+ *
+ * @param {{identifier: string|null, category: string|null, damageType: string|null,
+ *          properties: string[]}} w
+ * @returns {{path: string, color: string}|null}
+ */
+export function comboFor(w) {
+  if (!w) return null;
+  const color = DAMAGE_COLOR[w.damageType] ?? "white";
+  if (w.properties?.includes("natural") || w.category === "unarmed") {
+    // 只有爪 / 肢 / 徒手能读成「连打」。**咬击不行**——一串拳影不是「咬了好几口」，
+    // 而素材库里没有连咬。退回 null，让它走单击规则，比配一个错的强。
+    const id = w.identifier ?? "";
+    return (CLAW_PARTS.test(id) || w.category === "unarmed") ? {path: COMBO_UNARMED, color} : null;
+  }
+  const path = COMBO_SHAPE[w.identifier];
+  return path ? {path, color} : null;
+}
+
+/**
  * 这件武器该出什么画面。
  *
  * @param {{identifier: string|null, category: string|null, damageType: string|null,

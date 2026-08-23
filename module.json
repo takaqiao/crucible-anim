@@ -47,6 +47,22 @@
         "compatibility": {
           "minimum": "4.2"
         }
+      },
+      {
+        "id": "jb2a_patreon",
+        "type": "module"
+      },
+      {
+        "id": "eskie-effects",
+        "type": "module"
+      },
+      {
+        "id": "blfx-assets-pack01",
+        "type": "module"
+      },
+      {
+        "id": "psfx-patreon",
+        "type": "module"
       }
     ]
   },

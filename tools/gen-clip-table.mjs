@@ -89,7 +89,7 @@ for (const p of paths) {
   for (const f of filesUnder(p)) {
     const pr = profiles[f];
     if (!pr) { missing.push(f); continue; }
-    files.set(f, [pr.frames, pr.fps, pr.peak, pr.tailEmpty]);
+    files.set(f, [pr.frames, pr.fps, pr.peak, pr.tailEmpty, pr.leadEmpty]);
   }
 }
 
@@ -99,7 +99,7 @@ const rows = [...files.entries()].sort((a, b) => a[0].localeCompare(b[0]))
 const out = `/**
  * 兵库素材的时序事实 —— **本文件由 \`tools/gen-clip-table.mjs\` 生成，不要手改。**
  *
- * 每条是 \`[frames, fps, peak, tailEmpty]\`，来自 \`data/asset-profiles.json\` 的全库量测。
+ * 每条是 \`[frames, fps, peak, tailEmpty, leadEmpty]\`，来自 \`data/asset-profiles.json\` 的全库量测。
  * 覆盖面是「兵库里出现过的 DB 路径底下的全部文件」——包括颜色分支与变体，因为
  * \`ctx.pick\` 会在其中按种子随机取一个，时序必须逐文件成立。
  *
@@ -109,7 +109,7 @@ const out = `/**
  * 重新生成： npm run clips
  */
 
-/** @type {Record<string, [frames: number, fps: number, peak: number, tailEmpty: number]>} */
+/** @type {Record<string, [frames: number, fps: number, peak: number, tailEmpty: number, leadEmpty: number]>} */
 export const CLIP = Object.freeze({
 ${rows}
 });
@@ -120,6 +120,9 @@ ${rows}
  *   durationMs —— 播到最后一帧有内容的地方（裁掉空尾；本库空尾中位数占三成以上，
  *                 不裁的话 waitUntilFinished 会白等那一段）
  *   contactMs  —— 亮度峰值帧的时刻，当作「打中」的时刻
+ *   leadMs     —— 开头有多少毫秒是全空的。**同一个叶子数组里混着长短不一的变体时
+ *                 靠它挑**：jb2a.melee_generic.whirlwind.01.<色> 的两条一条前 22 帧
+ *                 （733ms）全空、另一条 3 帧，随机取到前者等于白等 0.73 秒
  *
  * 「亮度峰值 = 命中时刻」这个代理验证过：V1 手调的 strike.melee 交棒点 533ms 与
  * \`MeleeAttack01_ShortSword01_01\` 的峰值 f16 @30fps 差 0ms。⚠ 但它只是代理，
@@ -132,11 +135,29 @@ ${rows}
 export function clipOf(file) {
   const c = CLIP[file];
   if (!c) return null;
-  const [frames, fps, peak, tailEmpty] = c;
+  const [frames, fps, peak, tailEmpty, leadEmpty = 0] = c;
   if (!fps) return null;
   const durationMs = Math.round((frames - tailEmpty) / fps * 1000);
   const contactMs = Math.round(peak / fps * 1000);
-  return {durationMs, contactMs, handoffMs: contactMs - durationMs};
+  const leadMs = Math.round(leadEmpty / fps * 1000);
+  return {durationMs, contactMs, leadMs, handoffMs: contactMs - durationMs};
+}
+
+/**
+ * 一组候选文件里，挑**开头空转最少**的那一条。
+ *
+ * \`ctx.pick\` 在叶子数组里均匀随机取一个，而有些族把长短差一倍的变体混在同一个数组里
+* （whirlwind 那两条 84 帧 / 24 帧，前者前 733ms 全空）。规则要稳定拿到「立刻起画面」
+ * 的那一条时用这个。表里查不到的一律排在最后，不参与比较。
+ *
+ * @param {string[]} files
+ * @returns {string|null}
+ */
+export function leastDeadAir(files) {
+  const rated = (files ?? []).map(f => [f, clipOf(f)]).filter(x => x[1]);
+  if (!rated.length) return files?.[0] ?? null;
+  rated.sort((a, b) => a[1].leadMs - b[1].leadMs);
+  return rated[0][0];
 }
 `;
 

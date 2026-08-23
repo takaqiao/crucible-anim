@@ -227,6 +227,16 @@ export const PREVIEW_FIXTURES = Object.freeze({
     isRanged: true, tags: ["strike", "ranged", "piercing"],
     damageType: "piercing", strikeCategory: "projectile1"
   }),
+  // 连段：默认快照不带 mainhand+offhand，也不花 2 个动作点
+  "travel/strike.melee.combo": Object.freeze({
+    tags: ["strike", "melee", "mainhand", "offhand"], strikeCategory: "balanced1",
+    weapon: "scimitar", damageType: "slashing"
+  }),
+  // 冲扑：默认快照的 target.type 是 single
+  "travel/strike.shape.charge": Object.freeze({
+    targetType: "movement", tags: ["strike", "melee", "movement"],
+    strikeCategory: "shieldLight", weapon: "buckler", damageType: "bludgeoning"
+  }),
   // 区域形状：默认快照是 single，打不到按 target.type 分锥/线/环的那条规则
   "travel/strike.shape.area": Object.freeze({
     targetType: "cone", tags: ["strike", "melee", "acid"], damageType: "acid",

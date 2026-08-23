@@ -41,6 +41,35 @@ export const RAY_GENERIC = "jb2a.template_line_piercing.generic.01";
 /** 自身一圈：向外炸开的火花环。4 色，64 帧 @30fps = 2.1s，需裁。 */
 export const PULSE_BURST = "jb2a.particle_burst.01.circle";
 
+/**
+ * 横扫多人（fan / blast）：一记绕身 360° 的刀光环。
+ *
+ * `cleave` 与 `vaultingSweep` 此前是**每个目标各挥一次**——一记横扫劈中三个人会播三次
+ * 独立挥砍，读起来像连续三次攻击。
+ *
+ * ⚠ **必须写死到文件，不能写到节点。** `jb2a.melee_generic.whirlwind.01.<色>` 的叶子是
+ * 一个 2 元素数组，两条长度差一倍：`_01` 是 84 帧但**前 22 帧全空**（733ms 干等），
+ * `_02` 是 24 帧、f4 就起。`ctx.pick` 在数组里均匀随机取一个，写到节点等于一半概率
+ * 白等 0.73 秒。这里取 `_02`。
+ */
+export const SWEEP_RING = "jb2a.melee_generic.whirlwind.01";
+
+/**
+ * 冲扑（movement）：从这里冲到那里。
+ *
+ * `ferociousLeap` / `flyingKick` / `ruthlessMomentum` / `shieldCharge` / `tuskCharge`
+ * 此前播的是**原地挥击**——角色明明冲过去了，画面上完全看不出移动。
+ *
+ * 用两层拼：`MOVE_TRAIL` 是 1200×200 的尘团横条，自己从左走到右（逐帧 alpha 重心
+ * 0.135 → 0.822），配 stretchTo 正好从施法者铺到目标；它挂的是 jb2a `ray` 模板
+ * [100,0,0]，startPoint/endPoint 都是 0，不吃「stretchTo 首尾各缩进 12.5%·d」那个坑。
+ *
+ * ⚠ 主体只有 f1-f19 = 633ms，profile 记的 lead 0 / tail 0 是被极淡的横线撑住的假象
+ *（f0 的 alpha 总量只有峰值的 2.4%），时长必须自己裁到 ~650ms，不能用整段 1000ms。
+ * 只有 white 一色。同级 `default` 是 121 帧的持续版，别错拿。
+ */
+export const MOVE_TRAIL = "jb2a.gust_of_wind.veryfast";
+
 /** 物理伤害没有配色时各族的中性退回色（都是族内实际存在的分支）。 */
 export const NEUTRAL = Object.freeze({
   [CONE_GENERIC]: "blue",
@@ -61,6 +90,8 @@ export function shapeOfAction(s) {
         : {path: CONE_GENERIC, neutral: NEUTRAL[CONE_GENERIC]};
     case "ray":   return {path: RAY_GENERIC, neutral: NEUTRAL[RAY_GENERIC]};
     case "pulse": return {path: PULSE_BURST, neutral: NEUTRAL[PULSE_BURST]};
+    case "fan":
+    case "blast": return {path: SWEEP_RING, neutral: "orange"};
     default: return null;
   }
 }

@@ -30,8 +30,8 @@ test("表里每条都与 data/asset-profiles.json 的实测一致（不是从表
   for (const [file, row] of Object.entries(CLIP)) {
     const p = profiles[file];
     if (!p) { bad.push(`${file}: 量测里没有这个文件`); continue; }
-    const want = [p.frames, p.fps, p.peak, p.tailEmpty];
-    if (row.length !== 4 || want.some((v, i) => v !== row[i])) {
+    const want = [p.frames, p.fps, p.peak, p.tailEmpty, p.leadEmpty];
+    if (row.length !== 5 || want.some((v, i) => v !== row[i])) {
       bad.push(`${file}: 表里 [${row}]，实测 [${want}]`);
     }
   }
@@ -62,6 +62,8 @@ test("contactMs 来自峰值帧、durationMs 裁掉空尾（判据独立算自�
     if (c.contactMs !== wantContact) bad.push(`${file}: contactMs ${c.contactMs}，按峰值帧应为 ${wantContact}`);
     if (c.durationMs !== wantDuration) bad.push(`${file}: durationMs ${c.durationMs}，裁掉空尾应为 ${wantDuration}`);
     if (c.handoffMs !== c.contactMs - c.durationMs) bad.push(`${file}: handoffMs 不等于 contactMs - durationMs`);
+    const wantLead = Math.round(p.leadEmpty / p.fps * 1000);
+    if (c.leadMs !== wantLead) bad.push(`${file}: leadMs ${c.leadMs}，按空头帧应为 ${wantLead}`);
   }
   assert.ok(checked >= 200, `只核了 ${checked} 条`);
   assert.deepEqual(bad.slice(0, 8), [], `${bad.length} 条派生量算错了`);

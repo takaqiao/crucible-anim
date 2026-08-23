@@ -142,9 +142,27 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             uuid: s.origin?.uuid ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
-import {clipOf} from "./clip-table.mjs";
-import {shapeOfAction, CONE_VOLLEY, RAY_GENERIC, PULSE_BURST} from "./action-shapes.mjs";
-import {pickFor, TALISMAN_SHAPE, talismanColorFor,
+import {clipOf, leastDeadAir} from "./clip-table.mjs";
+
+/**
+ * 这个动作是不是「打好几下」。
+ *
+ * 三条判据都来自动作自己写的东西，不猜：
+*   · `mainhand` + `offhand` 同时出现 = 双手各打一次（Crucible 的双持连打就是这么标的）
+ *   · `dualwield`
+ *   · 单体目标且 `cost.action >= 2`
+ *
+ * 最后一条限定「单体目标」是因为多动作点的区域动作（cleave / tailSweep / lightningBurst）
+ * 花的是范围而不是次数，它们归 `strike.shape.area`。
+ */
+const isMultiHit = s => {
+  const t = new Set(s.tags ?? []);
+  return (t.has("mainhand") && t.has("offhand")) || t.has("dualwield") ||
+         (s.target?.type === "single" && (s.cost?.action ?? 0) >= 2);
+};
+import {shapeOfAction, CONE_VOLLEY, RAY_GENERIC, PULSE_BURST,
+        SWEEP_RING, MOVE_TRAIL} from "./action-shapes.mjs";
+import {pickFor, comboFor, TALISMAN_SHAPE, talismanColorFor,
         RANGED_SHAPE, RANGED_CATEGORY} from "./weapon-shapes.mjs";
 
 export default [
@@ -428,14 +446,19 @@ export default [
     build: (s, ctx, target) => {
       const shape = shapeOfAction(s);
       const color = ctx.damageColor() ?? shape.neutral;
-      const fx = ctx.pick(shape.path, color ? {color} : {});
-      if (!fx) return null;
+      const picked = ctx.pick(shape.path, color ? {color} : {});
+      if (!picked) return null;
+      // 横扫那一族把 84 帧（前 733ms 全空）与 24 帧两条混在同一个叶子数组里，
+      // ctx.pick 均匀随机取——一半概率白等 0.73 秒。挑空头最少的那条。
+      const file = shape.path === SWEEP_RING ? leastDeadAir(picked.files) : picked.file;
+      const fx = {...picked, file};
       const clip = clipOf(fx.file);
       const isRay = shape.path === RAY_GENERIC;
       // 各族实测长度：箭雨 92-120 帧、锥形 69 帧、火花环 64 帧、贯穿线 15 帧（@30fps）。
       // 除贯穿线外都远长于一次攻击该占的时间，统一裁到 1200ms。
-      const duration = shape.path === RAY_GENERIC ? 500
-                     : shape.path === CONE_VOLLEY ? 1500 : 1200;
+      // 时长优先按实测（裁掉空尾），没量到才退回手裁的节奏
+      const duration = clip?.durationMs ?? (shape.path === RAY_GENERIC ? 500
+                     : shape.path === CONE_VOLLEY ? 1500 : 1200);
       return {
         file: fx.file,
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
@@ -452,6 +475,87 @@ export default [
         // duration 是手裁的节奏（区域特效整段 2-4 秒，太长），但交棒点仍按实测的
         // 命中时刻算——wuf 是相对**实际播放时长**的偏移，两者可以分开定。
         waitUntilFinished: clip ? clip.contactMs - duration : -300, zIndex: 100
+      };
+    }
+  },
+  /**
+   * 连段：**同一件武器打好几下**。
+   *
+   * 这是动作轴的第二条规则。判据是动作自己说的「这一下是几下」：
+   *   · 同时带 `mainhand` 与 `offhand`（双手各打一次）——`flurry` 双持连打、`doublePunch` 双拳
+   *   · 带 `dualwield`
+   *   · 单体目标且花 2 个以上动作点——`ricochet` / `abyssalWhip` / `frenziedClaws`
+   * 区域形状的多动作点动作不走这里，它们归 pri 670 的 `strike.shape.area`。
+   *
+   * 素材是 `jb2a.<武器>.melee.*`，与挥击族并列的另一族，差别在长度：挥击 39-51 帧、
+   * 连段 66-86 帧（2.2-2.9s，画的就是 2-3 下）。这一族是照 pf2e-trigger-animations-trove
+   * 的成品配方翻出来的，本仓库此前整族没发现。
+   *
+   * pri 650 高于单击的 620，低于远程的 640——远程武器不在连段表里，两条不会打架。
+   */
+  /**
+   * 冲扑 / 冲锋：**从这里冲到那里**。
+   *
+   * 动作轴的第三条规则。`target.type === "movement"` 的武器动作有 5 条——`ferociousLeap`
+   * 凶猛扑跃、`flyingKick` 飞踢、`ruthlessMomentum` 无情冲势、`shieldCharge` 盾牌冲锋、
+   * `tuskCharge` 獠牙冲撞。它们此前播的是**原地挥击**：角色明明冲过去了，画面上完全
+   * 看不出移动。
+   *
+   * 用一条 1200×200 的尘团横条 stretchTo 从施法者铺到目标。它自己会从左走到右
+   *（逐帧 alpha 重心 0.135 → 0.822），挂的是 jb2a `ray` 模板 [100,0,0]，startPoint/
+   * endPoint 都是 0，不吃「stretchTo 首尾各缩进 12.5%·d」那个坑。
+   *
+   * ⚠ 时长必须自己裁：profile 记的 lead 0 / tail 0 是被极淡的横线撑住的假象，
+   * 主体只有 f1-f19 = 633ms。这里用实测 durationMs 会长到 1000ms，所以显式写 650ms。
+   *
+   * `once: true`：一次冲锋只该有一道轨迹，打中几个人不该叠几道。
+   * pri 680 高于区域形状的 670——movement 与 cone/ray/pulse 互斥，排前面只是让
+   *「更具体的形状先匹配」这个读法成立。
+   */
+  {
+    id: "strike.shape.charge", pri: 680, once: true,
+    when: s => s.cost?.weapon === true && !s.spell && s.target?.type === "movement",
+    build: (s, ctx, target) => {
+      const fx = ctx.pick(MOVE_TRAIL);
+      if (!fx || !target) return null;
+      return {
+        file: fx.file,
+        objectScale: 1 * ctx.geom.sizeScale(),
+        at: originAnchor(s),
+        stretchTo: {x: target.x, y: target.y},
+        aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y},
+              missed: target.results.some(r => r.result === 0 || r.result === 1)},
+        // 650ms 是实测的主体段（f1-f19 @30fps）。整段量测是 1000ms，那 350ms 是
+        // 肉眼几乎看不见的残絮，用 waitUntilFinished 等它等于白等。
+        duration: 650,
+        fadeIn: 100, fadeOut: 200,
+        waitUntilFinished: -200, zIndex: 90,
+        belowTokens: true
+      };
+    }
+  },
+  {
+    id: "strike.melee.combo", pri: 650,
+    when: s => s.cost?.weapon === true && !s.spell && !s.tags?.includes("thrown") &&
+               isMultiHit(s) && s.strikes.some(w => comboFor(w)),
+    build: (s, ctx, target) => {
+      const w = s.strikes.find(x => comboFor(x));
+      const combo = comboFor(w);
+      const fx = ctx.pick(combo.path, {color: combo.color});
+      if (!fx) return null;
+      const clip = clipOf(fx.file);
+      return {
+        file: fx.file,
+        filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
+        objectScale: 1 * ctx.geom.sizeScale(),
+        offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
+        mirrorY: ctx.geom.onLeft(target),
+        aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y}, missed: false},
+        // 连段整段 2.2-2.9s，全播完；交棒点按实测的亮度峰值（连段里最亮的一下）
+        duration: clip?.durationMs ?? 2200,
+        zIndex: 100,
+        elevation: target.elevation,
+        waitUntilFinished: clip ? clip.contactMs - clip.durationMs : -800
       };
     }
   },
