@@ -142,7 +142,8 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             uuid: s.origin?.uuid ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
-import {shapeFor, TALISMAN_SHAPE, talismanColorFor} from "./weapon-shapes.mjs";
+import {pickFor, TALISMAN_SHAPE, talismanColorFor,
+        RANGED_SHAPE, RANGED_CATEGORY} from "./weapon-shapes.mjs";
 
 export default [
   // ---- 高优先级规则加在这里（Task 10） ----
@@ -375,6 +376,46 @@ export default [
    * pri 630 高于 strike.melee 的 620：法器分类不与近战分类重叠，这里排前面只是让
    * 「专属规则先于通用规则」的读法成立，两条实际上互斥。
    */
+  /**
+   * 远程武器的飞行物。**改造前 8 件远程武器共用同一支蓝箭**——它们全都掉到 pri 10 的
+   * `generic.travel` 兜底上（`eskie.attack.ranged.arrow.ray.physical.blue.30ft`），
+   * 手弩、手枪、重弩、吹箭枪、箭刺、投石索、长弓、短弓，八件一个样。
+   *
+   * 现在按武器分三类：弓射箭（`jb2a.arrow`）、弩射弩矢（`jb2a.bolt`，更短、橙色箭头）、
+   * 枪与投石索射弹丸（`jb2a.bullet`，19 帧的快速轨迹）。
+   *
+   * ## 为什么必须用 stretchTo 而不是 aim.towards
+   *
+   * 打偏要看得出来。`.missed()` 的偏移只在特效**没有** `data.target` 时才加得上去
+   * （sequencer.js:15360 的判据 `missed && (!source || !data.target)`），而 `aim.towards`
+   * 会走 `rotateTowards` 给特效装上 `data.target`——那时 `.missed()` 只打歪朝向、
+   * 特效仍然正落在目标身上，画面上读起来还是命中（play.mjs 会为此发告警）。
+   * `stretchTo` 不调 rotateTowards，偏移才真的加在源点上，落成「绕目标撒出 1.5-2.5
+   * 个半身位」——这就是「射歪了」。近战三条规则写 `missed: false` 是同一个道理的另一面：
+   * 它们用 aim.towards，写 true 也只会换来一条告警，打偏由 impact 的 MISS 层去表达。
+   */
+  {
+    id: "strike.ranged.weapon", pri: 640,
+    when: s => !s.tags?.includes("thrown") &&
+               s.strikes.some(w => RANGED_SHAPE[w.identifier] || RANGED_CATEGORY[w.category]),
+    build: (s, ctx, target) => {
+      const w = s.strikes.find(x => RANGED_SHAPE[x.identifier] || RANGED_CATEGORY[x.category]);
+      const shape = pickFor(w);
+      const fx = shape && ctx.pick(shape.path);
+      if (!fx) return null;
+      return {
+        file: fx.file, objectScale: 1 * ctx.geom.sizeScale(),
+        at: originAnchor(s),
+        stretchTo: {x: target.x, y: target.y},
+        aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y},
+              missed: target.results.some(r => r.result === 0 || r.result === 1)},
+        // 与兜底同口径：这几支的 ft 档位定的是飞行时间，30ft 档实测 19-43 帧 @30fps
+        duration: 800,
+        waitUntilFinished: -300, zIndex: 100,
+        elevation: target.elevation
+      };
+    }
+  },
   {
     id: "strike.talisman", pri: 630,
     when: s => !s.tags?.includes("thrown") &&
@@ -403,7 +444,9 @@ export default [
   {
     id: "strike.melee", pri: 620,
     when: s => !s.tags?.includes("thrown") && s.strikes.some(w =>
-      ["light1", "simple1", "balanced1", "heavy1", "simple2", "balanced2", "heavy2"]
+      ["light1", "simple1", "balanced1", "heavy1", "simple2", "balanced2", "heavy2",
+       // 盾：改造前 5 面盾一条 cue 都不出，就是因为这里没有它们两个分类
+       "shieldLight", "shieldHeavy"]
         .includes(w.category)),
     build: (s, ctx, target) => {
       const adjacent = ctx.geom.adjacent(target);
@@ -411,11 +454,13 @@ export default [
       // 它是全族唯一 1000×800 画幅、弧幅真够得到隔一格的一支（其余形制实测最远只越过
       // 目标锚点 37-48px，见 ASSET-NOTES 否决清单里 scythe / greatsword 两条）。
       // 形制表查不到（突刺类武器整族没有对应素材）时退回短剑，与改造前一致。
-      const shape = shapeFor(s.strikes?.[0]);
-      const branch = adjacent
-        ? (shape ?? "jb2a.melee_attack.01.shortsword.01")
-        : "jb2a.melee_attack.05.nodachi.01";
-      const fx = ctx.pick(branch);
+      // 天生武器的形状带颜色（獠牙大口 / 抓痕，7-8 色，元素变体落在颜色轴上），
+      // 制式武器不带色（纯几何叶子）。pick 的 {color} 走最近色路由 + hue 补偿。
+      const shape = pickFor(s.strikes?.[0]);
+      const fx = adjacent
+        ? ctx.pick(shape?.path ?? "jb2a.melee_attack.01.shortsword.01",
+                   shape?.color ? {color: shape.color} : {})
+        : ctx.pick("jb2a.melee_attack.05.nodachi.01");
       if (!fx) return null;
       return {
         file: fx.file,

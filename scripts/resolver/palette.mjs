@@ -13,6 +13,13 @@ export const COLOR_HUE = Object.freeze({
   dark_blue: 225, purple: 275, dark_purple: 285, pink: 320, dark_green: 130,
   blueyellow: 235, greenyellow: 90, orangepurple: 340, bluepurple: 250,
   white: -1, dark_red: 355, dark_orange: 25,
+  // JB2A 的 bright_ 前缀是同色的高亮版（jb2a.claws 整族只有这一套命名），brown 与 grey
+  // 同样只出现在天生武器那两族。**不补进来 pickColor 就整族失效**：它先
+  // `filter(c => c in COLOR_HUE)`，认不出的分支直接不进候选集，于是 jb2a.claws 的 8 个
+  // 分支只剩 red / dark_red 两支可选，10 件元素爪击（冰/电/心灵/虚空…）全塌成同一支。
+  // grey 归 -1（灰阶，可显式指定但不作为任何饱和色的近似）。
+  bright_blue: 215, bright_green: 120, bright_orange: 30, bright_purple: 275,
+  bright_yellow: 55, brown: 25, grey: -1,
 });
 
 /** 12 个符文的主色。取自各符文的意象：storm 用蓝黄电光、earth 用土绿、soul 用青、oblivion 用暗紫。 */

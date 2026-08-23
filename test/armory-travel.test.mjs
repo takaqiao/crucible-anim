@@ -449,10 +449,15 @@ test("真实形态的投掷攻击不被近战挥击抢走", () => {
   assert.equal(swing?.rule, "strike.melee");
 });
 
+/**
+ * 兜底的真实触发面在本轮变窄了：带武器分类的远程攻击现在归 `strike.ranged.weapon`
+ * （弓射箭、弩射弩矢、枪射弹丸），兜底只剩「远程但没有武器」——远程技能、天赋直接
+ * 造成的远程效果之类。这条用 `strikes: []` 打的正是那个面。
+ */
 test("远程兜底给中性箭形，近战兜底不出内容", () => {
   const bow = one({
     ...byId("strike"), tags: ["ranged", "strike"],
-    strikes: [{category: "projectile2", damageType: "piercing"}],
+    strikes: [],
     usage: {...byId("strike").usage, isAttack: true, isRanged: true}
   });
   const c = travelCues(bow)[0];
@@ -464,4 +469,26 @@ test("远程兜底给中性箭形，近战兜底不出内容", () => {
   assert.equal(c.aim?.missed, false);
   assert.deepEqual(travelCues(byId("alchemicalResolve")), [],
                    "非远程动作不该凭空多出一枚飞行物，近战由 impact 承担");
+});
+
+/**
+ * 弓 / 弩 / 枪各射各的。改造前 8 件远程武器全掉到 `generic.travel` 上共用同一支蓝箭。
+ */
+test("带武器的远程攻击按弓/弩/枪分飞行物，且打偏要偏得出来", () => {
+  const rng = (identifier, category) => one({
+    ...byId("strike"), tags: ["ranged", "strike"],
+    strikes: [{identifier, category, damageType: "piercing", properties: []}],
+    usage: {...byId("strike").usage, isAttack: true, isRanged: true}
+  });
+  const bow = travelCues(rng("longbow", "projectile2"))[0];
+  const bolt = travelCues(rng("heavyCrossbow", "mechanical2"))[0];
+  const gun = travelCues(rng("pistol", "mechanical1"))[0];
+  assert.equal(bow?.rule, "strike.ranged.weapon");
+  assert.ok(filesOf("jb2a.arrow.physical.orange.30ft").includes(bow.file), "长弓要射箭");
+  assert.ok(filesOf("jb2a.bolt.physical.white.30ft").includes(bolt.file), "重弩要射弩矢");
+  assert.ok(filesOf("jb2a.bullet.01.orange.30ft").includes(gun.file), "手枪要射弹丸");
+  assert.equal(new Set([bow.file, bolt.file, gun.file]).size, 3,
+              "三类远程武器不能共用同一支飞行物——那正是本轮要修的");
+  // stretchTo 而不是 rotateTowards：.missed() 的偏移只在没有 data.target 时才加得上
+  assert.ok(bow.stretchTo, "飞行物要拉到目标，否则 .missed() 是空转");
 });

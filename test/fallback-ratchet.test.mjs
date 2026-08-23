@@ -62,13 +62,20 @@ const mk = () => createAssets(offlineBackend(index));
  * | 武器动作无 travel | 55/69 | **1/69** |
  * | `strike.unarmed` / `strike.melee` | 0 / 4 | **66 / 64** |
  *
+ * ## 2026-08-23 二次下调：191 / 363
+ *
+ * 线 A 第二轮新增 `strike.ranged.weapon`（8 件远程武器按弓/弩/枪分飞行物）之后，
+ * 原先掉在 `generic.travel` 上的远程动作被接管：沾兜底动作 203 → **191**，
+ * 兜底 cue 387 → **363**。全兜底动作数不变（105）——那批是无结构可算的具名动作，
+ * 与武器通路无关。
+ *
  * 这条订正本身就是「基线必须贴着实测值」那条守卫的第一次实战——它在语料修好后
  * 立刻报警，逼着基线跟着下调，而不是让旧数字继续替新现实背书。
  */
 const BASELINE = Object.freeze({
   actionsAllFallback: 105,   // 全部 cue 都来自兜底的动作数
-  actionsAnyFallback: 203,   // 至少一条 cue 来自兜底的动作数
-  fallbackCues: 387          // 兜底 cue 总条数
+  actionsAnyFallback: 191,   // 至少一条 cue 来自兜底的动作数
+  fallbackCues: 363          // 兜底 cue 总条数
 });
 
 /** 跑一遍全量语料，统计兜底命中。 */

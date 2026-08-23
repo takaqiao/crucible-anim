@@ -90,14 +90,22 @@ export const CATEGORY_SHAPE = Object.freeze({
 });
 
 /**
- * 天生武器的形制。骨白偏黄，与金属武器的冷白拉得开。
+ * 天生武器怎么分类。**按 identifier 里的部位词认**，不看伤害类型——
+ * 部位决定形状（獠牙是一张嘴、利爪是几道抓痕），伤害类型只决定颜色。
  *
- * 按重量分两档：轻/中型用 `bone`，重型用 `greatbone`。**这是本轮的近似**——
- * jb2a 另有 `jb2a.claws.*`（8 色）与 `jb2a.bite.*`（7 色）两个更贴切的族，
- * 元素变体（burningBite 火 / frigidBite 冰 / venomousBite 毒 …）正好靠它们的颜色维度
- * 解决。那两个族**尚未登记**（族级记录要全族量测 + 每簇抽样读图），留作下一轮。
+ * 39 件天生武器改造前全部落在骨棒上（更早是短剑）。`jb2a.bite.400px` 是一张咬合的
+ * 獠牙大口（7 色），`jb2a.claws.400px` 是 3-4 道平行抓痕（8 色），两族都是 0.00 帧数
+ * 离散度的正交色矩阵，**元素变体正好落在颜色轴上**：burningBite 橙、frigidBite 蓝、
+ * venomousBite 绿、psychicBite 紫、radiantBite 黄，一条规则全覆盖。
  */
-export const NATURAL_SHAPE = Object.freeze({
+const BITE_PARTS = /bite|fangs|jaws|beak/i;
+const CLAW_PARTS = /claw|talon|pincer|limb|thorn|stinger/i;
+
+/**
+ * 认不出部位的天生武器（尾、蹄、触手、伪足、角、獠牙冲撞）退回骨棒。
+ * 它们是钝击/顶撞，既不是咬也不是抓，硬塞进那两族反而错。
+ */
+const NATURAL_BLUNT = Object.freeze({
   light1: "jb2a.melee_attack.02.bone.01",
   balanced1: "jb2a.melee_attack.02.bone.01",
   balanced2: "jb2a.melee_attack.03.greatbone.01",
@@ -107,6 +115,40 @@ export const NATURAL_SHAPE = Object.freeze({
   projectile1: "jb2a.melee_attack.02.bone.01"
 });
 
+/**
+ * 盾撞。改造前 5 面盾**一条 travel cue 都不出**——`strike.melee` 的 when 不含
+ * shieldLight / shieldHeavy。
+ *
+ * 用 `.01` 这一支而不是整个 `06.shield`：整族 8 条帧数离散度 0.49 **不合格**
+ * （`Shield02_01` 是 96 帧、其中 60 帧是空尾，其余 7 条都是 49-50 帧）。
+ * `.01` 单独 2 条 50/49 帧、离散度 0.02，族级记录才立得住。
+ */
+export const SHIELD_SHAPE = "jb2a.melee_attack.06.shield.01";
+
+/**
+ * 远程武器的飞行物。改造前 8 件远程武器**共用同一支蓝箭**
+ * （`eskie.attack.ranged.arrow.ray.physical.blue.30ft`，兜底规则给的）。
+ *
+ * ft 档位就是**飞行时间**，仓库既有约定是钉 30ft（见 travel.mjs 顶部的 ft 说明）。
+ */
+export const RANGED_SHAPE = Object.freeze({
+  longbow:       "jb2a.arrow.physical.orange.30ft",
+  shortbow:      "jb2a.arrow.physical.orange.30ft",
+  quills:        "jb2a.arrow.physical.orange.30ft",
+  handCrossbow:  "jb2a.bolt.physical.white.30ft",
+  heavyCrossbow: "jb2a.bolt.physical.white.30ft",
+  dartgun:       "jb2a.bolt.physical.white.30ft",
+  pistol:        "jb2a.bullet.01.orange.30ft",
+  sling:         "jb2a.bullet.01.red.30ft"
+});
+
+/** 远程分类兜底：认不出具体武器时按分类给（弩类走弩矢，其余走箭）。 */
+export const RANGED_CATEGORY = Object.freeze({
+  projectile1: "jb2a.arrow.physical.orange.30ft",
+  projectile2: "jb2a.arrow.physical.orange.30ft",
+  mechanical1: "jb2a.bolt.physical.white.30ft",
+  mechanical2: "jb2a.bolt.physical.white.30ft"
+});
 /**
  * 法器（talisman1/2）的附魔剑形制，按颜色分支。
  *
@@ -130,16 +172,39 @@ export const TALISMAN_COLORS = Object.freeze({
 });
 
 /**
- * 一件武器该挥出什么形状。
- * @param {{identifier: string|null, category: string|null, properties: string[]}} w
- * @returns {string|null} DB 路径前缀；null = 表里没有，交回调用方走兜底
+ * 这件武器该出什么画面。
+ *
+ * @param {{identifier: string|null, category: string|null, damageType: string|null,
+ *          properties: string[]}} w
+ * @returns {{path: string, color: string|null}|null} null = 表里没有，交回调用方走兜底
  */
-export function shapeFor(w) {
+export function pickFor(w) {
   if (!w) return null;
-  if (w.properties?.includes("natural")) return NATURAL_SHAPE[w.category] ?? null;
-  return WEAPON_SHAPE[w.identifier] ?? CATEGORY_SHAPE[w.category] ?? null;
+  const id = w.identifier ?? "";
+
+  if (w.properties?.includes("natural")) {
+    // 部位决定形状，伤害类型只决定颜色。物理伤害在 DAMAGE_COLOR 里是 null——
+    // 咬击退回 red（血），抓痕退回 brown（本色爪），两者都是族内实际存在的分支。
+    const color = DAMAGE_COLOR[w.damageType] ?? null;
+    if (BITE_PARTS.test(id)) return {path: "jb2a.bite.400px", color: color ?? "red"};
+    if (CLAW_PARTS.test(id)) return {path: "jb2a.claws.400px", color: color ?? "brown"};
+    const blunt = NATURAL_BLUNT[w.category];
+    return blunt ? {path: blunt, color: null} : null;
+  }
+
+  if (w.category === "shieldLight" || w.category === "shieldHeavy") {
+    return {path: SHIELD_SHAPE, color: null};
+  }
+
+  const ranged = RANGED_SHAPE[id] ?? RANGED_CATEGORY[w.category];
+  if (ranged) return {path: ranged, color: null};
+
+  const melee = WEAPON_SHAPE[id] ?? CATEGORY_SHAPE[w.category];
+  return melee ? {path: melee, color: null} : null;
 }
 
+/** 只要路径的旧口径，给不需要颜色的调用方。 */
+export const shapeFor = w => pickFor(w)?.path ?? null;
 /**
  * 法器该染成什么颜色。
  *

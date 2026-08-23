@@ -227,6 +227,11 @@ export const PREVIEW_FIXTURES = Object.freeze({
     isRanged: true, tags: ["strike", "ranged", "piercing"],
     damageType: "piercing", strikeCategory: "projectile1"
   }),
+  // 远程武器：默认快照是近战单目标，打不到按武器分弓/弩/枪的那条规则
+  "travel/strike.ranged.weapon": Object.freeze({
+    isRanged: true, tags: ["strike", "ranged", "piercing"],
+    damageType: "piercing", strikeCategory: "projectile2", weapon: "longbow"
+  }),
   // 法器：talisman1/2 不在 strike.melee 的近战分类里，默认快照打不到这条规则
   "travel/strike.talisman": Object.freeze({
     tags: ["strike", "melee"], strikeCategory: "talisman2",

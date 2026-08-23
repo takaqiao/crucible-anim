@@ -200,15 +200,42 @@ Crucible 里**武器自己没有动作**，动作是天赋给的，而且所有�
 - scythe 原判据是「做不出隔一格的长度差」——**继续成立**，隔格仍然只能用 nodachi。
   本轮用它当长柄类形制，与长度无关。
 
+### 第二轮（同日）
+
+| | 起点 | 一轮 | 二轮 |
+| --- | --- | --- | --- |
+| 不同 travel 素材 | 6 | 43 | **58** |
+| 最大碰撞桶 | 20 | 8 | **6** |
+| 哑的武器 | 14 | 5 | **0** ✅ |
+
+1. **39 件天生武器**从骨棒改到 `jb2a.bite.400px`（獠牙大口 7 色）与 `jb2a.claws.400px`
+   （3-4 道抓痕 8 色）。部位决定形状、伤害类型决定颜色，元素变体一条规则全覆盖。
+2. **5 面盾**接上盾撞（`jb2a.melee_attack.06.shield.01`，只登记 `.01` 一支，整族离散度 0.49 不合格）。
+3. **8 件远程武器**按弓/弩/枪分成箭矢 / 弩矢 / 弹丸三类（新规则 `strike.ranged.weapon`）。
+
+顺带修好一个**调色表缺口**：`pickColor` 先 `filter(c => c in COLOR_HUE)`，而 `jb2a.claws`
+整族的分支名是 `bright_*` 前缀加 `brown`，**表里一个都没有**——8 个分支只剩 red/dark_red
+两支进候选集，10 件元素爪击实测全塌成同一支。补进 `bright_blue/green/orange/purple/yellow`
+与 `brown`、`grey`（后者记 -1，可显式指定但不作为饱和色的近似）。
+
+### 打偏与血溅（本轮核实，不是新增）
+
+- **血溅只在命中时出**：`HIT_RESULTS = [GLANCE, HIT]`，只有这两种结果叠加元素层。
+  MISS 出 `jb2a.ui.miss.white`、DODGE 出闪避残影，都不带血。
+- **飞行物打偏会真的偏出去**，近战不会。`.missed()` 的偏移只在特效**没有** `data.target`
+  时才加得上（sequencer.js:15360 的 `missed && (!source || !data.target)`）；`aim.towards`
+  会经 `rotateTowards` 装上 `data.target`，那时 `.missed()` 只打歪朝向。所以
+  用 `stretchTo` 的飞行物（含新的 `strike.ranged.weapon`）偏得出来，用 `aim.towards`
+  的近战三条规则写 `missed: false` 是对的，打偏由 impact 的 MISS 层表达。
+
 ### 还剩什么
 
-- **5 面盾仍是哑的**：`jb2a.melee_attack.06.shield` 帧数离散度 0.49（49-96 帧）
-  **不合格**，族级记录替不了它签字，必须逐条记录
-- **两个 8 件的桶**：天生咬击类共用骨棒（`jb2a.bite.*` 7 色 / `jb2a.claws.*` 8 色更贴切，
-  元素变体正好靠颜色维度解决，但那两族尚未登记）；8 件远程武器共用同一支蓝箭
-- 突刺类武器（spear / javelin / warlance / rapier / sai）**整个 melee_attack 族没有对应素材**，
-  故意留空走分类兜底——硬配一条挥砍弧不如让它走兜底：兜底是「没为它选」，错配是「选错了」
-
+- 剩下的碰撞桶**都是语义正确的复用**：6 个物理爪共用褐色抓痕、5 个物理咬共用红色獠牙、
+  4 个毒酸肢共用绿爪、4 把小刃共用短剑。再往下拆没有意义。
+- 突刺类武器（spear / javelin / warlance / rapier / sai）**整个 melee_attack 族没有突刺素材**，
+  故意留空走分类兜底
+- **元素弹药**：`jb2a.arrow.{fire,cold,lightning,poison}` 都在，可以按**动作**的伤害类型选
+  （`flamingArrow` 射火箭）。这是「动作轴」的活，与武器轴分开做
 ## 四、待办## 四、待办
 
 ### B 线（架构清理，B2 已完成）
