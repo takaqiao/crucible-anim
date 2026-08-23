@@ -8,7 +8,23 @@
  * 「每件武器都有为它选的画面」里的「每件」就是这 92 件，定义域必须来自枚举而不是
  * 手写清单——本项目已经在「本机装了哪些模块」上栽过一次。
  *
- * ## 2026-08-23 的起点
+ * ## 2026-08-23 第一轮之后
+ *
+ * 接上武器形制表（`armory/weapon-shapes.mjs`，21 个族级记录背书）+ 新增
+ * `strike.talisman` 规则之后：
+ *
+ * | | 起点 | 现在 |
+ * | --- | --- | --- |
+ * | 不同 travel 素材 | 6 | **43** |
+ * | 最大碰撞桶 | 20 | **8** |
+ * | 哑的武器 | 14 | **5**（只剩盾） |
+ *
+ * 还剩两个 8 件的桶：天生咬击类（bite/fangs/beak/talons…，共用骨棒——`jb2a.bite.*`
+ * 与 `jb2a.claws.*` 两族更贴切，元素变体正好靠它们的颜色维度解决，但那两族尚未登记）；
+ * 以及 8 件远程武器共用同一支蓝箭（下一轮）。5 面盾要逐条记录——`jb2a.melee_attack.06.shield`
+ * 帧数离散度 0.49（49-96 帧）**不合格**，族级记录替不了它签字。
+ *
+ * ## 起点
  *
  * | | |
  * | --- | --- |
@@ -42,9 +58,9 @@ const mk = () => createAssets(offlineBackend(index));
 
 /** 目标：silent → 0，distinctTravel → 上升，biggestBucket → 下降。 */
 const BASELINE = Object.freeze({
-  silent: 14,          // 一条 travel cue 都不出的武器数
-  distinctTravel: 6,   // 92 件武器命中的不同 travel 素材数
-  biggestBucket: 20    // 最大的一个「多件武器共用同一素材」桶
+  silent: 5,           // 一条 travel cue 都不出的武器数（只剩 5 面盾）
+  distinctTravel: 43,  // 92 件武器命中的不同 travel 素材数
+  biggestBucket: 8     // 最大的一个「多件武器共用同一素材」桶
 });
 
 function measure() {

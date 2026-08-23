@@ -184,7 +184,12 @@ function syntheticAction(rule, origin, target, fixture) {
     targets: new Map([[targetActor, {token: target}]]),
     usage: {damageType: f.damageType, isAttack: f.isAttack, isRanged: f.isRanged,
             resource: f.resource,
-            strikes: [{category: f.strikeCategory, system: {damageType: f.damageType}}]},
+            // identifier / properties 要跟着走：武器派发按 identifier 分形制
+            //（armory/weapon-shapes.mjs），预览里不给就只能看到分类兜底那一支，
+            // 与实战不是同一个画面——预览宏是渲染层唯一的人工验收手段，看错了等于没验。
+            strikes: [{category: f.strikeCategory, identifier: f.weapon ?? null,
+                       properties: f.weaponProperties ?? [],
+                       system: {damageType: f.damageType}}]},
     eventsByTarget: new Map([[targetActor,
       {all, roll: [{roll: {data: {result: f.result}, isCriticalSuccess: f.critical}}]}]])
   };
@@ -221,6 +226,11 @@ export const PREVIEW_FIXTURES = Object.freeze({
   "travel/generic.travel": Object.freeze({
     isRanged: true, tags: ["strike", "ranged", "piercing"],
     damageType: "piercing", strikeCategory: "projectile1"
+  }),
+  // 法器：talisman1/2 不在 strike.melee 的近战分类里，默认快照打不到这条规则
+  "travel/strike.talisman": Object.freeze({
+    tags: ["strike", "melee"], strikeCategory: "talisman2",
+    weapon: "flameStaff", damageType: "fire"
   }),
   "aftermath/aftermath.healing": Object.freeze({
     isAttack: false, tags: ["healing"], healed: 6

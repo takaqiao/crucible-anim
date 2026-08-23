@@ -146,14 +146,77 @@ Crucible 里**武器自己没有动作**，动作是天赋给的，而且所有�
 
 ---
 
-## 四、待办
+## 三点五、A1 第一轮：武器专属选材（已落地）
+
+### 派发键定错会全盘作废，所以逐条读源码定
+
+原计划用 `w.id`（官方 pack 里确实是 `dagger0000000000` 这种语义 slug）。**实测推翻**：
+那个补零 slug 是 `standardizeItemIds()`（crucible-compiled.mjs:48925）给**世界物品**做的
+规范化，角色身上的嵌入物品不走它——pregens 里那把匕首的 `_id` 是 `U0pzlydffRGomINf`。
+备选的 `_stats.compendiumSource` 在 pack 里与角色身上**都是 null**。两个候选实战全废。
+
+改用 **`system.identifier`**：pack 里与角色身上都是 `dagger`；不是显示名，Babele 把名字
+译成「匕首 Dagger」也动不到它。不保证语义（`ItemIdentifierField` 默认值是 `randomID(10)`），
+但查不到就落回 category 级联，正是现有行为。
+
+### 战果
+
+| | 起点 | 第一轮后 |
+| --- | --- | --- |
+| 92 件武器命中的不同 travel 素材 | 6 | **43** |
+| 最大碰撞桶 | 20 件共用一段短剑挥砍 | **8** |
+| 一条 travel cue 都不出 | 14（5 盾 + 9 法器） | **5**（只剩盾） |
+
+做了什么：
+
+1. `tools/dump-weapons.mjs` → `data/weapons.json`：92 件武器枚举（定义域，不是手写清单）
+2. 快照 `strikes` 带上 `identifier` + `properties`
+3. `test/fixtures/weapon-strikes.json`：92 件武器各一份平打快照（单独一份文件，不污染兜底棘轮）
+4. `scripts/armory/weapon-shapes.mjs`：武器 → jb2a.melee_attack 形制表，67 件近战武器 → 18 个形制
+5. 新规则 `travel/strike.talisman`：9 件法器从全程静音变成按 `DAMAGE_COLOR` 染色的附魔剑挥击
+6. `test/weapon-dispatch.test.mjs`：三条棘轮 + 反向守卫（基线不许虚高），已变异验证
+
+### 选材依据：21 个族级记录
+
+`docs/ASSET-NOTES.md` 新增 21 个族（全族机器量测 + **每个内容占比簇各抽一条读图**，
+共 57 条抽样）。族内均匀性由 `test/asset-families.test.mjs` 四条守卫强制。
+
+读图的实际发现（`tools/family-sheet.mjs` 拼图，27 形制 + 88 变体两张）：
+
+- 同一形制的 4 个变体是**四种挥击方向**（平扫 / 高弧 / 竖劈 / 下斩），可做随机池
+- 形制之间确实可辨：`greatclub` 看得见褐色木棒、`scythe` 有完整镰刀柄与弯刃、
+  `nodachi` 画幅 1000×800 弧幅明显更大、`chakram` 有环、`bone`/`greatbone` 是骨白
+- `magic_sword` / `magical_greatsword` 有颜色分支 → 法器按伤害类型染色
+
+### 两条否决被**限定范围**并提升为主表记录（不是绕过）
+
+`jb2a.melee_attack.03.greatsword.01` 与 `.05.scythe.01` 原本在否决清单上，而
+**否决压过族级记录**，`test/armory-assets.test.mjs` 会机械拦下。处理方式不是放宽守卫，
+是把两条从否决清单**提升为主表逐条记录**，原判据与新范围都留着：
+
+- greatsword 原判据是「拿它当通用近战挥击，不如 shortsword」——**继续成立**。本轮用法是
+  「给巨剑配巨剑的挥击」，不必更好只需更像。原记录说的「极暗」指 f4-f16 **起手段**，
+  与量测出的峰值帧暗底亮度 131-158（全族最高档）不矛盾，两个口径量的是不同的东西。
+- scythe 原判据是「做不出隔一格的长度差」——**继续成立**，隔格仍然只能用 nodachi。
+  本轮用它当长柄类形制，与长度无关。
+
+### 还剩什么
+
+- **5 面盾仍是哑的**：`jb2a.melee_attack.06.shield` 帧数离散度 0.49（49-96 帧）
+  **不合格**，族级记录替不了它签字，必须逐条记录
+- **两个 8 件的桶**：天生咬击类共用骨棒（`jb2a.bite.*` 7 色 / `jb2a.claws.*` 8 色更贴切，
+  元素变体正好靠颜色维度解决，但那两族尚未登记）；8 件远程武器共用同一支蓝箭
+- 突刺类武器（spear / javelin / warlance / rapier / sai）**整个 melee_attack 族没有对应素材**，
+  故意留空走分类兜底——硬配一条挥砍弧不如让它走兜底：兜底是「没为它选」，错配是「选错了」
+
+## 四、待办## 四、待办
 
 ### B 线（架构清理，B2 已完成）
 
 | | 内容 | 状态 |
 | --- | --- | --- |
-| B1 | 武器身份取 `w.id`（`beak000000000000` 这类语义 slug）为主、`_stats.compendiumSource` 为辅；删掉 `img` 目录层——它是死代码（GRAIN 键与 img 桶零交集） | 待做 |
-| B2 | 多目标交棒 | ✅ 本轮完成 |
+| B1 | 武器身份 → `system.identifier`（原计划的 `w.id` 与 `compendiumSource` 实测在角色身上都失效） | ✅ 完成 |
+| B2 | 多目标交棒 | ✅ 完成 |
 | B3 | `(group, variant)` 的 CLIP 表换成逐文件生成的 `data/clip.json`（`{frames, peak, tailEmpty}`），`duration = (frames − tailEmpty)/fps×1000` | 待做 |
 | B4 | 重写 accent 映射：图案 = 强度轴，颜色 = `DAMAGE_COLOR[damageType]` | 待做 |
 | B5 | 一期砍掉 `beat` | 待做 |

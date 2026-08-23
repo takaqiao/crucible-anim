@@ -142,6 +142,8 @@ const originAnchor = s => ({ref: "origin", tokenId: s.origin?.tokenId ?? null,
                             uuid: s.origin?.uuid ?? null,
                             x: s.origin?.x, y: s.origin?.y});
 
+import {shapeFor, TALISMAN_SHAPE, talismanColorFor} from "./weapon-shapes.mjs";
+
 export default [
   // ---- 高优先级规则加在这里（Task 10） ----
 
@@ -358,6 +360,46 @@ export default [
    * 1.30-1.53s（shortsword）/ 1.40-1.47s（nodachi）间波动——ASSET-NOTES 记为
    * 已知限制，不在本规则可控范围内（需要 ctx 增加锁定 variant 的能力）。
    */
+  /**
+   * 法器挥击。**改造前这 9 件武器一条 travel cue 都不出**——`strike.melee` 的 when 只认
+   * light1/simple/balanced/heavy 七个近战分类，talisman1/talisman2 不在里面，于是
+   * arcaneOrb / grimoire / holySymbol / lyre / primordialSeed / skullFetish /
+   * ceremonialDagger / flameStaff / iceStaff 全程静音。
+   *
+   * 法器是施法媒介不是刀剑，用附魔剑 / 附魔巨剑那两支带辉光的形制，颜色跟武器自己的
+   * 伤害类型走（`ctx.pickColor` 会做最近色路由 + hue 补偿，与其余元素通路同一套）。
+   *
+   * ⚠ 这两族的暗底亮度跨度 37.9-128.5，**dark_green 与 dark_purple 两支在深色地图上
+   * 接近隐形**（族级记录里记着）。取不到色时退回 blue 这个亮度安全档，不硬配暗色。
+   *
+   * pri 630 高于 strike.melee 的 620：法器分类不与近战分类重叠，这里排前面只是让
+   * 「专属规则先于通用规则」的读法成立，两条实际上互斥。
+   */
+  {
+    id: "strike.talisman", pri: 630,
+    when: s => !s.tags?.includes("thrown") &&
+               s.strikes.some(w => TALISMAN_SHAPE[w.category]),
+    build: (s, ctx, target) => {
+      const w = s.strikes.find(x => TALISMAN_SHAPE[x.category]);
+      const family = TALISMAN_SHAPE[w.category];
+      // ctx.pick 的 {color} 走 pickColor：颜色分支不存在时取最近色并用 hue 补偿，
+      // 与其余元素通路同一套（见 resolver/context.mjs 的 pick）。
+      const fx = ctx.pick(family, {color: talismanColorFor(w)});
+      if (!fx) return null;
+      return {
+        file: fx.file,
+        objectScale: 1 * ctx.geom.sizeScale(),
+        offset: {x: ctx.geom.offsetFor(target, 0.5), y: 0}, gridUnits: true,
+        mirrorY: ctx.geom.onLeft(target),
+        aim: {towards: {tokenId: target.tokenId, x: target.x, y: target.y}, missed: false},
+        // 与 strike.melee 同口径裁掉空尾：两族都是 39-51 帧 @30fps，命中峰在 f16-f20
+        duration: 933,
+        zIndex: 100,
+        elevation: target.elevation,
+        waitUntilFinished: -400
+      };
+    }
+  },
   {
     id: "strike.melee", pri: 620,
     when: s => !s.tags?.includes("thrown") && s.strikes.some(w =>
@@ -365,7 +407,14 @@ export default [
         .includes(w.category)),
     build: (s, ctx, target) => {
       const adjacent = ctx.geom.adjacent(target);
-      const branch = adjacent ? "jb2a.melee_attack.01.shortsword.01" : "jb2a.melee_attack.05.nodachi.01";
+      // 贴身时按武器自己的形制挥（见 armory/weapon-shapes.mjs）；隔格仍用野太刀——
+      // 它是全族唯一 1000×800 画幅、弧幅真够得到隔一格的一支（其余形制实测最远只越过
+      // 目标锚点 37-48px，见 ASSET-NOTES 否决清单里 scythe / greatsword 两条）。
+      // 形制表查不到（突刺类武器整族没有对应素材）时退回短剑，与改造前一致。
+      const shape = shapeFor(s.strikes?.[0]);
+      const branch = adjacent
+        ? (shape ?? "jb2a.melee_attack.01.shortsword.01")
+        : "jb2a.melee_attack.05.nodachi.01";
       const fx = ctx.pick(branch);
       if (!fx) return null;
       return {
