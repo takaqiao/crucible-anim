@@ -1,4 +1,5 @@
 import {selfShapeFor} from "./self-shapes.mjs";
+import {spellCastSound} from "./sounds.mjs";
 
 /**
  * S1 cast：动作开始，锚在施法者。
@@ -25,7 +26,7 @@ export default [
     build: (s, ctx) => {
       const fx = ctx.pick("jb2a.magic_signs.circle.02.abjuration.complete", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const fx0 = {
         file: fx.file,
         objectScale: 1.1 * ctx.geom.sizeScale(),
         belowTokens: true, fadeIn: 300, fadeOut: 500, zIndex: 20,
@@ -33,6 +34,7 @@ export default [
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -400
       };
+      return [...spellCastSound(s, ctx), fx0];
     }
   },
 
@@ -52,7 +54,7 @@ export default [
     build: (s, ctx) => {
       const fx = ctx.pick("jb2a.magic_signs.circle.02.conjuration.complete", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const fx0 = {
         file: fx.file,
         objectScale: 2 * ctx.geom.sizeScale(),
         belowTokens: true, fadeIn: 300, fadeOut: 500, zIndex: 20,
@@ -60,6 +62,7 @@ export default [
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -400
       };
+      return [...spellCastSound(s, ctx), fx0];
     }
   },
 
@@ -78,13 +81,14 @@ export default [
     build: (s, ctx) => {
       const fx = ctx.pick("jb2a.on_token_buff.001.001", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const fx0 = {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         attachTo: true, fadeIn: 150, fadeOut: 300, zIndex: 30,
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -300
       };
+      return [...spellCastSound(s, ctx), fx0];
     }
   },
 
@@ -101,7 +105,7 @@ export default [
     build: (s, ctx) => {
       const fx = ctx.pick("jb2a.magic_signs.circle.02.evocation.loop", {color: ctx.runeColor()});
       if (!fx) return null;
-      return {
+      const fx0 = {
         file: fx.file,
         objectScale: 1 * ctx.geom.sizeScale(),
         belowTokens: true, fadeIn: 300, fadeOut: 500, zIndex: 20,
@@ -109,6 +113,7 @@ export default [
         filter: fx.hue ? {type: "ColorMatrix", data: {hue: fx.hue}} : null,
         waitUntilFinished: -300
       };
+      return [...spellCastSound(s, ctx), fx0];
     }
   },
 

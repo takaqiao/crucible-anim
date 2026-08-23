@@ -13,7 +13,10 @@ const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8
 const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json"), "utf8"));
 const mk = () => createAssets(offlineBackend(index));
 const byId = id => actions.find(a => a.id === id);
-const castCue = s => resolve(s, {assets: mk(), armory: ARMORY})?.cues.find(c => c.slot === "cast");
+// cast 槽的**画面** cue。法术现在还会发一条施法音，它排在画面之前（见 armory/sounds.mjs），
+// 用 find 会取到声音。
+const castCue = s => resolve(s, {assets: mk(), armory: ARMORY})?.cues
+  .find(c => c.slot === "cast" && c.kind !== "sound");
 
 test("规则表规模与 pri 区间合法", () => {
   assert.ok(cast.length >= 9, `只有 ${cast.length} 条规则`);

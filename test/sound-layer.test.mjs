@@ -31,7 +31,7 @@ const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json")
 const mk = () => createAssets(offlineBackend(index));
 
 /** 目标：一路涨到全语料。**只许增不许减。** */
-const BASELINE = Object.freeze({actionsWithSound: 99});
+const BASELINE = Object.freeze({actionsWithSound: 303});
 
 /** 一条音效 cue 实际**响**在第几毫秒。 */
 const heard = c => (c.delay ?? 0) + (SFX[c.file][0] - (c.startTime ?? 0));

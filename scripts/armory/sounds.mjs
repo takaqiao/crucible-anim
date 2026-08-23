@@ -161,3 +161,43 @@ export function strikeSounds(s, ctx, target, contactMs, weapon) {
   }
   return out;
 }
+
+/**
+ * 施法音，按**符文**。
+ *
+ * 改造前 204 条法术**一条声音都没有**。`psfx.casting` 按元素分了 fire / earth / water /
+ * sound / generic 五支，正好接 Crucible 的符文。
+ *
+ * 对不上元素的八个符文（life / death / soul / oblivion / control / illusion / kinesis /
+ * illumination）走 generic——**这是缺口不是选择**：psfx 只有这五支，硬把「死亡」配成
+ * 「水」比走通用更糟。
+ */
+export const CAST_SOUND = Object.freeze({
+  flame: "psfx.casting.fire",
+  earth: "psfx.casting.earth",
+  storm: "psfx.casting.sound",
+  frost: "psfx.casting.water"
+});
+
+/** 认不出元素的符文用它。峰值 220-270ms、有效声长 600-1720ms，是这一族里最紧的一支。 */
+export const CAST_DEFAULT = "psfx.casting.generic";
+
+/**
+ * 一次施法该出的音效 cue。
+ *
+ * 只出一条：施法音本身是个渐强的过程，**不按「让峰值落在某一刻」排**——那是给
+ * 「打中」这种瞬态用的口径。这里 delay 0 起播，时长裁到有效声长（psfx.casting.water
+ * 整段 4.1 秒，不裁会盖住后面的命中音）。
+ *
+ * @param {object} s 动作快照
+ * @param {object} ctx
+ * @returns {object[]} 0-1 条 sound cue
+ */
+export function spellCastSound(s, ctx) {
+  if (!s?.spell) return [];
+  const fx = ctx.sound(CAST_SOUND[s.spell.rune] ?? CAST_DEFAULT);
+  if (!fx) return [];
+  const t = soundAt(fx.file, 0);
+  return [{kind: "sound", file: fx.file, volume: 0.55,
+           delay: 0, duration: t?.effectiveMs ?? null}];
+}
