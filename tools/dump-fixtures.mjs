@@ -7,7 +7,7 @@
  * 用法： node tools/dump-fixtures.mjs [--data <Foundry Data>]
  */
 import {ClassicLevel} from "classic-level";
-import {writeFileSync, existsSync} from "node:fs";
+import {writeFileSync, existsSync, readFileSync} from "node:fs";
 import {join, dirname} from "node:path";
 import {fileURLToPath, pathToFileURL} from "node:url";
 import {FOUNDRY_DATA} from "./paths.mjs";
@@ -27,6 +27,15 @@ const PACKS = [
   join(DATA, "systems/crucible/packs/spell"),
   join(DATA, "modules/ember/packs/crucible-adversary")
 ];
+
+/**
+ * 92 件真实武器（`tools/dump-weapons.mjs` 枚举 Crucible 的 equipment +
+ * adversary-equipment 两个包得来）。语料从前用抽象的 `{category, damageType}` 造武器，
+ * **按 identifier 分支的派发规则一条都测不到**。
+ */
+const WEAPONS = existsSync(join(ROOT, "data/weapons.json"))
+  ? JSON.parse(readFileSync(join(ROOT, "data/weapons.json"), "utf8")).weapons
+  : [];
 
 const DEFAULT_ACTIONS = ["cast", "move", "fall", "defend", "delay", "escape", "reactiveStrike",
                          "throwWeapon", "investiture", "recover", "reload", "rest", "strike"];
@@ -156,9 +165,6 @@ function synthWeapon(tags) {
     : t.has("shield")   ? "shieldLight"
     : "balanced1";
 
-  // 伤害类型：动作自带伤害类型标签就用它（Crucible 的 TAGS[<damageType>] 会写
-  // usage.damageType），否则按分类的常见形制给
-  const explicit = DAMAGE_TAGS.find(d => t.has(d));
   const byCategory = {
     unarmed: "bludgeoning", light1: "piercing", balanced1: "slashing", heavy1: "slashing",
     heavy2: "slashing", shieldLight: "bludgeoning",
@@ -166,12 +172,30 @@ function synthWeapon(tags) {
     mechanical1: "piercing", mechanical2: "piercing",
     talisman1: "radiant", talisman2: "fire"
   };
-  return [{category, damageType: explicit ?? byCategory[category] ?? "bludgeoning"}];
+  // **武器的伤害类型不等于动作的伤害类型。** `flamingArrow` 的火来自动作，弓仍是穿刺的；
+  // 从前把动作的伤害标签直接当武器伤害，推出 `projectile1/fire` 这种 92 件里根本不存在
+  // 的组合（17 条）。这里只按分类的真实形制给。
+  //
+  // 这个改动对现有兵库**行为中性**：impact.mjs:410 的伤害链是
+  // `[目标伤害, usage.damageType, strikes[0].damageType]`，武器伤害只是最后兜底；
+  // 而动作带伤害标签时 usage.damageType 必非空，链子够不到那一层。
+  const damageType = byCategory[category] ?? "bludgeoning";
+
+  // 挑一件**真实存在**的同类武器，好让按 identifier 分支的规则被语料行使到。
+  // 伤害类型仍以上面推出来的为准（改了会连带改掉整份语料的元素分支，与本次目的无关）；
+  // 天生武器只配给带 natural 标签的动作——英雄天赋不该抡着怪物的獠牙。
+  const pool = WEAPONS.filter(w => w.category === category && w.damageType === damageType);
+  const wantNatural = t.has("natural");
+  const real = pool.find(w => w.properties.includes("natural") === wantNatural) ?? pool[0];
+  return [real
+    ? {identifier: real.identifier, category, damageType, properties: real.properties}
+    // 推出来的 (分类,伤害) 组合在 92 件里不存在时如实退回抽象武器，不硬凑
+    : {identifier: null, category, damageType, properties: []}];
 }
 
 const DEFAULT_STRIKES = {
-  strike: [{category: "balanced1", damageType: "slashing"}],
-  reactiveStrike: [{category: "light1", damageType: "piercing"}]
+  strike: synthWeapon(["strike", "melee"]),
+  reactiveStrike: synthWeapon(["strike", "melee", "finesse"])
 };
 
 /**
@@ -358,6 +382,37 @@ if (isMain) {
       }));
     }
   }
+
+  // ---- 武器语料：92 件武器各一份平打快照 -------------------------------------
+  //
+  // 动作语料里一个动作只带一件武器，靠 synthWeapon 按标签推——推得再准也只覆盖到
+  // 8 件。而 V2 线 A 要给**每件**武器配专属画面，「每件」是 92 件，覆盖率守卫得有个
+  // 定义域才能说「还差几件」。
+  //
+  // 单独一份文件而不是并进 actions.json：并进去会把兜底棘轮的三个基线整体抬高 92,
+  // 那三个数是 V2 的进度表，掺进与派发无关的量会让它读不出进度。
+  //
+  // `usage.damageType` 留空是**故意的**：impact 的伤害链是
+  // `[目标伤害, usage.damageType, strikes[0].damageType]`，只有动作不带伤害标签时
+  // 才够得到武器那一层——平打正是这种情形，也正是 ELEMENT_LAYER 12 支里靠武器
+  // 定色的那条通路唯一被行使到的地方。
+  const weaponStrikes = WEAPONS.map(w => {
+    const ranged = ["projectile1", "projectile2", "mechanical1", "mechanical2"].includes(w.category);
+    const tags = propagateTags(["strike", ranged ? "ranged" : "melee",
+                                ...(w.properties.includes("natural") ? ["natural"] : [])]);
+    const snap = baseSnapshot(`weapon:${w.category}:${w.identifier}`, {
+      tags,
+      target: {type: "single", number: 1, distance: ranged ? 10 : 1, scope: 3},
+      range: {minimum: 0, maximum: ranged ? 10 : 1},
+      cost: {action: 1, focus: 0, heroism: 0, health: 0, weapon: true},
+      strikes: [{identifier: w.identifier, category: w.category,
+                 damageType: w.damageType, properties: w.properties}],
+      usage: {isAttack: true, isRanged: ranged}
+    });
+    return snap;
+  });
+  writeFileSync(join(ROOT, "test/fixtures/weapon-strikes.json"), JSON.stringify(weaponStrikes));
+  console.log(`weapon-strikes.json: ${weaponStrikes.length} 件武器`);
 
   writeFileSync(join(ROOT, "test/fixtures/actions.json"), JSON.stringify(out));
   console.log(`actions.json: ${out.length} 个快照`);

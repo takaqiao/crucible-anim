@@ -238,9 +238,30 @@ export function snapshotAction(action, env) {
     range: {...(action.range ?? {minimum: 0, maximum: 0})},
     cost: {...(action.cost ?? {action: 0, focus: 0, heroism: 0, health: 0})},
     spell, region,
+    /**
+     * 这一击用的武器。**`identifier` 是武器派发键**，逐条读源码定的——三个候选里
+     * 只有它在「装到角色身上」之后还活着：
+     *
+     *   · `_id`：官方 pack 里是语义 slug（`dagger0000000000`），但那是
+     *     `standardizeItemIds()`（crucible-compiled.mjs:48925）给**世界物品**做的规范化；
+     *     角色身上的嵌入物品不走它，实测 pregens 里的匕首是 `U0pzlydffRGomINf`；
+     *   · `_stats.compendiumSource`：pack 里与角色身上**都是 null**；
+     *   · `system.identifier`：两边都是 `dagger`。✓
+     *
+     * 它还不是显示名，所以 Babele / crucible-cn 把名字译成「匕首 Dagger」也动不到它——
+     * 按名字派发在本项目是已知会坏的路子。
+     *
+     * 不保证语义：`ItemIdentifierField` 默认值是 `randomID(10)`（23881），pack 作者
+     * 没填时会留下 `G63t1Pjsjr` 这种串。不检测——派发表里查不到就落回 category 级联。
+     *
+     * `properties` 决定形态修正（versatile 双持 / oversized 更大 / thrown 可投 /
+     * natural 天生武器不该出金属刀光）。排序后写入：快照要能逐字复现。
+     */
     strikes: (action.usage?.strikes ?? []).map(w => ({
+      identifier: w.system?.identifier ?? w.identifier ?? null,
       category: w.category ?? w.system?.category ?? null,
-      damageType: w.system?.damageType ?? w.damageType ?? null
+      damageType: w.system?.damageType ?? w.damageType ?? null,
+      properties: [...(w.system?.properties ?? w.properties ?? [])].sort()
     })),
     origin, targets,
     usage: {

@@ -1,0 +1,978 @@
+{
+ "generatedFrom": "systems/crucible/packs/{equipment,adversary-equipment}",
+ "dispatchKey": "system.identifier",
+ "count": 92,
+ "weapons": [
+  {
+   "identifier": "bite",
+   "name": "Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-rows-red.webp"
+  },
+  {
+   "identifier": "burningBite",
+   "name": "Burning Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "fire",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/dragon-fire-breath-orange.webp"
+  },
+  {
+   "identifier": "burningLimb",
+   "name": "Burning Limb",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "fire",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/fire/flame-burning-fist-strike.webp"
+  },
+  {
+   "identifier": "causticBite",
+   "name": "Caustic Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "acid",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/fang-tooth-poison-green.webp"
+  },
+  {
+   "identifier": "chainHook",
+   "name": "Chain Hook",
+   "pack": "equipment",
+   "category": "balanced1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "thrown"
+   ],
+   "img": "icons/tools/fishing/hook-multi-steel-grey.webp"
+  },
+  {
+   "identifier": "chargedBite",
+   "name": "Charged Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "electricity",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-fire-orange.webp"
+  },
+  {
+   "identifier": "frigidBite",
+   "name": "Frigid Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "cold",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-rows-white.webp"
+  },
+  {
+   "identifier": "handAxe",
+   "name": "Hand Axe",
+   "pack": "equipment",
+   "category": "balanced1",
+   "damageType": "slashing",
+   "properties": [
+    "intuitive",
+    "thrown"
+   ],
+   "img": "icons/weapons/axes/axe-broad-engraved.webp"
+  },
+  {
+   "identifier": "katana",
+   "name": "Katana",
+   "pack": "equipment",
+   "category": "balanced1",
+   "damageType": "slashing",
+   "properties": [
+    "versatile"
+   ],
+   "img": "icons/weapons/swords/sword-katana.webp"
+  },
+  {
+   "identifier": "kineticLimb",
+   "name": "Kinetic Limb",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/movement/pinwheel-turning-blue.webp"
+  },
+  {
+   "identifier": "pestilentBite",
+   "name": "Pestilent Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "corruption",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-rows-needles-purple.webp"
+  },
+  {
+   "identifier": "pestilentLimb",
+   "name": "Pestilent Limb",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "corruption",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/death/hand-undead-skeleton-fire-green.webp"
+  },
+  {
+   "identifier": "pseudopod",
+   "name": "Pseudopod",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/slimes/slime-movement-dripping-pseudopods-green.webp"
+  },
+  {
+   "identifier": "psychicBite",
+   "name": "Psychic Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "psychic",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-lamprey-red.webp"
+  },
+  {
+   "identifier": "psychicLimb",
+   "name": "Psychic Limb",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "psychic",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/unholy/orb-hands-pink.webp"
+  },
+  {
+   "identifier": "radiantBite",
+   "name": "Radiant Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "radiant",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-sharp.webp"
+  },
+  {
+   "identifier": "scimitar",
+   "name": "Scimitar",
+   "pack": "equipment",
+   "category": "balanced1",
+   "damageType": "slashing",
+   "properties": [],
+   "img": "icons/weapons/swords/scimitar-worn-blue.webp"
+  },
+  {
+   "identifier": "shadowBite",
+   "name": "Shadow Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "void",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/mammals/wolf-shadow-black.webp"
+  },
+  {
+   "identifier": "shadowLimb",
+   "name": "Shadow Limb",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "void",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/fire/flame-burning-hand-purple.webp"
+  },
+  {
+   "identifier": "shortsword",
+   "name": "Shortsword",
+   "pack": "equipment",
+   "category": "balanced1",
+   "damageType": "slashing",
+   "properties": [
+    "intuitive",
+    "parrying"
+   ],
+   "img": "icons/weapons/swords/sword-guard.webp"
+  },
+  {
+   "identifier": "spear",
+   "name": "Spear",
+   "pack": "equipment",
+   "category": "balanced1",
+   "damageType": "piercing",
+   "properties": [
+    "versatile"
+   ],
+   "img": "icons/weapons/polearms/spear-flared-blue.webp"
+  },
+  {
+   "identifier": "tail",
+   "name": "Tail",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/biological/stinger-insect-grey.webp"
+  },
+  {
+   "identifier": "thorns",
+   "name": "Thorns",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/nature/root-vine-spiral-thorns-teal.webp"
+  },
+  {
+   "identifier": "venomousBite",
+   "name": "Venomous Bite",
+   "pack": "adversary-equipment",
+   "category": "balanced1",
+   "damageType": "poison",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/fang-tooth-venomous.webp"
+  },
+  {
+   "identifier": "boStaff",
+   "name": "Bo Staff",
+   "pack": "equipment",
+   "category": "balanced2",
+   "damageType": "bludgeoning",
+   "properties": [
+    "parrying"
+   ],
+   "img": "icons/weapons/staves/staff-ornate.webp"
+  },
+  {
+   "identifier": "glaive",
+   "name": "Glaive",
+   "pack": "equipment",
+   "category": "balanced2",
+   "damageType": "slashing",
+   "properties": [],
+   "img": "icons/weapons/polearms/glaive-simple.webp"
+  },
+  {
+   "identifier": "longsword",
+   "name": "Longsword",
+   "pack": "equipment",
+   "category": "balanced2",
+   "damageType": "slashing",
+   "properties": [
+    "parrying"
+   ],
+   "img": "icons/weapons/swords/greatsword-crossguard-steel.webp"
+  },
+  {
+   "identifier": "quarterstaff",
+   "name": "Quarterstaff",
+   "pack": "equipment",
+   "category": "balanced2",
+   "damageType": "bludgeoning",
+   "properties": [
+    "blocking",
+    "intuitive"
+   ],
+   "img": "icons/weapons/staves/staff-simple.webp"
+  },
+  {
+   "identifier": "tentacles",
+   "name": "Tentacles",
+   "pack": "adversary-equipment",
+   "category": "balanced2",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/biological/tentacle-purple-white.webp"
+  },
+  {
+   "identifier": "bastardSword",
+   "name": "Bastard Sword",
+   "pack": "equipment",
+   "category": "heavy1",
+   "damageType": "slashing",
+   "properties": [
+    "versatile"
+   ],
+   "img": "icons/weapons/swords/greatsword-crossguard-silver.webp"
+  },
+  {
+   "identifier": "battleAxe",
+   "name": "Battle Axe",
+   "pack": "equipment",
+   "category": "heavy1",
+   "damageType": "slashing",
+   "properties": [
+    "versatile"
+   ],
+   "img": "icons/weapons/axes/axe-battle-black.webp"
+  },
+  {
+   "identifier": "causticLimb",
+   "name": "Caustic Limb",
+   "pack": "adversary-equipment",
+   "category": "heavy1",
+   "damageType": "acid",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/acid/dissolve-arm-flesh.webp"
+  },
+  {
+   "identifier": "frigidLimb",
+   "name": "Frigid Limb",
+   "pack": "adversary-equipment",
+   "category": "heavy1",
+   "damageType": "cold",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/water/strike-ice-blade-axe.webp"
+  },
+  {
+   "identifier": "giantClaws",
+   "name": "Giant Claws",
+   "pack": "adversary-equipment",
+   "category": "heavy1",
+   "damageType": "slashing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/claws/claw-straight-orange.webp"
+  },
+  {
+   "identifier": "horns",
+   "name": "Horn",
+   "pack": "adversary-equipment",
+   "category": "heavy1",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/bones/horn-worn-white.webp"
+  },
+  {
+   "identifier": "pincers",
+   "name": "Pincers",
+   "pack": "adversary-equipment",
+   "category": "heavy1",
+   "damageType": "slashing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/claws/pincer-crab-red.webp"
+  },
+  {
+   "identifier": "tusks",
+   "name": "Tusks",
+   "pack": "adversary-equipment",
+   "category": "heavy1",
+   "damageType": "slashing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/bones/skull-tusked-grey.webp"
+  },
+  {
+   "identifier": "warhammer",
+   "name": "War Hammer",
+   "pack": "equipment",
+   "category": "heavy1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "versatile"
+   ],
+   "img": "icons/weapons/hammers/hammer-war-rounding.webp"
+  },
+  {
+   "identifier": "giantBeak",
+   "name": "Giant Beak",
+   "pack": "adversary-equipment",
+   "category": "heavy2",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/bones/beak-hooked-red.webp"
+  },
+  {
+   "identifier": "giantJaws",
+   "name": "Giant Jaws",
+   "pack": "adversary-equipment",
+   "category": "heavy2",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/mouth-teeth-rows-red.webp"
+  },
+  {
+   "identifier": "giantTail",
+   "name": "Giant Tail",
+   "pack": "adversary-equipment",
+   "category": "heavy2",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/tail-swipe-green.webp"
+  },
+  {
+   "identifier": "greataxe",
+   "name": "Greataxe",
+   "pack": "equipment",
+   "category": "heavy2",
+   "damageType": "slashing",
+   "properties": [],
+   "img": "icons/weapons/axes/axe-double-simple-brown.webp"
+  },
+  {
+   "identifier": "greathammer",
+   "name": "Great Hammer",
+   "pack": "equipment",
+   "category": "heavy2",
+   "damageType": "bludgeoning",
+   "properties": [
+    "oversized"
+   ],
+   "img": "icons/weapons/hammers/hammer-double-steel.webp"
+  },
+  {
+   "identifier": "greatsword",
+   "name": "Greatsword",
+   "pack": "equipment",
+   "category": "heavy2",
+   "damageType": "slashing",
+   "properties": [],
+   "img": "icons/weapons/swords/greatsword-crossguard-flanged-red.webp"
+  },
+  {
+   "identifier": "halberd",
+   "name": "Halberd",
+   "pack": "equipment",
+   "category": "heavy2",
+   "damageType": "slashing",
+   "properties": [
+    "parrying"
+   ],
+   "img": "icons/weapons/polearms/halberd-curved-steel.webp"
+  },
+  {
+   "identifier": "warlance",
+   "name": "War Lance",
+   "pack": "equipment",
+   "category": "heavy2",
+   "damageType": "piercing",
+   "properties": [
+    "oversized"
+   ],
+   "img": "icons/weapons/polearms/spear-hooked-double-jeweled.webp"
+  },
+  {
+   "identifier": "beak",
+   "name": "Beak",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/bones/skull-bird-white.webp"
+  },
+  {
+   "identifier": "chargedLimb",
+   "name": "Charged Limb",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "electricity",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/lightning/claws-unarmed-strike-teal.webp"
+  },
+  {
+   "identifier": "claws",
+   "name": "Claws",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "slashing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/claws/claw-bear-paw-swipe-red.webp"
+  },
+  {
+   "identifier": "dagger",
+   "name": "Dagger",
+   "pack": "equipment",
+   "category": "light1",
+   "damageType": "piercing",
+   "properties": [
+    "ambush",
+    "intuitive",
+    "thrown"
+   ],
+   "img": "icons/weapons/daggers/dagger-straight-blue.webp"
+  },
+  {
+   "identifier": "fangs",
+   "name": "Fangs",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/fang-tooth-venomous.webp"
+  },
+  {
+   "identifier": "radiantLimb",
+   "name": "Radiant Limb",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "radiant",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/magic/light/orbs-firefly-hand-yellow.webp"
+  },
+  {
+   "identifier": "rapier",
+   "name": "Rapier",
+   "pack": "equipment",
+   "category": "light1",
+   "damageType": "piercing",
+   "properties": [],
+   "img": "icons/weapons/swords/sword-guard-gold-red.webp"
+  },
+  {
+   "identifier": "sai",
+   "name": "Sai",
+   "pack": "equipment",
+   "category": "light1",
+   "damageType": "piercing",
+   "properties": [
+    "parrying"
+   ],
+   "img": "icons/weapons/daggers/dagger-simple-black.webp"
+  },
+  {
+   "identifier": "stiletto",
+   "name": "Stiletto",
+   "pack": "equipment",
+   "category": "light1",
+   "damageType": "piercing",
+   "properties": [
+    "ambush",
+    "intuitive"
+   ],
+   "img": "icons/weapons/daggers/dagger-straight-thin-black.webp"
+  },
+  {
+   "identifier": "stinger",
+   "name": "Stinger",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "poison",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/stinger-poison-scorpion-brown.webp"
+  },
+  {
+   "identifier": "talons",
+   "name": "Talons",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "slashing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/claws/claw-scaled-red.webp"
+  },
+  {
+   "identifier": "venomousLimb",
+   "name": "Venomous Limb",
+   "pack": "adversary-equipment",
+   "category": "light1",
+   "damageType": "poison",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/creatures/abilities/stinger-poison-green.webp"
+  },
+  {
+   "identifier": "handCrossbow",
+   "name": "Hand Crossbow",
+   "pack": "equipment",
+   "category": "mechanical1",
+   "damageType": "piercing",
+   "properties": [],
+   "img": "icons/weapons/crossbows/crossbow-loaded-black.webp"
+  },
+  {
+   "identifier": "pistol",
+   "name": "Pistol",
+   "pack": "equipment",
+   "category": "mechanical1",
+   "damageType": "bludgeoning",
+   "properties": [],
+   "img": "icons/weapons/guns/gun-pistol-flintlock-metal.webp"
+  },
+  {
+   "identifier": "heavyCrossbow",
+   "name": "Heavy Crossbow",
+   "pack": "equipment",
+   "category": "mechanical2",
+   "damageType": "piercing",
+   "properties": [],
+   "img": "icons/weapons/crossbows/crossbow-purple.webp"
+  },
+  {
+   "identifier": "dartgun",
+   "name": "Dart Gun",
+   "pack": "equipment",
+   "category": "projectile1",
+   "damageType": "piercing",
+   "properties": [
+    "ambush"
+   ],
+   "img": "icons/weapons/ammunition/arrow-simple-grey.webp"
+  },
+  {
+   "identifier": "quills",
+   "name": "Quills",
+   "pack": "adversary-equipment",
+   "category": "projectile1",
+   "damageType": "piercing",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/claws/claw-spiked-gold.webp"
+  },
+  {
+   "identifier": "sling",
+   "name": "Sling",
+   "pack": "equipment",
+   "category": "projectile1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "intuitive"
+   ],
+   "img": "icons/weapons/slings/slingshot-wood.webp"
+  },
+  {
+   "identifier": "longbow",
+   "name": "Longbow",
+   "pack": "equipment",
+   "category": "projectile2",
+   "damageType": "piercing",
+   "properties": [
+    "oversized"
+   ],
+   "img": "icons/weapons/bows/longbow-leather-green.webp"
+  },
+  {
+   "identifier": "shortbow",
+   "name": "Shortbow",
+   "pack": "equipment",
+   "category": "projectile2",
+   "damageType": "piercing",
+   "properties": [],
+   "img": "icons/weapons/bows/shortbow-leather.webp"
+  },
+  {
+   "identifier": "kiteShield",
+   "name": "Kite Shield",
+   "pack": "equipment",
+   "category": "shieldHeavy",
+   "damageType": "bludgeoning",
+   "properties": [],
+   "img": "icons/equipment/shield/kite-wooden-boss-steel-brown.webp"
+  },
+  {
+   "identifier": "towerShield",
+   "name": "Tower Shield",
+   "pack": "equipment",
+   "category": "shieldHeavy",
+   "damageType": "bludgeoning",
+   "properties": [
+    "engaging",
+    "oversized"
+   ],
+   "img": "icons/equipment/shield/wardoor-wooden-boss-brown.webp"
+  },
+  {
+   "identifier": "buckler",
+   "name": "Buckler",
+   "pack": "equipment",
+   "category": "shieldLight",
+   "damageType": "bludgeoning",
+   "properties": [
+    "parrying"
+   ],
+   "img": "icons/equipment/shield/buckler-wooden-boss-brown.webp"
+  },
+  {
+   "identifier": "heaterShield",
+   "name": "Heater Shield",
+   "pack": "equipment",
+   "category": "shieldLight",
+   "damageType": "bludgeoning",
+   "properties": [
+    "engaging"
+   ],
+   "img": "icons/equipment/shield/heater-steel-worn.webp"
+  },
+  {
+   "identifier": "roundShield",
+   "name": "Round Shield",
+   "pack": "equipment",
+   "category": "shieldLight",
+   "damageType": "bludgeoning",
+   "properties": [
+    "intuitive"
+   ],
+   "img": "icons/equipment/shield/round-wooden-pointed-boss-steel-brown.webp"
+  },
+  {
+   "identifier": "clawHammer",
+   "name": "Claw Hammer",
+   "pack": "equipment",
+   "category": "simple1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "thrown"
+   ],
+   "img": "icons/weapons/hammers/hammer-war-spiked.webp"
+  },
+  {
+   "identifier": "club",
+   "name": "Club",
+   "pack": "equipment",
+   "category": "simple1",
+   "damageType": "bludgeoning",
+   "properties": [],
+   "img": "icons/weapons/clubs/club-banded-brown.webp"
+  },
+  {
+   "identifier": "hooves",
+   "name": "Hooves",
+   "pack": "adversary-equipment",
+   "category": "simple1",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/commodities/bones/hooves-cloven-grey.webp"
+  },
+  {
+   "identifier": "javelin",
+   "name": "Javelin",
+   "pack": "equipment",
+   "category": "simple1",
+   "damageType": "piercing",
+   "properties": [
+    "thrown"
+   ],
+   "img": "icons/weapons/polearms/spear-flared-worn.webp"
+  },
+  {
+   "identifier": "mace",
+   "name": "Mace",
+   "pack": "equipment",
+   "category": "simple1",
+   "damageType": "bludgeoning",
+   "properties": [],
+   "img": "icons/weapons/maces/mace-flanged-steel-grey.webp"
+  },
+  {
+   "identifier": "pickaxe",
+   "name": "Pickaxe",
+   "pack": "equipment",
+   "category": "simple1",
+   "damageType": "piercing",
+   "properties": [],
+   "img": "icons/weapons/axes/pickaxe-iron-green.webp"
+  },
+  {
+   "identifier": "greatclub",
+   "name": "Greatclub",
+   "pack": "equipment",
+   "category": "simple2",
+   "damageType": "bludgeoning",
+   "properties": [],
+   "img": "icons/weapons/clubs/club-heavy-barbed-brown.webp"
+  },
+  {
+   "identifier": "spikedGreatclub",
+   "name": "Spiked Greatclub",
+   "pack": "equipment",
+   "category": "simple2",
+   "damageType": "bludgeoning",
+   "properties": [
+    "oversized"
+   ],
+   "img": "icons/weapons/clubs/club-heavy-barbed-black.webp"
+  },
+  {
+   "identifier": "arcaneOrb",
+   "name": "Arcane Orb",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "electricity",
+   "properties": [],
+   "img": "icons/commodities/materials/glass-orb-blue-gold.webp"
+  },
+  {
+   "identifier": "ceremonialDagger",
+   "name": "Ceremonial Dagger",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "piercing",
+   "properties": [],
+   "img": "icons/weapons/daggers/dagger-jeweled-black.webp"
+  },
+  {
+   "identifier": "grimoire",
+   "name": "Grimoire",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "bludgeoning",
+   "properties": [],
+   "img": "icons/sundries/books/book-symbol-spiral-silver-blue.webp"
+  },
+  {
+   "identifier": "holySymbol",
+   "name": "Holy Symbol",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "radiant",
+   "properties": [],
+   "img": "icons/equipment/neck/amulet-round-star-gold.webp"
+  },
+  {
+   "identifier": "lyre",
+   "name": "Lyre",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "psychic",
+   "properties": [],
+   "img": "icons/tools/instruments/harp-red.webp"
+  },
+  {
+   "identifier": "primordialSeed",
+   "name": "Primordial Seed",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "poison",
+   "properties": [],
+   "img": "icons/equipment/neck/pendant-rough-copper-green.webp"
+  },
+  {
+   "identifier": "skullFetish",
+   "name": "Skull Fetish",
+   "pack": "equipment",
+   "category": "talisman1",
+   "damageType": "corruption",
+   "properties": [],
+   "img": "icons/equipment/neck/necklace-simple-bone-skull.webp"
+  },
+  {
+   "identifier": "flameStaff",
+   "name": "Flame Staff",
+   "pack": "equipment",
+   "category": "talisman2",
+   "damageType": "fire",
+   "properties": [],
+   "img": "icons/weapons/staves/staff-engraved-red.webp"
+  },
+  {
+   "identifier": "iceStaff",
+   "name": "Ice Staff",
+   "pack": "equipment",
+   "category": "talisman2",
+   "damageType": "cold",
+   "properties": [],
+   "img": "icons/weapons/staves/staff-ornate-engraved-blue.webp"
+  },
+  {
+   "identifier": "claws",
+   "name": "Claws",
+   "pack": "equipment",
+   "category": "unarmed",
+   "damageType": "slashing",
+   "properties": [],
+   "img": "icons/weapons/fist/claw-gauntlet-gray.webp"
+  },
+  {
+   "identifier": "fists",
+   "name": "Fists",
+   "pack": "adversary-equipment",
+   "category": "unarmed",
+   "damageType": "bludgeoning",
+   "properties": [
+    "natural"
+   ],
+   "img": "icons/skills/melee/unarmed-punch-fist.webp"
+  },
+  {
+   "identifier": "katar",
+   "name": "Katar",
+   "pack": "equipment",
+   "category": "unarmed",
+   "damageType": "piercing",
+   "properties": [
+    "ambush"
+   ],
+   "img": "icons/weapons/fist/fist-katar-triple-engraved.webp"
+  },
+  {
+   "identifier": "spikedKnuckles",
+   "name": "Spiked Knuckles",
+   "pack": "equipment",
+   "category": "unarmed",
+   "damageType": "piercing",
+   "properties": [
+    "intuitive"
+   ],
+   "img": "icons/weapons/fist/fist-knuckles-spiked-brown.webp"
+  }
+ ]
+}

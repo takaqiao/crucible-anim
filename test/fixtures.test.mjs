@@ -6,6 +6,7 @@ import {dirname, join} from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json"), "utf8"));
+const weaponStrikes = JSON.parse(readFileSync(join(ROOT, "test/fixtures/weapon-strikes.json"), "utf8"));
 const effects = JSON.parse(readFileSync(join(ROOT, "test/fixtures/effects.json"), "utf8"));
 
 test("动作 fixture 数量达到预期规模", () => {
@@ -120,9 +121,18 @@ test("绑武器的动作都带得动武器（strikes 非空）", () => {
     "语料不合成武器就等于让整条武器通路测不到。");
 });
 
+/**
+ * 两份语料合起来看。
+ *
+ * 动作语料里一个动作只带一件武器（`synthWeapon` 按标签推），推得再准也只覆盖 8 件、
+ * 4 种伤害类型——**而且这是对的**：武器的伤害类型不等于动作的伤害类型，
+ * `flamingArrow` 的火来自动作，弓仍是穿刺的。12 种武器伤害类型的覆盖由
+ * `weapon-strikes.json`（92 件武器各一份平打快照）提供，那也正是 ELEMENT_LAYER
+ * 第 3 级回退唯一被行使到的地方：平打不带伤害标签，链子才够得到武器那一层。
+ */
 test("语料行使到多种武器分类与伤害类型，不是单一值", () => {
   const cats = new Set(), dmgs = new Set();
-  for (const a of actions) for (const w of (a.strikes ?? [])) {
+  for (const a of [...actions, ...weaponStrikes]) for (const w of (a.strikes ?? [])) {
     if (w.category) cats.add(w.category);
     if (w.damageType) dmgs.add(w.damageType);
   }

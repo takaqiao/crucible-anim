@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test test/",
     "index": "node tools/index-sfx.mjs && node tools/extract-db.mjs",
+    "weapons": "node tools/dump-weapons.mjs",
     "fixtures": "node tools/dump-fixtures.mjs",
     "index:sfx": "node tools/index-sfx.mjs",
     "index:db": "node tools/extract-db.mjs",
