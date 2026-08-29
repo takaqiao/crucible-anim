@@ -163,12 +163,11 @@ function dropSection(seq, section) {
  * 独立复算——这正是 Sequencer mask() 文档允许的用法："Raw shapes (PIXI.Polygon,
  * PIXI.Circle, PIXI.Rectangle) are masked in scene coordinates"。
  *
- * 锥形用 armory/travel.mjs 的同一套模型：Crucible 的 cone 是"扁三角"（flat cone，非
- * round fan）——射线在 ±angle/2 方向、reach = radius / cos(angle/2)，这样两条边的连线
- * （底边）中点正好落在距锥尖 `radius` 处、半宽 `radius * tan(angle/2)`，与
- * travel.mjs 的 templateEnd()/coneYScale() 用的是同一个换算，两处必须保持一致。
- * 角度钳制到 [1°,179°] 防止 tan(90°) 炸出 Infinity（与 coneYScale 同一防线，这里独立
- * 复算一次，因为 mask 用的是原始 region.angle，不是贴图拉伸后的 scale.y）。
+ * 锥形**分两种底**，判据取自 core 自己的 `client/data/shapes.mjs`（逐条依据写在下面
+ * 那段函数体注释里）：Crucible 的 60° cone 是"扁三角"（`curvature:"flat"`），与
+ * travel.mjs 的 templateEnd()/coneYScale() 同一个换算，两处必须保持一致；而 fan 的
+ * 210° 是圆扇形（`curvature:"round"`），边就是半径、底是圆弧。从前这里对**所有** cone
+ * 按扁三角建模，钝角上会把远端顶点甩到 114 倍半径之外（施工清单 §0.13）。
  */
 function regionMaskShape(region) {
   if (!region) return null;
@@ -177,7 +176,56 @@ function regionMaskShape(region) {
   }
   if (region.type === "cone" && Number.isFinite(region.radius)) {
     const rot = (region.rotation ?? 0) * DEG;
-    const angle = Math.min(Math.max(Number(region.angle ?? 60) || 60, 1), 179);
+    const rawAngle = Number(region.angle ?? 60) || 60;
+    /*
+     * 【圆底锥】core 的锥形有两种底，**不是同一个形状**，判据在
+     * `client/data/shapes.mjs:1310-1350` 的 `_getRays()` 与 `:1382-1406` 的
+     * `_createClipperPolyTree()`：
+     *
+     *   · `curvature === "flat"`（Crucible 的 60° cone）：两条边射线长
+     *     `radius / cos(halfAngle)`，底是一条直线 —— 与下面那段扁三角逐字同式，
+     *     也与 armory/travel.mjs 的 templateEnd()/coneYScale() 同一套换算。
+     *   · 其余（fan 的 210° 走 `"round"`）：`grid.getCone(origin, radius, rotation, angle)`
+     *     的**圆扇形**（common/grid/base.mjs:596-631），文档明写「the first point of the
+     *     polygon is the origin」，两条边就是半径本身、底是一段圆弧。
+     *
+     * 为什么必须分开：扁三角那条式子在钝角上会炸。fan 的 210° 半角 105°，
+     * `cos(105°)` 为负；就算像原来那样把角度钳到 179°，`reach = radius/cos(89.5°)`
+     * = **114.59 × radius**，两个远端顶点会被甩到 114 倍半径之外——遮罩不是「差一点」，
+     * 是整个画面被一块巨大的三角形罩住。原注释没写错，只是 round 分支当时不存在，
+     * 于是所有 cone 都被按 flat 处理（施工清单 §0.13 的第一条硬前置）。
+     *
+     * 判据优先取 `region.curvature`（snapshot 从模板文档带下来的原值）；缺字段时按
+     * core 自己的默认换算回退 —— `action-use-dialog.mjs:528` 写死
+     * `curvature: angle <= 90 ? "flat" : "round"`。
+     */
+    const round = (region.curvature ?? (rawAngle <= 90 ? "flat" : "round")) !== "flat";
+    if (round) {
+      const angle = Math.min(Math.max(rawAngle, 1), 360);
+      const half = (angle / 2) * DEG;
+      const r = region.radius;
+      /*
+       * 圆弧离散化：core 的 gridless getCircle 承诺「偏差小于 0.25 像素」，这里用同一个
+       * 口径反算步长——弦高（sagitta）`r·(1−cos(step/2)) ≤ 0.25` ⟹
+       * `step ≤ 2·acos(1 − 0.25/r)`。半径越大分段越多，遮罩边缘在任何缩放下都读不出折线。
+       * 上下限只是防御：r 极小时 acos 的入参会掉出 [-1,1]，r 极大时段数不必无限涨。
+       */
+      const maxStep = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - 0.25 / Math.max(r, 1))));
+      const n = Math.min(720, Math.max(8, Math.ceil((angle * DEG) / Math.max(maxStep, 1e-3))));
+      // 第一个点必须是锥尖：core 的 getCone 是这么排的，且 test/play-contract.test.mjs
+      // 的「遮罩多边形的第一个顶点必须是模板起点」按这条断言。
+      const pts = [region.x, region.y];
+      for (let i = 0; i <= n; i++) {
+        const a = rot - half + (angle * DEG) * (i / n);
+        pts.push(region.x + Math.cos(a) * r, region.y + Math.sin(a) * r);
+      }
+      return new PIXI.Polygon(pts);
+    }
+    // 扁底锥（Crucible 的 60° cone）：射线在 ±angle/2 方向、reach = radius / cos(angle/2)，
+    // 底边中点正好落在距锥尖 radius 处、半宽 radius·tan(angle/2)。
+    // 角度钳到 [1°,89°]：flat 的定义域上界就是 90°（shapes.mjs:1456 的 maxAngle），
+    // 越界的只会是「curvature 字段说 flat 但角度不是 flat」的脏数据，钳住防 tan(90°) 炸。
+    const angle = Math.min(Math.max(rawAngle, 1), 89);
     const half = (angle / 2) * DEG;
     const reach = region.radius / Math.cos(half);
     const a1 = rot - half, a2 = rot + half;
@@ -319,6 +367,11 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
       // （22852-22896）承担。
       else e.atLocation(target);
 
+      // 这条 cue 最终是不是走了「锚点交给模板」的那条 rotateTowards？下面的模板下发块
+      // 要用它来判断这条 cue 会不会真的消费 template（见该处注释）。声明在 if (cue.aim)
+      // 之外：块级作用域里的 const 出了块就够不着，而模板下发块在 stretchTo 之后。
+      let rotatesWithTemplate = false;
+
       if (cue.aim) {
         const towards = resolveRef({ref: "point", ...cue.aim.towards}) ?? cue.aim.towards;
         const atPoint = pointOf(target);
@@ -346,10 +399,42 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
         //     作者都想起这件事。
         const rotates = !cue.stretchTo && !!atPoint && !!aimPoint && !samePoint(aimPoint, atPoint);
         if (rotates) {
+          /*
+           * 【模板锚点】`{template: true}` 把锚点的决定权交回给素材自己。
+           *
+           * `_setAnchors()`（sequencer.js:17021-17045）按 `rotateTowards.template` 分成
+           * 两套完全不同的语义：
+           *
+           *   · **不带 template**（历史行为）：17022 的第一个 if 不进，贴图 anchor 留在
+           *     (0.5,0.5)；17026 的 `rotateTowards && !template && !data.anchor` 把
+           *     spriteContainer.pivot 摁到 (-w/2, 0)，语义是「特效从锚点朝目标方向长出去」。
+           *     所以我们必须补一个显式 anchor(0.5,0.5) 走 17029 的 interpolate 分支
+           *     （见下面那段），把 pivot 拉回中心——**整张贴图以自身中心绕锚点转**。
+           *     近战挥砍在这套语义下，贴图中心压在锚点上，握把与刀锋落在哪全凭贴图内部
+           *     构图，armory 只能靠 spriteOffset 去猜，而那个猜测是「格数 × 目标宽」，
+           *     与素材的真实握把位置无关（施工清单 §0.3：刀锋恒落目标中心 +62.5px）。
+           *
+           *   · **带 template**（这里新开的分支）：17023-17025 把贴图 anchor.x 设成
+           *     `template.startPoint / 贴图宽`——素材作者标定的**握把点**。于是「锚点」
+           *     的含义从「贴图中心」变成「握把」，`atLocation(施法者)` 就真的是「刀握在
+           *     施法者手里」，刀锋落在哪由 `endPoint` 与缩放决定，armory 里一个 0.375
+           *     都不用写死（那类数字随素材包升级会变，本仓库禁止写进兵库）。
+           *     且 17026 的 `!rotateTowards.template` 为假 → 走 else 的 interpolate 分支，
+           *     pivot 由 `data.anchor?.x ?? 0.5` 决定 —— **默认就是中心**，所以这条分支
+           *     必须**不调** e.anchor()：调了会把 y 一起摁死，且再也读不到 startPoint。
+           *
+           * gate 写成 `!!cue.template` 而不是无条件 true：模板是随素材包发布的元数据，
+           * 拿不到（素材没标定、或走的是裸文件路径）时必须退回历史语义，否则 17024 的
+           * `this.template.startPoint / textureWidth` 会在 this.template 为 null 时算出
+           * undefined，anchor.x 落回 0 = 贴图左缘贴在锚点上，比历史行为更错。
+           */
+          const templateAnchored = !!cue.template;
           e.rotateTowards(towards, {
             rotationOffset: cue.aim.rotationOffset ?? 0,
-            offset: cue.aim.offset
+            offset: cue.aim.offset,
+            template: templateAnchored
           });
+          rotatesWithTemplate = templateAnchored;
           // 转向必配 anchor：_setAnchors()（sequencer.js:17026-17028）在
           // `rotateTowards && !rotateTowards.template && !data.anchor` 时把
           // spriteContainer.pivot 设成 (-w/2, 0)，语义变成"特效从锚点朝目标方向长
@@ -360,7 +445,13 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
           // 注意 anchor.x 给 0 会落回同一个 -w/2，不能用它来"抵消"。
           // 将来若真有一条 cue 要"从锚点长出去"那种语义，请显式加一个 opt-in 字段，
           // 不要靠删掉这一行。
-          e.anchor({x: 0.5, y: 0.5});
+          //
+          // ⚠ **模板锚点分支下这一行必须不调**（判据同上，17026 的 `!template` 已为假、
+          // pivot 本来就走 interpolate 的中心分支，不需要这一行来纠正）；调了反而有害：
+          // `data.anchor` 一旦存在，17023 那句算出来的 `startPoint/贴图宽` 只影响
+          // sprite.anchor，而 pivot 会按我们写死的 0.5 再偏一次，握把点被推回中心，
+          // 整条「锚点=握把」的语义当场作废。
+          if (!templateAnchored) e.anchor({x: 0.5, y: 0.5});
           if (cue.aim.missed) {
             warn(`cue 同时要求 rotateTowards 与 missed（规则 "${cue.rule}"，槽 "${cue.slot}"）：`
               + "rotateTowards 会给这条特效装上 data.target，_getOffset（sequencer.js:15360）"
@@ -379,6 +470,79 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
         if (cue.aim.missed) e.missed(true);
       }
       if (cue.stretchTo) e.stretchTo(cue.stretchTo);
+
+      /*
+       * 【素材两端留白的补偿】施工清单 §0.4 / §0.5。
+       *
+       * ## 病灶
+       *
+       * jb2a/eskie/blfx 的射线类贴图两端都留着一段透明画布（起手的蓄力段、落点的溅射
+       * 段），素材包因此随文件发布一组 `[gridSize, startPoint, endPoint]`，Sequencer 用
+       * 它把「贴图宽」折算成「有效射线宽」。本模组的 cue 下发的是**裸文件路径**（选材已
+       * 在出手端摇定，见 CUE_DEFAULTS.template 注释），于是 Sequencer 走
+       * `SequencerFileBase.make()`（sequencer.js:16221）造出一个没有 template 字段的
+       * `SequencerFilePlain`，16224 的 `if (file.template)` 不进，`this._template` 停在
+       * `data.template`（我们不给就是 null）。后果在 `_getDistanceScaling`
+       * （16966-16984）：`startPoint/endPoint` 双双 `?? 0`，`widthWithPadding` 等于贴图
+       * 全宽，**整张画布（含两端留白）被压进 source→target 的射线长度**——光束首尾各缩
+       * 一截。实测 265 条 stretchTo cue 里 248 条中招，最轻 6.25%·d（eskie ray），
+       * 最重 30%·d（jb2a line200B：4 格距离下尾端差 120px = 1.2 格）。
+       *
+       * ## 为什么 gate 在「这条 cue 真的会消费 template」上
+       *
+       * 模板只在两个地方被读：`_getDistanceScaling`（仅 stretchTo 分支，17081）与
+       * `_setAnchors` 的 `rotateTowards.template` 分支（17022-17025）。落到既不拉伸、
+       * 也不走模板锚点的 cue 上，它唯一还能碰到的是 `gridSizeDifference`
+       * （15113-15115 `canvas.grid.size / (template?.gridSize ?? 100)`），那条路进
+       * `_transformNoStretchSprite` 的最后一档 `sprite.scale.set(base * gridSizeDifference)`
+       * ——**gridSize=200 的素材体积当场腰斩**。下面的 `.template()` 因此**不传 gridSize**
+       * （双保险：即使 gate 判错，缺了 gridSize 也会 `?? 100` 落回默认、体积不变），
+       * 同时仍然显式 gate，绝不把一个不消费它的字段递下去。
+       *
+       * ## ⚠ startPoint 的 0 会变成 NaN 锚点，整条特效不可见
+       *
+       * `EffectSection.template()`（24079-24108）三条赋值全是 `if (x) this._template[k] = x`
+       * （24105-24107）——**0 被静默丢掉**。丢掉之后 `_setAnchors:17024` 的
+       * `this.template.startPoint / textureWidth` **没有 `?? 0` 兜底**（同一个字段在
+       * 16971 处有），算出 `undefined / 1000 = NaN` → `sprite.anchor.set(NaN, 0.5)`。
+       * PIXI 7.4.3 的 `ObservablePoint.set(x2 = 0, y2 = x2)` 只兜 undefined、不兜 NaN，
+       * NaN 锚点进 `Sprite.calculateVertices` 后 8 个 vertexData 全 NaN，**整条特效
+       * 一个像素都不画**。今天不传 template 反而是安全的（this.template 为 null →
+       * `void 0` → 默认参数兜成 0），**打了补丁才炸**——本仓库语料里 172 条 cue
+       * （generic.travel 168 + strike.shape.area 4，占待修 248 条的 69.4%）的 startPoint
+       * 正是 0。
+       *
+       * 两道防线：
+       *   1. `Math.max(startPoint, 1)` —— 1px 的假前导留白。代价上界是本仓最小的
+       *      widthWithPadding（line200B 的 1000−1−300 = 699）→ **0.143%·d**，eskie ray
+       *      是 0.067%·d，像素上读不出来；
+       *   2. **两端全 0 的模板整条跳过** —— cone [100,0,0] / gust_of_wind 这类素材本来
+       *      就没有留白要补，给它们调 `.template()` 只有风险没有收益（还会撞上 24098
+       *      那条「三项全空就 throw」）。
+       *
+       * ## 副作用（不是 bug，别退回不补偿）
+       *
+       * `scaleY` 默认跟着 `spriteScale` 走（16976），补偿后光束在变长的同时也变粗
+       * `W/(W−s−e)`（ranged ×1.333、line200B ×1.431）。这正是 jb2a 自己的渲染结果。
+       * 若实机觉得太粗，加 `scale: {x:1, y:(W−s−e)/W}` 只修长度，**不要**退回不补偿。
+       */
+      if (cue.template && (cue.stretchTo || rotatesWithTemplate)) {
+        // 兵库两种写法都收：数组三元组（assets.mjs 从素材索引原样带下来的形态）
+        // 与具名对象（手写覆盖时更可读）。geom-guard §1.6 的判据也是这两种。
+        const t = Array.isArray(cue.template)
+          ? {gridSize: cue.template[0], startPoint: cue.template[1], endPoint: cue.template[2]}
+          : cue.template;
+        const sp = Number(t?.startPoint);
+        const ep = Number(t?.endPoint);
+        if (!Number.isFinite(sp) || !Number.isFinite(ep)) {
+          // 非数字会让 Sequencer 的 is_real_number 校验当场 throw（24086-24102），
+          // 那条 throw 是构造期同步抛，会被下面的 catch 连整条 cue 一起丢掉。
+          warn(`cue 的 template 不是可用的数值三元组（规则 "${cue.rule}"，槽 "${cue.slot}"）：`
+            + `${JSON.stringify(cue.template)}；这条特效不做留白补偿，首尾会各缩一截`);
+        } else if (sp > 0 || ep > 0) {
+          e.template({startPoint: Math.max(sp, 1), endPoint: ep});
+        }
+      }
 
       // scaleToObject 是主流缩放方式；只有显式给了 scale 才用绝对缩放（锥形撑张角等）。
       //
@@ -399,8 +563,56 @@ export async function playPlan(plan, {volume = 1, shake = true, resolveRef}) {
       // stretchTo 的尺寸改由距离缩放决定：长度恒等于 source→target 射线长
       //（scaleX = distance/widthWithPadding 再乘回 scale.x，16974/17014，scale.x 正好
       // 抵消），scale.y 只改粗细——锥形的 coneYScale 正是靠这条。
+      /*
+       * 【尺寸的三条互斥路】优先级 scale > sizePx > scaleToObject，理由各自独立：
+       *
+       *  · `cue.scale`（绝对缩放）是作者显式接管，最高。
+       *
+       *  · `cue.sizePx`（像素尺寸）走 `EffectSection.size()`（sequencer.js:23971，
+       *    文档原话 "this size is set before any scaling"）。它是**区域类 cue 唯一
+       *    正确的尺寸来源**：模板的大小写在 `plan.region` 上（半径/长度/宽度都是像素），
+       *    与画布上任何一个 token 都没有关系，只有直接给像素才能跟着模板走。
+       *    必须排在 scaleToObject 前面：`_transformNoStretchSprite`（17104-17148）是
+       *    `if (scaleToObject) {…} else if (size) {…}`，两者同时下发时 size 是死代码。
+       *
+       *  · `scaleToObject`（按锚定对象的宽度缩放）留给「贴在某个 token 上」的 cue。
+       *
+       * ## ⚠ 裸点上禁用 scaleToObject（施工清单 §0.12）
+       *
+       * `_applyScaleToObject`（17171）读 `getSourceData()`（15245）→
+       * `get_object_dimensions(positionSource)`（18122）。传进去的若是一个裸 `{x,y}`
+       * （`cue.at.ref === "point"`，dispatch.mjs 原样返回坐标对象），18166-18167 那串
+       * `??` 会一路落空到最后一档 **`canvas.grid.size`**——于是「按对象缩放」在裸点上
+       * **恒等于「一格」**，与作者写的 objectScale 之外的一切都无关。
+       *
+       * 【2026-08-29 订正】这一段原先写的是「Crucible 用微网格 grid.size = 20px，
+       * groundResidue 画成 26×26px，比 blast 区域直径 240px **小 9.2 倍**」——**单位串了一层**。
+       * 20 是 `canvas.dimensions.distancePixels`（px/ft），不是 `canvas.grid.size`。
+       * Crucible 的 `system.json` 是 `grid.distance = 5 ft`，所以 `grid.size = 5 × 20 = 100px`
+       * （语料里 `origin.w / origin.width = 100/1` 也是这个数）。真实倍率是
+       * **1.3×100 = 130px vs 240px，偏小 1.85 倍**，不是 9.2 倍。
+       *
+       * 结构性结论不受影响：这条路在裸点上**根本表达不了尺寸**，所以在播放层硬性拦掉——
+       * 裸点 cue 要么给 sizePx、要么给 scale，不许再走 scaleToObject。
+       *
+       * ⚠ 但**拦掉之后不能不管**：丢弃缩放会落到「素材原生像素」那一档
+       * （17143 的 `scale.set(baseScale × gridSizeDifference)`），groundResidue 的素材是
+       * 600×600 ⇒ `600·G/100 = 6G`，而 blast 区域直径 2.4G ⇒ **偏大 2.5 倍**。
+       * 那比原来的「恒等于一格」错得更远（1.85 倍 → 2.5 倍，而且方向更刺眼：
+       * belowTokens、3 秒、每个 AoE 法术必出）。所以每一条被拦下的 cue 都必须在兵库侧
+       * 补上 sizePx —— `aftermath.groundResidue` 已按 region 半径补好，见那条规则的注释。
+       * 下面那条 warn 就是用来把「拦了但没补」当场喊出来的。
+       */
+      const bareAnchor = cue.at?.ref === "point";
       if (cue.scale) e.scale(cue.scale);
-      else if (!cue.stretchTo) e.scaleToObject(cue.objectScale);
+      else if (cue.sizePx) e.size({width: cue.sizePx.width, height: cue.sizePx.height});
+      else if (!cue.stretchTo && !bareAnchor) e.scaleToObject(cue.objectScale);
+      else if (!cue.stretchTo && bareAnchor && cue.objectScale !== 1) {
+        warn(`cue 锚在裸点上却声明了 objectScale=${cue.objectScale}（规则 "${cue.rule}"，`
+          + `槽 "${cue.slot}"）：scaleToObject 在裸 {x,y} 上恒等于"一格"`
+          + `（sequencer.js:18166 的 ?? canvas.grid.size 兜底），表达不了区域大小。`
+          + "这条缩放被丢弃，请改用 sizePx（按 region 半径/长度算像素）或 scale。");
+      }
 
       if (cue.offset && (cue.offset.x || cue.offset.y)) {
         e.spriteOffset({x: cue.offset.x, y: cue.offset.y}, {gridUnits: cue.gridUnits});

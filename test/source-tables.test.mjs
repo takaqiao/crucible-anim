@@ -2,8 +2,9 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 
-import {GESTURE_TARGET, STATUSES, TARGET_REGION, RUNE_DAMAGE,
-        RUNE_RESOURCE} from "../tools/dump-fixtures.mjs";
+import {GESTURE_TARGET, STATUSES, TARGET_REGION, RUNE_DAMAGE, RUNE_RESOURCE,
+        TARGET_TYPE_REGION, GESTURE_TARGET_SIZE, GESTURE_RANGE, INFLECTIONS,
+        TAG_PROPAGATE, SKILL_TAGS, MOVEMENT_TAGS} from "../tools/dump-fixtures.mjs";
 import {ELEMENT_LAYER, DAMAGE_ALIAS} from "../scripts/armory/impact.mjs";
 import {STATUS_GROUP, UNREACHABLE_STATUSES} from "../scripts/armory/persist.mjs";
 import {GENERATED_EFFECT_STATUS} from "../scripts/trigger/snapshot.mjs";
@@ -136,6 +137,9 @@ test("TARGET_REGION 的 region.angle 与 action.mjs 源码的 TARGET_TYPES.*.reg
   assert.equal(real.cone, 60, `源码 TARGET_TYPES.cone.region.angle 应为 60，实为 ${real.cone}`);
   assert.equal(real.fan, 210, `源码 TARGET_TYPES.fan.region.angle 应为 210，实为 ${real.fan}`);
 
+  // TARGET_REGION 现在按**手势**建表（aura/sense 与 ray/surge 各自的尺寸差得远，
+  // 老的按 target.type 建表把它们合并了）。cone / fan 两个手势的目标类型恰好同名，
+  // 张角这一项因此仍能逐项对上。
   const mismatches = realKeys.filter(k => TARGET_REGION[k]?.angle !== real[k]);
   assert.deepEqual(mismatches, [],
     `TARGET_REGION 与源码张角不一致：${mismatches.map(k =>
@@ -533,4 +537,462 @@ test("E2 依据：token HUD 的状态 toggle 走 Actor#toggleStatusEffect 的 cr
     `${FOUNDRY_DATA}/systems/crucible/module/applications/sheets/base-actor-sheet.mjs`, "utf8"));
   assert.ok(sheet.includes("await effect.update({disabled: !effect.disabled});"),
     "Crucible 角色卡的效果 toggle 变了——updateActiveEffect 分支的来源需要重新核");
+});
+
+
+/* ============================================================================
+ *  批次 A · 语料表锁定
+ *
+ *  这一段全部服务同一个目的：`tools/dump-fixtures.mjs` 里那几张「照着 Crucible 源码
+ *  抄下来」的表，必须由解析器逐条对账，而不是靠肉眼与记忆。上游改一个字段，这里先红，
+ *  而不是等某条兜底率悄悄变差、或某条 ∀ 断言退化成空真。
+ * ========================================================================== */
+
+/** 从某个源码文件里取出 `export const NAME = ...({ ... })` 的顶层 `key: {...}` 块。 */
+function parseExportedObject(file, name) {
+  const src = readFileSync(file, "utf8");
+  const declStart = src.indexOf(`export const ${name}`);
+  assert.ok(declStart > -1, `${file} 里找不到 export const ${name}`);
+  const openBrace = src.indexOf("{", src.indexOf("=", declStart));
+  return parseTopLevelBlocks(src.slice(openBrace, matchBrace(src, openBrace) + 1));
+}
+
+/** `["a", "b"]` 的内容串 → 字符串数组。 */
+const strList = s => s.split(",").map(x => x.trim().replace(/^["'`]|["'`]$/g, "")).filter(Boolean);
+
+/* -------------------------------------------- */
+/*  一、标签传播                                  */
+/* -------------------------------------------- */
+
+/**
+ * 解析 `const/action.mjs` 里**所有**带 `propagate` 的 TAG，两个来源分开返回：
+ *
+ *   · `statics` —— `export const TAGS = {...}` 字面量里直接写的（12 条）；
+ *   · `dynamic` —— 文件末尾那几个 `for (const ... of Object.keys|values(<枚举>)) {
+ *                   TAGS[id] = {... propagate: [...] ...} }` 循环（技能 / 移动两条）。
+ *
+ * **动态那一半是这条守卫存在的全部理由**：只解析字面量的话，19 个技能/移动标签一个都
+ * 看不见，而它们正是 `usage.isAttack` 与 `usage.skillId` 的来源——离线语料漏了它们，
+ * 同一个动作离线走兜底、上机走攻击通路（施工清单 §4.3 称之为「本仓库最贵的失败模式」）。
+ */
+function parseTagPropagate() {
+  const src = readFileSync(ACTION_SRC, "utf8");
+  const statics = {};
+  for (const [tag, block] of Object.entries(parseExportedObject(ACTION_SRC, "TAGS"))) {
+    const m = /propagate\s*:\s*\[([^\]]*)\]/.exec(block);
+    if (m) statics[tag] = strList(m[1]);
+  }
+
+  const dynamic = {};
+  const loopRe = /for\s*\(\s*const\s+(?:\{[^}]*\}|\w+)\s+of\s+Object\.(?:keys|values)\(\s*(\w+)\s*\)\s*\)\s*\{/g;
+  for (let m; (m = loopRe.exec(src));) {
+    const bodyStart = m.index + m[0].length - 1;      // m[0] 以 "{" 收尾
+    const body = src.slice(bodyStart, matchBrace(src, bodyStart) + 1);
+    if (!/TAGS\s*\[/.test(body)) continue;            // 不是往 TAGS 里塞东西的循环
+    const p = /propagate\s*:\s*\[([^\]]*)\]/.exec(body);
+    if (p) dynamic[m[1]] = strList(p[1]);
+  }
+  return {statics, dynamic};
+}
+
+/** action.mjs 顶部的 `import {X} from "./y.mjs"` → 取出枚举 X 的顶层键。 */
+function importedEnumKeys(name) {
+  const src = readFileSync(ACTION_SRC, "utf8");
+  const re = /import\s*\{([^}]*)\}\s*from\s*"\.\/([\w.-]+)"/g;
+  for (let m; (m = re.exec(src));) {
+    if (!strList(m[1]).includes(name)) continue;
+    return Object.keys(parseExportedObject(
+      `${FOUNDRY_DATA}/systems/crucible/module/const/${m[2]}`, name));
+  }
+  throw new Error(`action.mjs 没有从任何同级模块 import ${name}`);
+}
+
+test("TAG_PROPAGATE 与 const/action.mjs 所有带 propagate 的 TAG 逐条一致", () => {
+  const {statics, dynamic} = parseTagPropagate();
+
+  // 样本量下限，贴着实测：静态 12 条（行号 299/317/346/366/409/805/828/852/866/885/904/931）
+  assert.equal(Object.keys(statics).length, 12,
+    `源码 TAGS 字面量里带 propagate 的应为 12 条，实得 ${Object.keys(statics).length} 条：`
+    + `${Object.keys(statics).join("/")}。解析器失效时这里会归零，比对反而全绿——先修解析。`);
+
+  // 两条动态循环一条都不许丢：少一条就是 19 个标签整批消失
+  assert.deepEqual(Object.keys(dynamic).sort(), ["MOVEMENT_ACTIONS", "SKILLS"],
+    `源码里往 TAGS 塞 propagate 的循环应恰好两条（技能 / 移动），实得 ${JSON.stringify(dynamic)}`);
+  assert.deepEqual(dynamic.SKILLS, ["skill"]);
+  assert.deepEqual(dynamic.MOVEMENT_ACTIONS, ["movement"]);
+
+  const skillKeys = importedEnumKeys("SKILLS");
+  const moveKeys = importedEnumKeys("MOVEMENT_ACTIONS");
+  assert.equal(skillKeys.length, 12,
+    `const/skills.mjs 的 SKILLS 应有 12 个技能，实得 ${skillKeys.length}`);
+  assert.equal(moveKeys.length, 9,
+    `const/actor.mjs 的 MOVEMENT_ACTIONS 应有 7 个，实得 ${moveKeys.length}`);
+  assert.deepEqual([...SKILL_TAGS].sort(), [...skillKeys].sort(),
+    "SKILL_TAGS 与源码 SKILLS 键集合不一致");
+  assert.deepEqual([...MOVEMENT_TAGS].sort(), [...moveKeys].sort(),
+    "MOVEMENT_TAGS 与源码 MOVEMENT_ACTIONS 键集合不一致");
+
+  const expanded = {...statics};
+  for (const k of skillKeys) expanded[k] = dynamic.SKILLS;
+  for (const k of moveKeys) expanded[k] = dynamic.MOVEMENT_ACTIONS;
+  assert.equal(Object.keys(expanded).length, 33,
+    `源码一共 33 条传播（12 静态 + 12 技能 + 9 移动），实得 ${Object.keys(expanded).length}`);
+
+  // 逐条：多一条是死代码，少一条就是一整族动作在离线侧走错通路
+  const tableKeys = Object.keys(TAG_PROPAGATE);
+  assert.deepEqual([...tableKeys].sort(), Object.keys(expanded).sort(),
+    "TAG_PROPAGATE 的键集合与源码不一致——"
+    + `表里多出：${tableKeys.filter(k => !(k in expanded)).join("/") || "(无)"}；`
+    + `源码里有而表里缺：${Object.keys(expanded).filter(k => !(k in TAG_PROPAGATE)).join("/") || "(无)"}`);
+  const badTargets = tableKeys.filter(k =>
+    JSON.stringify(TAG_PROPAGATE[k]) !== JSON.stringify(expanded[k]));
+  assert.deepEqual(badTargets, [],
+    `传播目标不一致：${badTargets.map(k =>
+      `${k}(表=${JSON.stringify(TAG_PROPAGATE[k])} 源=${JSON.stringify(expanded[k])})`).join(", ")}`);
+});
+
+/* -------------------------------------------- */
+/*  二、模板区域：五个字段 + 按手势复算            */
+/* -------------------------------------------- */
+
+/**
+ * 解析 `TARGET_TYPES.<key>.region` 的五个决定性字段（外加 size / directionDelta /
+ * ephemeral 三个附带字段），`region: null` 的目标类型返回 null。
+ * 五个字段各自决定模板的哪一部分，见 tools/dump-fixtures.mjs 的 TARGET_TYPE_REGION 注释。
+ */
+function parseTargetTypeRegions() {
+  const out = {};
+  for (const [key, block] of Object.entries(parseExportedObject(ACTION_SRC, "TARGET_TYPES"))) {
+    const idx = block.search(/\bregion\s*:\s*\{/);
+    if (idx === -1) { out[key] = null; continue; }          // region: null
+    const b = block.indexOf("{", idx);
+    const region = block.slice(b, matchBrace(block, b) + 1);
+    const num = k => {
+      const m = new RegExp(`\\b${k}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`).exec(region);
+      return m ? Number(m[1]) : undefined;
+    };
+    const str = k => new RegExp(`\\b${k}\\s*:\\s*"([^"]+)"`).exec(region)?.[1];
+    const bool = k => {
+      const m = new RegExp(`\\b${k}\\s*:\\s*(true|false)`).exec(region);
+      return m ? m[1] === "true" : undefined;
+    };
+    out[key] = {
+      shape: str("shape"), anchor: str("anchor"), addSize: bool("addSize"),
+      width: num("width"), angle: num("angle"),
+      size: num("size"), directionDelta: num("directionDelta"), ephemeral: bool("ephemeral")
+    };
+  }
+  return out;
+}
+
+/**
+ * 丢掉 undefined 字段并按键名排序，好与手写表（只写源码真有的字段、书写顺序也不同）
+ * 逐字段比。排序是必须的：JSON.stringify 对键顺序敏感，不排就成了「书写顺序守卫」。
+ */
+const dropUndef = o => (o === null ? null
+  : Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1))));
+
+test("TARGET_TYPE_REGION 与 TARGET_TYPES.*.region 逐字段一致（shape/anchor/addSize/width/angle）", () => {
+  const real = parseTargetTypeRegions();
+  const realKeys = Object.keys(real);
+  assert.equal(realKeys.length, 12,
+    `源码 TARGET_TYPES 应有 12 个目标类型，实得 ${realKeys.length}：${realKeys.join("/")}`);
+  // 样本量下限：8 个带 region、4 个 region:null。全 null 时逐字段比对会退化成空真。
+  const withRegion = realKeys.filter(k => real[k]);
+  assert.equal(withRegion.length, 8,
+    "带 region 的目标类型应为 8 个（cone/fan/pulse/aura/blast/ray/summon/wall），"
+    + `实得 ${withRegion.length}：${withRegion.join("/")}`);
+
+  assert.deepEqual([...Object.keys(TARGET_TYPE_REGION)].sort(), [...realKeys].sort(),
+    "TARGET_TYPE_REGION 的键集合与源码 TARGET_TYPES 不一致");
+
+  const bad = realKeys.filter(k =>
+    JSON.stringify(dropUndef(real[k])) !== JSON.stringify(dropUndef(TARGET_TYPE_REGION[k])));
+  assert.deepEqual(bad, [],
+    bad.map(k => `${k}: 表=${JSON.stringify(dropUndef(TARGET_TYPE_REGION[k]))} `
+      + `源=${JSON.stringify(dropUndef(real[k]))}`).join("\n"));
+
+  // 五个字段各自都得真的出现过，否则「逐字段一致」可以靠两边一起是 undefined 蒙混过关
+  const present = f => realKeys.filter(k => real[k]?.[f] !== undefined).length;
+  assert.equal(present("shape"), 8, "8 个 region 都必须有 shape");
+  assert.equal(present("anchor"), 8, "8 个 region 都必须有 anchor");
+  assert.equal(present("addSize"), 5, "写了 addSize 的应为 cone/fan/pulse/aura/ray 五个");
+  assert.equal(present("width"), 2, "写了 width 的应为 ray/wall 两个");
+  assert.equal(present("angle"), 2, "写了 angle 的应为 cone/fan 两个");
+});
+
+/**
+ * 解析 `GESTURES.<gesture>` 的 `target.type` / `target.size` / `range.maximum`。
+ * 这三样正是 `#getRegionData`（dice/action-use-dialog.mjs:491-600）算模板尺寸的全部输入。
+ */
+function parseGestureRegionInputs() {
+  const out = {};
+  for (const [g, block] of Object.entries(parseExportedObject(SPELLCRAFT, "GESTURES"))) {
+    const sub = key => {
+      const i = block.search(new RegExp(`\\b${key}\\s*:\\s*\\{`));
+      if (i === -1) return null;
+      const b = block.indexOf("{", i);
+      return block.slice(b, matchBrace(block, b) + 1);
+    };
+    const t = sub("target"), r = sub("range");
+    const n = (blk, k) => {
+      if (!blk) return null;
+      const m = new RegExp(`\\b${k}\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`).exec(blk);
+      return m ? Number(m[1]) : null;
+    };
+    out[g] = {
+      type: t ? /type\s*:\s*"(\w+)"/.exec(t)?.[1] ?? null : null,
+      size: n(t, "size"),
+      rangeMax: n(r, "maximum")
+    };
+  }
+  return out;
+}
+
+test("GESTURE_TARGET_SIZE / GESTURE_RANGE 与 spellcraft.mjs 的 GESTURES 逐项一致", () => {
+  const real = parseGestureRegionInputs();
+  const keys = Object.keys(real);
+  assert.equal(keys.length, 17, `源码应解析出 17 个姿态，实得 ${keys.length}`);
+
+  const realSizes = Object.fromEntries(
+    keys.filter(g => real[g].size !== null).map(g => [g, real[g].size]));
+  const realRanges = Object.fromEntries(
+    keys.filter(g => real[g].rangeMax !== null).map(g => [g, real[g].rangeMax]));
+  // 下限贴着实测：6 个手势写了 target.size、12 个写了 range.maximum。
+  // 解析器坏掉时两个表都会变成 {}，而 deepEqual({}, {}) 恰恰是本批要消灭的空真。
+  assert.equal(Object.keys(realSizes).length, 6,
+    "写了 target.size 的姿态应为 6 个（aura/blast/pulse/ray/sense/surge），实得 "
+    + `${Object.keys(realSizes).join("/")}`);
+  assert.equal(Object.keys(realRanges).length, 12,
+    `写了 range.maximum 的姿态应为 12 个，实得 ${Object.keys(realRanges).join("/")}`);
+
+  assert.deepEqual(GESTURE_TARGET_SIZE, realSizes, "GESTURE_TARGET_SIZE 与源码 target.size 不一致");
+  assert.deepEqual(GESTURE_RANGE, realRanges, "GESTURE_RANGE 与源码 range.maximum 不一致");
+
+  // 老表把 aura/sense 与 ray/surge 各自合并成一条，正是因为它们的 target.type 相同——
+  // 这几句把「共用类型但尺寸不同」这件事本身钉住，防止有人再合回去。
+  assert.equal(real.aura.type, real.sense.type, "aura 与 sense 的目标类型本来就相同");
+  assert.notEqual(realSizes.aura, realSizes.sense, "aura(20尺) 与 sense(30尺) 的 size 必须不同");
+  assert.equal(real.ray.type, real.surge.type, "ray 与 surge 的目标类型本来就相同");
+  assert.notEqual(realSizes.ray, realSizes.surge, "ray(宽1尺) 与 surge(宽10尺) 的 size 必须不同");
+});
+
+/**
+ * 独立复算：不 import `regionForGesture`，而是**从解析出来的源码字段**重新算一遍模板，
+ * 再与 `TARGET_REGION` 逐字段对。公式逐行对着 `#getRegionData`：
+ *
+ *   d          = canvas.dimensions.distancePixels = 100px/格 ÷ 5尺/格 = 20 px/尺
+ *   baseRange  = target.size ? target.size : range.maximum        (:496-497)
+ *   addRange   = region.addSize ? actor.size / 2 : 0              (:498)
+ *   circle     radius = (baseRange + addRange) * d                (:510-518)
+ *   cone       radius 同上；angle = region.angle ?? 60；
+ *              curvature = angle <= 90 ? "flat" : "round"         (:519-529)
+ *   emanation  radius 同上（aura 的 addSize 是 false）             (:530-545)
+ *   line       length = (range.maximum + addRange) * d；
+ *              width  = (region.width ?? 1) * d                   (:546-555)
+ *   rectangle  summon 后处理：width = height = (target.size ?? region.size) * d，
+ *              anchorX = anchorY = 0                              (:575-580)
+ *   ray 后处理 target.size 覆盖 shape.width                        (:581-583)
+ *
+ * 合成施法者是中体型（origin.width = 1 格 = 5 尺），addRange 因此是 2.5 尺 = 50px。
+ */
+const REGION_D = 100 / 5;                  // GRID / grid.distance
+const REGION_ORIGIN = {x: 500, y: 500};    // tools/dump-fixtures.mjs 的 ORIGIN
+const REGION_CASTER_FT = 5;                // 中体型：width 1 格 × 5 尺
+const REGION_VERTEX_FT = 20;               // 远目标在 +400px = 20 尺处
+
+test("TARGET_REGION 每个手势的形状由 TARGET_TYPES 的五个字段与 GESTURES 的尺寸唯一决定", () => {
+  const gestures = parseGestureRegionInputs();
+  const regions = parseTargetTypeRegions();
+
+  const withRegion = Object.keys(gestures).filter(g => regions[gestures[g].type]);
+  // 下限贴着实测：17 个手势里 10 个有落地区域、7 个没有。全空时下面的循环一条都不跑。
+  assert.equal(withRegion.length, 10,
+    "应有 10 个手势带落地区域（aura/blast/cone/conjure/create/fan/pulse/ray/sense/surge），"
+    + `实得 ${withRegion.length}：${withRegion.join("/")}`);
+
+  const bad = [];
+  const eq = (g, field, got, want) => {
+    if (got !== want) bad.push(`${g}.${field}: 表=${got} 源算=${want}`);
+  };
+
+  for (const [g, gs] of Object.entries(gestures)) {
+    const cfg = regions[gs.type];
+    const got = TARGET_REGION[g];
+    if (!cfg) {
+      assert.equal(got, null,
+        `${g} 的目标类型 ${gs.type} 没有 region，TARGET_REGION 却给了 ${JSON.stringify(got)}`);
+      continue;
+    }
+    assert.ok(got, `${g}（目标类型 ${gs.type}）应有模板区域，TARGET_REGION 却是 ${got}`);
+
+    const maxRange = gs.rangeMax ?? 0;
+    const base = gs.size ?? maxRange;
+    const add = cfg.addSize ? REGION_CASTER_FT / 2 : 0;
+
+    eq(g, "type", got.type, cfg.shape);                                    // ← shape
+    // ← anchor："self" 锚在施法者中心，"vertex" 由玩家在射程内点一个点（这里放在远目标处）
+    const anchored = cfg.anchor === "self"
+      ? REGION_ORIGIN
+      : {x: REGION_ORIGIN.x + (Math.min(maxRange, REGION_VERTEX_FT) * REGION_D), y: REGION_ORIGIN.y};
+    eq(g, "x", got.x, anchored.x);
+    eq(g, "y", got.y, anchored.y);
+
+    if (["circle", "cone", "emanation"].includes(cfg.shape)) {
+      eq(g, "radius", got.radius, (base + add) * REGION_D);                // ← addSize
+    }
+    if (cfg.shape === "cone") {
+      eq(g, "angle", got.angle, cfg.angle ?? 60);                          // ← angle
+      eq(g, "curvature", got.curvature, (cfg.angle ?? 60) <= 90 ? "flat" : "round");
+    }
+    if (cfg.shape === "line") {
+      eq(g, "length", got.length, (maxRange + add) * REGION_D);
+      // ← width：region.width 是缺省值，ray 类型的 target.size 会盖掉它（#getRegionData:581-583）
+      eq(g, "width", got.width,
+        ((gs.type === "ray" && gs.size) ? gs.size : (cfg.width ?? 1)) * REGION_D);
+    }
+    if (gs.type === "summon") {
+      const size = gs.size ?? cfg.size ?? 1;
+      eq(g, "width", got.width, size * REGION_D);
+      eq(g, "height", got.height, size * REGION_D);
+      eq(g, "anchorX", got.anchorX, 0);
+      eq(g, "anchorY", got.anchorY, 0);
+    }
+    if (cfg.shape === "emanation") eq(g, "base.type", got.base?.type, "token");
+  }
+  assert.deepEqual(bad, [], `TARGET_REGION 与按源码复算的结果不一致：\n${bad.join("\n")}`);
+
+  // addSize 这一项必须真的改变了数字，否则上面那句 eq(radius) 在 add===0 时是空转
+  const addSized = Object.keys(gestures).filter(g => regions[gestures[g].type]?.addSize);
+  assert.ok(addSized.length >= 4,
+    `带 addSize 的手势应至少 4 个（cone/fan/pulse/ray/surge），实得 ${addSized.join("/")}`);
+  for (const g of addSized) {
+    const gs = gestures[g];
+    const base = (gs.size ?? gs.rangeMax ?? 0) * REGION_D;
+    const measured = TARGET_REGION[g].radius ?? TARGET_REGION[g].length;
+    assert.notEqual(measured, base,
+      `${g} 声明了 addSize，模板尺寸却等于不加体型的 ${base}px——addSize 没被算进去`);
+  }
+});
+
+test("TARGET_REGION 修掉了老表的五处不符（aura 形状 / ray-surge 宽度 / summon 缺项 / 半径 / curvature）", () => {
+  // 这五条是施工清单 §4.3 逐条点名的旧缺陷，各锁一句，防止哪天有人「简化」回去。
+  assert.equal(TARGET_REGION.aura.type, "emanation",
+    "aura 的 region.shape 是 emanation（跟着 token 外形长），不是 circle");
+  assert.equal(TARGET_REGION.sense.type, "emanation");
+  assert.notEqual(TARGET_REGION.aura.radius, TARGET_REGION.sense.radius,
+    "aura(20尺) 与 sense(30尺) 共用一条 region 是老表的错");
+
+  assert.equal(TARGET_REGION.ray.type, "line");
+  assert.equal(TARGET_REGION.surge.type, "line");
+  assert.ok(TARGET_REGION.surge.width >= TARGET_REGION.ray.width * 5,
+    `surge 宽 10 尺、ray 宽 1 尺，差一个数量级；`
+    + `实得 ${TARGET_REGION.surge.width} vs ${TARGET_REGION.ray.width}`);
+
+  for (const g of ["conjure", "create"]) {
+    assert.equal(TARGET_REGION[g]?.type, "rectangle", `${g}（summon）在老表里整个缺项`);
+  }
+
+  assert.equal(TARGET_REGION.cone.curvature, "flat", "60° ≤ 90°，平底锥");
+  assert.equal(TARGET_REGION.fan.curvature, "round",
+    "210° > 90°，圆底扇——老表整个没有 curvature 字段");
+
+  // 没有落地区域的 7 个手势必须是 null，不能凭空造一个模板出来
+  const nulls = Object.keys(TARGET_REGION).filter(g => TARGET_REGION[g] === null);
+  assert.deepEqual(nulls.sort(),
+    ["arrow", "aspect", "influence", "step", "strike", "touch", "ward"],
+    "没有 region 的手势集合变了");
+});
+
+/* -------------------------------------------- */
+/*  三、屈折                                      */
+/* -------------------------------------------- */
+
+test("INFLECTIONS 与 spellcraft.mjs 的 INFLECTIONS 键集合一致", () => {
+  const real = Object.keys(parseExportedObject(SPELLCRAFT, "INFLECTIONS"));
+  assert.equal(real.length, 10, `源码应解析出 10 个屈折，实得 ${real.length}：${real.join("/")}`);
+  assert.deepEqual([...INFLECTIONS].sort(), [...real].sort(),
+    "INFLECTIONS 与源码不一致——法术语料的屈折轴会跟着错");
+});
+
+/* -------------------------------------------- */
+/*  四、边界语料：六条盲区轴的样本量下限            */
+/* -------------------------------------------- */
+
+/**
+ * `test/fixtures/edge-cases.json` 是批次 A 为六条结构性盲区（施工清单 §4.3）额外生成的
+ * 合成语料。**它现在还没有消费者**——批次 B/C 的守卫（§1.8 落点复算、impact-harmless、
+ * 治疗不喷血溅、大体型几何）才会用到它。
+ *
+ * 没有消费者的语料最容易烂掉：生成器改坏了、某条轴悄悄发空，等到批次 B 写守卫时
+ * 得到的是一片空绿。所以这里先把**每条轴的样本量下限**钉住，数字一律贴着实测
+ * （仓库惯例见 test/fallback-ratchet.test.mjs 的「基线必须贴着实测值，不许留放水余量」）。
+ *
+ * 计数一律**从数据里数**、不读生成器写的标记：标记可以说谎，数出来的不会。
+ */
+const EDGE = JSON.parse(readFileSync(
+  new URL("./fixtures/edge-cases.json", import.meta.url), "utf8"));
+
+test("边界语料六条轴：每条轴的样本量都贴着实测下限", () => {
+  const targets = EDGE.flatMap(s => s.targets);
+  assert.equal(EDGE.length, 100, `edge-cases.json 应有 100 条样本，实得 ${EDGE.length}`);
+  assert.equal(new Set(EDGE.map(s => s.id)).size, EDGE.length, "边界语料的 id 有重复");
+  assert.equal(targets.length, 178, `边界语料的目标总数应为 178，实得 ${targets.length}`);
+
+  // 轴 1：8 个罗盘方向。数的是「施法者→目标」的方位角去重后有几个。
+  const bearings = new Set(targets.map(t =>
+    Math.round(Math.atan2(t.y - REGION_ORIGIN.y, t.x - REGION_ORIGIN.x) * 180 / Math.PI)));
+  assert.equal(bearings.size, 8,
+    `边界语料应覆盖 8 个罗盘方向，实得 ${bearings.size} 个：`
+    + `${[...bearings].sort((a, b) => a - b).join("/")}`);
+
+  // 轴 2：8 档结果全覆盖，且非 HIT 的目标不少于实测的 32 个
+  const results = new Set(targets.map(t => t.results[0].result));
+  assert.deepEqual([...results].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7],
+    `8 档攻击结果（MISS…HIT）必须全被覆盖，实得 ${[...results].join("/")}`);
+  const nonHit = targets.filter(t => t.results[0].result !== 7).length;
+  assert.equal(nonHit, 32, `非 HIT 目标应为 32 个，实得 ${nonHit}`);
+
+  // 轴 3：暴击
+  const crits = targets.filter(t => t.results[0].critical).length;
+  assert.equal(crits, 8, `暴击目标应为 8 个，实得 ${crits}`);
+
+  // 轴 4：治疗。healed > 0 的目标必须同时 damage === null（结算只会落一边）
+  const healed = targets.filter(t => t.healed > 0);
+  assert.equal(healed.length, 56, `被治疗的目标应为 56 个，实得 ${healed.length}`);
+  assert.deepEqual(healed.filter(t => t.damage).map(t => t.tokenId), [],
+    "同一个目标不能既 healed > 0 又带 damage");
+
+  // 轴 5：大体型施法者。sizeScale/offsetFor 的分支判据是 origin.width > 1
+  const big = EDGE.filter(s => s.origin.width > 1);
+  assert.deepEqual([...new Set(big.map(s => s.origin.width))].sort(), [2, 3],
+    `大体型施法者体型应覆盖 2 与 3，实得 ${[...new Set(big.map(s => s.origin.width))]}`);
+  assert.equal(big.length, 6, "大体型样本应为 6 条（2 种体型 × 近战/远程/锥形）");
+
+  // 轴 6：屈折。10 个全覆盖，一个不许少
+  const infl = EDGE.map(s => s.spell?.inflection).filter(Boolean);
+  assert.deepEqual([...new Set(infl)].sort(), [...INFLECTIONS].sort(),
+    `10 个屈折必须各有一条样本，实得 ${[...new Set(infl)].join("/")}`);
+
+  // 轴 7：strike 手势带武器（法术里唯一 cost.weapon 的手势）
+  const strikeGesture = EDGE.filter(s => s.spell?.gesture === "strike" && s.strikes.length > 0);
+  assert.equal(strikeGesture.length, 12,
+    `12 个符文的 strike 手势各应有一条带武器的样本，实得 ${strikeGesture.length}`);
+  assert.ok(strikeGesture.every(s => s.strikes[0].identifier),
+    "strike 手势的样本必须带一件**真实存在**的武器（identifier 非空），"
+    + "否则按 identifier 分支的规则测不到");
+});
+
+test("边界语料不替换主语料：actions.json 与 edge-cases.json 的 id 不重叠", () => {
+  const mainIds = JSON.parse(readFileSync(
+    new URL("./fixtures/actions.json", import.meta.url), "utf8")).map(s => s.id);
+  // 434 是条数不是去重 id 数：主语料按「id + tags + target + range + cost」的内容签名去重，
+  // 同 id 不同内容的动作会各留一条（实测去重后 432 个 id）。
+  assert.equal(mainIds.length, 434, `主语料应为 434 条，实得 ${mainIds.length}——边界语料掺进去了？`);
+  const main = new Set(mainIds);
+  const overlap = EDGE.map(s => s.id).filter(id => main.has(id));
+  assert.deepEqual(overlap, [],
+    "边界语料只许**额外**生成。掺进主语料会把兜底棘轮的三个基线整体抬高，"
+    + "那三个数是 V2 的进度表（见 test/fallback-ratchet.test.mjs 的文件头）。");
 });

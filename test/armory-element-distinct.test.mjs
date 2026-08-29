@@ -11,14 +11,20 @@
  *
  * 所以这里分三层判定：
  *   1. 结构层：file + filter.data.hue 的组合不许重复（题面给的判据）。物理三系
- *      bludgeoning/piercing/slashing 是**有意**共用血迹的，不写成豁免、而是写成正向
- *      断言「三者必须完全相同」——豁免只是不拦，正向断言连「谁把血迹改成三条不同素材」
- *      也一起拦住。
+ *      bludgeoning/piercing/slashing 从前**有意**共用一条血迹，这里写的是正向断言
+ *      「三者必须完全相同」；批次 D1 按施工清单 §0.15 把它翻案了，现在的正向断言反了
+ *      过来——**三者必须解析到三条不同素材**。方向变了，「正向钉死而不是豁免」这条
+ *      写法没变：豁免只是不拦，正向断言连「谁把它们又合并回一条」也一起拦住。
  *   2. 选材层：PALETTE 表与 ELEMENT_LAYER 的实际解析逐条对齐，且每条都能无降级解析。
  *      表一旦陈旧就红，下面一层依赖的 family/colour/lab 才不会是纸面数字。
  *   3. 感知层：同一个模板家族内部，颜色分支不许复用；且残留主色的 CIEDE2000 不得低于
- *      MIN_DELTA_E。跨家族不做色差判定——形状本身已经把它们分开了（物理三系的血溅、
- *      void 的 jb2a.impact.012 暗环，与 eskie 的爆环不是一回事）。
+ *      MIN_DELTA_E。跨家族不做色差判定——形状本身已经把它们分开了（void 的
+ *      jb2a.impact.012 暗环与 eskie 的爆环不是一回事）。
+ *      **物理三系是这一层里唯一一组按形状判的**：三支同模板、同为 red（物理伤害共用血色
+ *      语义是设计），残留主色 ΔE00 只有 4.0/5.3/9.0，颜色阈值对它们必然不成立。施工清单
+ *      拍板 #11 的原话是「必须显式登记『物理三系靠形状而非颜色区分』并为这三键改 shape
+ *      判据，不能默认继承也不能默认豁免」——落地成下面的 SHAPE_JUDGED + SHAPE_MEASURED：
+ *      跳过颜色判定的同时，用两条独立的形状量测顶上，两侧都不留空。
  *
  * lab 这些数字全部来自 tools/element-residual-colour.mjs 对真实 webm 的逐帧解码
  * （libvpx-vp9 解出 alpha 平面，与 tools/contact-sheet.sh 同法），改素材时用那个脚本
@@ -40,7 +46,10 @@ const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8
 const actions = JSON.parse(readFileSync(join(ROOT, "test/fixtures/actions.json"), "utf8"));
 const base = actions.find(a => a.tags.includes("strike") && a.targets.length);
 
-/** 物理三系：设计上共用同一条血迹。 */
+/**
+ * 物理三系：批次 D1 之前共用同一条血迹（jb2a.liquid.splash.red），现在三支各有各的
+ * eskie.damage.*.01.red，靠**形状**而不是颜色区分。见 SHAPE_MEASURED。
+ */
 const PHYSICAL = Object.freeze(["bludgeoning", "piercing", "slashing"]);
 /** 其余九种：各自必须有独立视觉。 */
 const ELEMENTAL = Object.freeze(["fire", "cold", "electricity", "acid", "poison",
@@ -56,18 +65,21 @@ const ALL = Object.freeze([...PHYSICAL, ...ELEMENTAL]);
  *                parent 各不相同（eskie.damage.acid.01 / …poison.01 / …），但它们播的是
  *                同一段动画，只有残留段和色相不同——这正是撞车的成因。
  * lab            残留段 alpha 加权主色的 CIELAB。取样窗口就是这一层实际播出的那一段：
- *                eskie.damage 取 f7-f14（startTime 裁掉 f0-f6 之后剩下的），
- *                jb2a.liquid.splash 与 jb2a.impact.012 取全片（它们不裁）。
+ *                eskie.damage 取 f7-f14（startTime 裁掉 f0-f6 之后剩下的，D1 之后物理
+ *                三系也在其内），jb2a.impact.012 取全片（它不裁）。
  *                只统计 alpha>=64 且 chroma>=20 的像素（把模板自带的那帧纯白爆闪与亮核
  *                排除掉，它对所有类型都一样、不携带身份信息）。
  */
 const PALETTE = Object.freeze({
-  bludgeoning: {parent: "jb2a.liquid.splash", colour: "red", template: "jb2a.liquid.splash",
-                lab: [15.6, 32.8, 20.4]},
-  piercing:    {parent: "jb2a.liquid.splash", colour: "red", template: "jb2a.liquid.splash",
-                lab: [15.6, 32.8, 20.4]},
-  slashing:    {parent: "jb2a.liquid.splash", colour: "red", template: "jb2a.liquid.splash",
-                lab: [15.6, 32.8, 20.4]},
+  // 物理三系（D1）：同模板 eskie.damage.01、同色 red，三支的 lab 彼此只差 4.0-9.0 ΔE00
+  // ——它们不靠颜色分，靠形状分，见 SHAPE_JUDGED / SHAPE_MEASURED。lab 照样记：跨组
+  // （物理 vs 九种元素）仍然由颜色判定管着，最紧的一对是 bludgeoning/psychic 的 30.6。
+  bludgeoning: {parent: "eskie.damage.bludgeoning.01", colour: "red", template: "eskie.damage.01",
+                lab: [54.3, 66.1, 29.5]},
+  piercing:    {parent: "eskie.damage.piercing.01", colour: "red", template: "eskie.damage.01",
+                lab: [51.0, 71.5, 40.1]},
+  slashing:    {parent: "eskie.damage.slashing.01", colour: "red", template: "eskie.damage.01",
+                lab: [49.7, 73.2, 49.4]},
   fire:        {parent: "eskie.damage.fire.01", colour: "orange", template: "eskie.damage.01",
                 lab: [76.8, 15.3, 66.7]},
   cold:        {parent: "eskie.damage.cold.01", colour: "blue", template: "eskie.damage.01",
@@ -87,6 +99,66 @@ const PALETTE = Object.freeze({
   void:        {parent: "jb2a.impact.012", colour: "dark_purple", template: "jb2a.impact.012",
                 lab: [35.8, 73.7, -77.8]}
 });
+
+/**
+ * 【按形状判定的那一组】（施工清单 §0.15 / 拍板 #11 / 批次 D1）
+ *
+ * 组内两两之间**跳过颜色判定、改判形状**；组内对组外仍然照常判颜色。现在只有物理三系
+ * 一组，加第二组要走评审（下面有条数锁）。
+ *
+ * 为什么它们必须跳过颜色：三支是 `eskie.damage.{slashing,piercing,bludgeoning}.01.red`
+ * ——同一套模板动作、同一个 red 色轴。同色是**设计**（物理伤害共用血色语义，ASSET-NOTES
+ * 主表 225-227 行逐行写着），不是选材偷懒；代价是残留主色 CIEDE2000 实测只有
+ * 4.0（斩/刺）、5.3（刺/钝）、9.0（斩/钝），拿 MIN_DELTA_E=11.5 去量它们必然全红。
+ * 但**不能就这么豁免掉**：豁免只是不拦，那样「谁把三支换成三条一模一样的素材」也不会红。
+ * 所以这一组换一把尺子量，两条独立的形状量测都要过。
+ */
+const SHAPE_JUDGED = Object.freeze([Object.freeze(["bludgeoning", "piercing", "slashing"])]);
+
+/**
+ * 形状区分度实测（批次 D1 量的，配方写在下面，换素材必须重量）。
+ *
+ * 配方：用 `tools/element-residual-colour.mjs` 的 `decode()` 解出 RGBA 帧（VP9+alpha，
+ * 必须显式指定 libvpx-vp9，默认解码器不出 alpha 平面），取**这一层实际播出的那一段**
+ * f7-f14，然后算两个互相独立的量：
+ *
+ *   iou      逐帧 alpha≥64 掩膜的交并比累加（∑交 / ∑并）。回答「两支的亮处落在不落在
+ *            同一批像素上」。越小越不像。
+ *   radialL1 以画幅中心为极点、按 r/R 分 6 桶的 alpha 质量分布（归一化后逐桶取 |差| 求和）。
+ *            回答「两支的物质堆在不同的半径上没有」。越大越不像。
+ *
+ * 为什么两条一起判（**与**，不是或）：单独任何一条都有已知反例。IoU 对这种稀疏残留天然
+ * 偏乐观（八成画幅是空的，随手两支都能拿到 0.3 上下）；径向分布对同心构图偏乐观
+ * （cold/poison 的 IoU 高达 0.623、肉眼几乎同一团，径向 L1 却有 0.274）。两条都要过，
+ * 才谈得上「靠形状分得开」。
+ *
+ * 实测值（同模板九种元素那 10 对是标尺，一并列出以便对照）：
+ *   物理三系   斩/刺 iou 0.354 L1 0.466 ｜ 斩/钝 iou 0.310 L1 0.322 ｜ 刺/钝 iou 0.382 L1 0.310
+ *   最像的一对 cold/poison    iou 0.623 L1 0.274   ← 两条判据里 IoU 这条拦下它
+ *   次像的一对 fire/cold      iou 0.434 L1 0.226   ← 两条都拦得下
+ *   已记名可分 cold/electricity iou 0.273 L1 0.911
+ * 读图对照（ASSET-NOTES 主表，f8 残留帧）：斩=一道长斜划线；刺=一圈朝外的短箭状尖刺；
+ * 钝=一团四芒星火花绕成螺旋。量出来的数与看图看到的是同一件事。
+ */
+const SHAPE_MEASURED = Object.freeze({
+  "bludgeoning|piercing": Object.freeze({iou: 0.382, radialL1: 0.310}),
+  "bludgeoning|slashing": Object.freeze({iou: 0.310, radialL1: 0.322}),
+  "piercing|slashing":    Object.freeze({iou: 0.354, radialL1: 0.466})
+});
+
+/**
+ * 形状分离阈值。两条都必须过。
+ *
+ * MAX_IOU 0.42：三对实测 0.310/0.354/0.382，余量 0.038-0.110；同模板里最像的两对
+ *   （cold/poison 0.623、fire/cold 0.434）都在这条线之上，也就是说这条线真的拦得住
+ *   「换了个看起来一样的」。
+ * MIN_RADIAL_L1 0.25：三对实测 0.310/0.322/0.466，余量 0.06-0.216；最像的一对
+ *   fire/cold 只有 0.226，在线下。
+ * 两个数都刻意留窄余量——它们和 MIN_DELTA_E 一样是**刻意的脆性**：换素材就得重新量，
+ * 不许凭「一个是划线一个是尖刺，应该分得开」下断言。
+ */
+const SHAPE_MAX_IOU = 0.42;
+const SHAPE_MIN_RADIAL_L1 = 0.25;
 
 /**
  * 同族色分离阈值（CIEDE2000，残留主色）。取 11.5 的理由是三个实测锚点：
@@ -176,29 +248,67 @@ test("12 种伤害类型都拿得到元素层", () => {
   for (const d of ALL) assert.ok(elementCue(d)?.file, `伤害类型 ${d} 无元素层素材`);
 });
 
-test("物理三系共用同一条血迹——是设计，所以正向钉死而不是豁免", () => {
+test("物理三系必须是三条不同素材——D1 把「共用一条血迹」翻案了，反向正向钉死", () => {
+  // 从前这里断言的是「三者完全相同」（共用 jb2a.liquid.splash.red 是设计）。施工清单
+  // §0.15 推翻了那个前提：impact/element 那个 82 的最大桶就是这三键叠出来的，等于
+  // 66/92 件武器的命中层逐字相同，巨剑劈中与匕首刺中一个像素都不差。
+  // 这条断言是本轮 KPI 的钉子：谁把三键改回同一条素材，这里当场红。
   const keys = PHYSICAL.map(d => visualKey(elementCue(d)));
-  assert.equal(new Set(keys).size, 1,
-    `bludgeoning/piercing/slashing 应当共用同一条血迹，实际有 ${new Set(keys).size} 种：\n${keys.join("\n")}`);
+  assert.equal(new Set(keys).size, PHYSICAL.length,
+    `bludgeoning/piercing/slashing 必须各有各的素材，实际只有 ${new Set(keys).size} 种：\n${keys.join("\n")}`);
+  const files = PHYSICAL.map(d => elementCue(d).file);
+  assert.equal(new Set(files).size, PHYSICAL.length,
+    `三键的 file 必须互不相同（判据独立算自文件名，不看 hue）：\n${files.join("\n")}`);
 });
 
-test("其余九种伤害类型的 file+hue 两两不重复", () => {
+test("按形状判定的那一组：两条独立形状量测都要过", () => {
+  const bad = [];
+  for (const group of SHAPE_JUDGED) {
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const [a, b] = [group[i], group[j]].sort();
+        const m = SHAPE_MEASURED[`${a}|${b}`];
+        if (!m) { bad.push(`${a}/${b}：SHAPE_MEASURED 里没有这一对的实测——形状判据是空的`); continue; }
+        if (!(m.iou <= SHAPE_MAX_IOU)) {
+          bad.push(`${a}/${b}：alpha 掩膜 IoU ${m.iou} > ${SHAPE_MAX_IOU}——两支的亮处压在同一批像素上`);
+        }
+        if (!(m.radialL1 >= SHAPE_MIN_RADIAL_L1)) {
+          bad.push(`${a}/${b}：径向质量分布 L1 ${m.radialL1} < ${SHAPE_MIN_RADIAL_L1}`
+                 + `——物质堆在同一批半径上，只是纹理不同`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(bad, [], bad.join("\n"));
+});
+
+test("形状组只能变小，且组内必须真的同模板同色——否则该回去判颜色", () => {
+  // 反向锁，与 SAME_TEMPLATE_ALLOWED 那条同理：形状判据是「颜色这把尺子在这一组上不成立」
+  // 的替代品，一旦某组不再同模板同色，它就该回到颜色判定，而不是长期挂着一条更宽松的尺子。
+  const KNOWN = [["bludgeoning", "piercing", "slashing"]];
+  assert.deepEqual(SHAPE_JUDGED.map(g => [...g].sort()), KNOWN.map(g => [...g].sort()),
+    "形状判定组变了——新增一组要走评审（施工清单拍板 #11 是逐条裁定的，不是通用出口）");
+  for (const group of SHAPE_JUDGED) {
+    for (const d of group) assert.ok(PALETTE[d], `形状组里的 ${d} 不是已知伤害类型`);
+    const tpl = new Set(group.map(d => PALETTE[d].template));
+    const col = new Set(group.map(d => PALETTE[d].colour));
+    assert.equal(tpl.size, 1, `${group.join("/")} 已经不同模板了，颜色判据重新成立，请把这组删掉`);
+    assert.equal(col.size, 1, `${group.join("/")} 已经不同色了，颜色判据重新成立，请把这组删掉`);
+  }
+});
+
+test("12 种伤害类型的 file+hue 两两不重复", () => {
+  // D1 之前这条只能覆盖九种元素（物理三系故意共用一条素材，进来就红），物理与元素之间
+  // 的撞车另写了一条。现在 12 键各有各的素材，两条合成一条，覆盖面反而更大。
   const seen = new Map();
   const dup = [];
-  for (const d of ELEMENTAL) {
+  for (const d of ALL) {
     const k = visualKey(elementCue(d));
     if (seen.has(k)) dup.push(`${seen.get(k)} 与 ${d} 解析到完全相同的视觉：${k}`);
     else seen.set(k, d);
   }
   assert.deepEqual(dup, [], dup.join("\n"));
-  assert.equal(seen.size, ELEMENTAL.length);
-});
-
-test("元素层与物理血迹之间也不许重合", () => {
-  const blood = visualKey(elementCue("bludgeoning"));
-  for (const d of ELEMENTAL) {
-    assert.notEqual(visualKey(elementCue(d)), blood, `${d} 与物理血迹撞车`);
-  }
+  assert.equal(seen.size, ALL.length);
 });
 
 /* -------------------------------------------------- */
@@ -235,12 +345,20 @@ function allowed(a, b) {
   return SAME_TEMPLATE_ALLOWED.some(e => e.pair.includes(a) && e.pair.includes(b));
 }
 
+/** 这一对是不是同属某个「按形状判定」的组——是的话下面两条颜色判据对它们不适用。 */
+function shapeJudged(a, b) {
+  return SHAPE_JUDGED.some(g => g.includes(a) && g.includes(b));
+}
+
 test("同一个模板家族内部，颜色分支不许复用", () => {
-  // 物理三系整组共用一条素材，已由上面的正向断言管住，这里只看九种元素。
+  // D1 之后物理三系与八支元素同属 eskie.damage.01 模板，所以这里从九种扩到 12 种全量：
+  // 物理对元素那 24 对是新增覆盖（三支 red 对上八种色轴，一对都不许撞）。组内那三对走
+  // 形状判据，由上面那条测试管。
   const bad = [];
-  for (let i = 0; i < ELEMENTAL.length; i++) {
-    for (let j = i + 1; j < ELEMENTAL.length; j++) {
-      const a = ELEMENTAL[i], b = ELEMENTAL[j];
+  for (let i = 0; i < ALL.length; i++) {
+    for (let j = i + 1; j < ALL.length; j++) {
+      const a = ALL[i], b = ALL[j];
+      if (shapeJudged(a, b)) continue;
       if (PALETTE[a].template !== PALETTE[b].template) continue;
       if (PALETTE[a].colour !== PALETTE[b].colour) continue;
       if (allowed(a, b)) continue;
@@ -252,10 +370,13 @@ test("同一个模板家族内部，颜色分支不许复用", () => {
 });
 
 test(`同一个模板家族内部，残留主色的 CIEDE2000 不得低于 ${MIN_DELTA_E}`, () => {
+  // 同上扩到 12 种全量。物理三系对九种元素最紧的一对是 bludgeoning/psychic 30.6，
+  // 离阈值很远——跨组仍然由颜色管着，只有组内那三对（4.0/5.3/9.0）改判形状。
   const bad = [];
-  for (let i = 0; i < ELEMENTAL.length; i++) {
-    for (let j = i + 1; j < ELEMENTAL.length; j++) {
-      const a = ELEMENTAL[i], b = ELEMENTAL[j];
+  for (let i = 0; i < ALL.length; i++) {
+    for (let j = i + 1; j < ALL.length; j++) {
+      const a = ALL[i], b = ALL[j];
+      if (shapeJudged(a, b)) continue;
       if (PALETTE[a].template !== PALETTE[b].template) continue;
       const d = ciede2000(PALETTE[a].lab, PALETTE[b].lab);
       if (d < MIN_DELTA_E) {

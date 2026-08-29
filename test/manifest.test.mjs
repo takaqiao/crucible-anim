@@ -58,8 +58,10 @@ test("常量自洽", async () => {
   const C = await import("../scripts/const.mjs");
   // death 是 Task 15b 新增的一次性槽（击杀爆发）：它由 createActiveEffect 驱动、
   // 不挂在动作时间轴上，所以排在 persist 之后。见 armory/death.mjs 的文件头。
+  // persistOff 是批次 E 新增的第七槽（状态摘下那一刻的提示音）：只由 deleteActiveEffect
+  // 驱动，与 death 同构但不让路。见 armory/persist-off.mjs 的文件头。
   assert.deepEqual([...C.SLOTS],
-                   ["cast", "travel", "impact", "aftermath", "persist", "death"]);
+                   ["cast", "travel", "impact", "aftermath", "persist", "death", "persistOff"]);
   assert.deepEqual(C.RESULT, {
     MISS: 0, DODGE: 1, PARRY: 2, BLOCK: 3, ARMOR: 4, RESIST: 5, GLANCE: 6, HIT: 7
   });
@@ -159,4 +161,83 @@ test("面向用户的 ui.notifications 文案一律走 game.i18n，不得硬编�
   }
   assert.ok(sites >= 8, `扫到的 ui.notifications 调用点只有 ${sites} 个，扫描逻辑可能失效了`);
   assert.deepEqual(offenders, [], offenders.join("\n"));
+});
+
+/**
+ * **兵库用到的每个素材命名空间，都必须在 `module.json` 里声明成依赖。**
+ *
+ * ## 它堵的是哪个洞
+ *
+ * 缺包时素材路径 resolve 返回 null，cue **静默消失**——不报错、不降级、不留 warn。
+ * 玩家侧的表现是「这个动作怎么没声音/没画面了」，而离线测试**全绿**（离线后端读的是
+ * 本机索引，本机装着包，所以永远看不出来）。
+ *
+ * 2026-08-30 批次 E 实测到了这个洞的代价：新接进来的 `ggg-sfx` 供着
+ * **311 / 873 条音效 cue（36%）、289 个动作**，而 `relationships.requires` 里没有它，
+ * **618 条测试全绿**。批次 E 的全部卖点都在那 36% 里，没装 ggg 的用户一声都听不到。
+ *
+ * ## 判据
+ *
+ * 从兵库源码里抓出实际引用的命名空间，经 `data/asset-index.json` 的 `modules` 表
+ * 反查模块 id，逐个要求出现在 `requires` 里。**索引是唯一事实来源**，不在这里手写
+ * 「命名空间 → 模块」的对照表——那种表会跟着素材包升级悄悄过期。
+ */
+test("兵库引用的每个素材命名空间都在 module.json 里声明了依赖", () => {
+  const mj = JSON.parse(readFileSync(join(ROOT, "module.json"), "utf8"));
+  const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
+  const declared = new Set(mj.relationships.requires.map(r => r.id));
+
+  /**
+   * 命名空间 → 提供它的模块 id，**从该命名空间底下任意一个真实文件路径反查**
+   * （文件路径形如 `modules/<模块id>/…`，那是事实来源）。
+   *
+   * ⚠ **不能用 `index.modules`**：那张表以**模块 id 为键**，而一个模块可以注册**多个**
+   * 命名空间——`ggg` 同时注册了 `ggg-sfx`（3400 条音效）与 `ggg-vfx`（49 条画面），
+   * 表里只留得下后写入的那个，**`ggg-sfx` 整个丢失**。初版守卫正是因此对
+   * 「兵库 311 条 cue 依赖 ggg 却没声明」完全失明——把 ggg 从 requires 里删掉它照样全绿。
+   */
+  const providerOf = new Map();
+  for (const [nsName, root] of Object.entries(index.tree ?? {})) {
+    let file = null;
+    (function firstFile(n) {
+      if (file) return;
+      if (typeof n === "string") { file = n; return; }
+      if (Array.isArray(n)) { n.forEach(firstFile); return; }
+      if (n && typeof n === "object") {
+        for (const [k, v] of Object.entries(n)) { if (!k.startsWith("_")) firstFile(v); }
+      }
+    })(root);
+    const m = /^modules\/([^/]+)\//.exec(file ?? "");
+    if (m) providerOf.set(nsName, m[1]);
+  }
+
+  /**
+   * `canim` 是本模组**自己**注册的（`scripts/register-sfx.mjs` 把 `data/sfx-index.json`
+   * 塞进 Sequencer），它底下的文件是 `assets/MGS/…` 这种**世界 assets 目录下的裸目录**，
+   * 不是模块——`module.json` 结构上挂不住它。这是既有的分发问题（素材得随世界一起走），
+   * 与本条守卫无关，显式排除并留档。
+   */
+  const NOT_A_MODULE = new Set(["canim"]);
+
+  // ⚠ **必须先剥注释**：本仓库的注释里大量拿 DB 路径举例（`assets.mjs:294` 就引用
+  // "jb2a-extras.magic_signs…" 说明前缀匹配的坑）。不剥的话注释里的举例会被当成真引用
+  // ——初版正是这么误报了 jb2a-extras。剥法与 tools/gen-sound-table.mjs 的 stripComments 同式。
+  const stripComments = s => s
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  const src = walk(join(ROOT, "scripts"))
+    .map(f => stripComments(readFileSync(f, "utf8"))).join("\n");
+  const ns = [...providerOf.keys()].filter(n => !NOT_A_MODULE.has(n));
+  // 三种引号都要认：`armory-assets.test.mjs` 记过一次「三条守卫对反引号路径完全失明」。
+  // 命名空间名里的 `-` / `.` 要转义成字面量，否则 `.` 会变成「任意字符」。
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+  const used = ns.filter(n => new RegExp("[\"'`]" + esc(n) + "\\.").test(src));
+
+  assert.ok(used.length >= 4,
+    `只在兵库里认出 ${used.length} 个命名空间（${used}），正则或源码路径变了，这条守卫已经失明`);
+
+  const missing = used.filter(n => !declared.has(providerOf.get(n)))
+    .map(n => `${n} → 需要声明模块 "${providerOf.get(n)}"`);
+  assert.deepEqual(missing, [],
+    `${missing.length} 个命名空间被兵库引用却没在 module.json 的 requires 里声明。`
+    + "缺包时 cue 会**静默消失**（不报错、不降级），而离线测试因为本机装着包永远发现不了。");
 });

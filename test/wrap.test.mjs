@@ -126,10 +126,16 @@ test("plan.warnings 非空时会经 warn() 冒出来，规则本身的产出不�
  * Critical-1 的端到端闸门：从「Crucible 真会交出来的对象」一路走到计划里的坐标与选材。
  *
  * `strike.melee`（scripts/armory/travel.mjs）同时消费三样几何：
- * `ctx.geom.adjacent(target)` 决定短剑（933ms）还是野太刀（767ms）、
- * `ctx.geom.onLeft(target)` 决定 mirrorY、`aim.towards` 与 `at` 冻结目标中心坐标。
- * tokenGeom 一旦只认 placeable，这三样在 TokenDocument 上会分别退化成
- * 恒贴身、恒不镜像、恒 (0,0)——本用例的三段断言会同时变红。
+ * `ctx.geom.adjacent(target)` 决定短剑还是野太刀、`aim.towards` 冻结**目标**中心坐标、
+ * `at` 与 `scale`（中心距）一起冻结**施法者**中心坐标。tokenGeom 一旦只认 placeable，
+ * 这三样在 TokenDocument 上会分别退化成恒贴身、恒 (0,0)、恒同一个缩放——
+ * 本用例的三段断言会同时变红。
+ *
+ * ⚠ 2026-08-29 批次 B 第 5 步改过口径：`at` 从目标改成**施法者**、`mirrorY` 不再跟
+ * `onLeft`（它们守的是「贴图中心压在目标身上、靠翻转冒充方向」那套错几何，见
+ * 施工清单 §0.2）。「几何真的传下来了」这件事改由 aim.towards（目标侧）与 scale
+ * （两者的中心距）承担——**判据比原来更强**：scale 是连续量，坐标读成 (0,0) 会让它
+ * 从 0.5 跳到 5，而旧的 mirrorY 只是个布尔。
  */
 test("Critical-1：token 是 TokenDocument 时，坐标/贴身/左右一路传到计划里", () => {
   // 只取画面 cue：strike.melee 现在还会发风声与命中音，它们排在画面之前
@@ -138,10 +144,14 @@ test("Critical-1：token 是 TokenDocument 时，坐标/贴身/左右一路传�
   // 紧邻右侧：origin(500,500) 与 target(600,500) 边缘相接
   const near = melee(buildPlanFor(mockAction(), ENV, deps(), {nativeConfig: null}));
   assert.ok(near, "strike.melee 应该匹配");
-  assert.deepEqual([near.at.x, near.at.y], [600, 500],
-    "at 必须冻结 TokenDocument 的真实中心；读成 (0,0) 说明又按 placeable 的 token.center 取了");
-  assert.equal(near.at.uuid, "Scene.s.Token.t1");
-  assert.deepEqual([near.aim.towards.x, near.aim.towards.y], [600, 500]);
+  assert.deepEqual([near.at.x, near.at.y], [500, 500],
+    "at 必须冻结施法者 TokenDocument 的真实中心；读成 (0,0) 说明又按 placeable 的 token.center 取了");
+  assert.equal(near.at.uuid, "Scene.s.Token.t0");
+  assert.deepEqual([near.aim.towards.x, near.aim.towards.y], [600, 500],
+    "瞄准点必须冻结目标 TokenDocument 的真实中心");
+  assert.equal(near.aim.towards.tokenId, "t1");
+  // 中心距 1 格 ÷ 授权网格 200/100 = 0.5。坐标退化成 (0,0) 时这里会变成 5×0.5=2.5 以上。
+  assert.equal(near.scale, 0.5, "尺寸＝中心距，两端坐标任何一侧读错都会立刻偏掉");
   // duration 现在**逐文件**从量测里取（armory/clip-table.mjs），不再是常数 933——
   // 短剑那一支的四个变体可播时长是 800-967ms 不等，而 ctx.pick 按种子随机取一个。
   // 这里只断言「取到了表里的值、且落在这一族的实测区间内」，不钉死某个数字：
@@ -153,22 +163,40 @@ test("Critical-1：token 是 TokenDocument 时，坐标/贴身/左右一路传�
   assert.ok(clip, "短剑素材必须在时序表里");
   assert.equal(near.waitUntilFinished, clip.contactMs - clip.durationMs,
     "交棒点要按这一支素材自己的命中时刻算");
-  assert.equal(near.mirrorY, false);
 
   // 隔 9 格：adjacent 必须为假，否则就是「恒贴身」的老 bug
   const far = melee(buildPlanFor(mockAction({targetCenter: {x: 1500, y: 500}}), ENV, deps(),
     {nativeConfig: null}));
-  assert.deepEqual([far.at.x, far.at.y], [1500, 500]);
-  // 分支判据改成看**素材本身**，不再看时长：两支的时长现在都从量测里逐文件取
-  // （armory/clip-table.mjs），恰好可能相同，用它区分分支已经失效——而「选到了哪一支」
-  // 本来就是这条测试真正要查的东西。
-  assert.match(far.file, /Nodachi/i, "隔格分支必须是野太刀；选到短剑说明 adjacent 恒真");
+  assert.deepEqual([far.aim.towards.x, far.aim.towards.y], [1500, 500]);
+  assert.equal(far.scale, 5, "中心距 10 格 ÷ 授权网格 200/100 —— 尺寸必须跟着距离走");
+  // 判据变迁：时长 → 素材名 → **尺寸**。
+  //
+  // 原来断言 `far.file` 匹配 /Nodachi/：改造前隔格一律换成野太刀，因为它是全族唯一
+  // 1000×800、弧幅够得到隔一格的一支——本质是**拿画幅冒充长度**，代价是施工清单 §0.14
+  // 记的「48 件真能够到的近战武器塌成同一记野太刀下劈」。
+  //
+  // 批次 B 之后长度是几何量（握把锚施法者、刀锋锚目标、`scale` = 中心距），批次 C+D 的
+  // D3 因此让隔格保留武器自己的形制。素材名不再区分两档，**上面那句
+  // `far.scale === 5` 才是「adjacent 没有恒真」的直接证据**，而且比看名字强：
+  // 名字对了距离仍可能算错，尺寸对了距离一定是对的。
+  //
+  // 这里保留一条素材侧的断言，守的是另一件事：别掉进兜底。
+  assert.ok(clipOf(far.file), "隔格所选素材必须在时序表里——查不到就会退回硬编码常数，节拍与画面脱节");
+  assert.notEqual(far.scale, near.scale,
+    "贴身与隔格的尺寸必须不同；相等说明 adjacent 恒真或 scale 退化成了常数");
   assert.match(near.file, /ShortSword/i, "贴身分支必须是短剑");
-  assert.notEqual(far.file, near.file, "贴身与隔格必须选到不同的素材");
+  // 同上：素材**应当**保持一致（武器身份在隔格时不该丢），长度由 scale 表达。
+  assert.equal(far.file, near.file,
+    "同一件武器在贴身与隔格应当是同一支形制——换素材就是又回到「拿画幅冒充长度」，"
+    + "48 件够得到的近战武器会再次塌成同一记野太刀下劈（施工清单 §0.14）");
 
-  // 紧邻左侧：mirrorY 必须翻真（旧实现 onLeft 恒假，挥击永不镜像）
+  // 紧邻左侧：坐标必须真的往左走。旧断言是「mirrorY 必须翻真」——那守的是靠翻转贴图
+  // 冒充方向的错几何；现在方向由 at(施法者) → aim(目标) 这条真旋转表达，判据换成
+  // 「瞄准点落在施法者西侧」，比布尔镜像更直接地钉住方向感知。
   const left = melee(buildPlanFor(mockAction({targetCenter: {x: 400, y: 500}}), ENV, deps(),
     {nativeConfig: null}));
-  assert.equal(left.mirrorY, true, "目标在左侧时必须 mirrorY");
-  assert.deepEqual([left.at.x, left.at.y], [400, 500]);
+  assert.deepEqual([left.aim.towards.x, left.aim.towards.y], [400, 500]);
+  assert.deepEqual([left.at.x, left.at.y], [500, 500], "锚点仍在施法者，不随目标左右跑");
+  assert.ok(left.aim.towards.x < left.at.x, "目标在左侧时，攻击轴必须指向屏幕西侧");
+  assert.ok(near.aim.towards.x > near.at.x, "目标在右侧时，攻击轴必须指向屏幕东侧");
 });

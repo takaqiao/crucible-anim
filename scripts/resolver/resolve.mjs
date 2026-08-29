@@ -6,7 +6,43 @@ const CUE_DEFAULTS = {
   kind: "effect", playIf: "always",
   attachTo: false, bindScale: false, local: true,
   aim: null, stretchTo: null, offset: {x: 0, y: 0}, gridUnits: false,
+  /**
+   * 素材自带的锚点模板 `[gridSize, startPoint, endPoint]`（授权网格 px / 前导留白 px /
+   * 拖尾留白 px），null = 这条 cue 不做留白补偿。
+   *
+   * **为什么它是 cue 级字段、而不是播放层现查**：这三个数是 jb2a/eskie/blfx 各自
+   * **随素材包发布**的元数据（Sequencer 把它读进 `SequencerFile.template`），素材包一升级
+   * 就可能变。播放层现查等于把「这一版素材的留白是多少」这个魔数散进播放代码；而本仓库
+   * 的铁律是升级会变的魔数不许写进兵库、也不许写进播放层——它必须**沿着解析链**从
+   * `assets.mjs` 的 `templateOfEntry(entry)` 一路带下来（resolve → ctx.pick 的
+   * `template: r.template` → 规则 `template: fx.template` → 这里 → play.mjs 的
+   * `.template()`），全程只有搬运、没有取值。这样素材包升级时数值自动跟着变，
+   * 一行代码都不用改。
+   *
+   * 另一半理由是**出手端固化**：本模组的传输模型是「出手端解析成 FXPlan，各客户端
+   * 各自本地播」（DESIGN §5.4）。素材是在出手端摇定的（`ctx.pick`），留白必须跟着同一次
+   * 摇定的那支素材走；播放端现查会拿到「当前这台机器上这条路径的模板」，与 plan 里
+   * 写死的那个文件未必是同一支（尤其是带 `.30ft` 距离档、或一档内有变体池时）。
+   *
+   * 只对带 `stretchTo` 的 cue 有意义，play.mjs 那一侧显式 gate 在 `cue.stretchTo` 上
+   * （原因见该处注释：模板落到非拉伸 cue 上会经 `gridSizeDifference` 改掉体积）。
+   */
+  template: null,
   objectScale: 1, scale: null, mirrorY: false, randomizeMirrorY: false, randomRotation: false,
+  /**
+   * 画面尺寸的**像素**表达 `{width, height}`，null = 不用这条路。
+   *
+   * 区域类 cue（锚在 `plan.region` 的爆心/锥尖/线首上）唯一正确的尺寸来源：模板的大小
+   * 写在 region 上（radius/length/width 都已经是像素），与画布上任何一个 token 无关，
+   * 而 `objectScale` 走的 `scaleToObject` 在裸 `{x,y}` 锚点上**恒等于「一格」**
+   * （sequencer.js:18166 的 `?? canvas.grid.size` 兜底），根本表达不了区域大小。
+   * 完整依据与实测数字见 player/play.mjs 的尺寸三条互斥路那段注释。
+   *
+   * 与 `objectScale` / `scale` 三选一，优先级 scale > sizePx > objectScale——
+   * `_transformNoStretchSprite`（sequencer.js:17104-17148）是
+   * `if (scaleToObject) … else if (size) …`，同时下发时 size 是死代码。
+   */
+  sizePx: null,
   angle: 0,
   filter: null, tint: null, opacity: 1,
   fadeIn: 200, fadeOut: 300, fadeInEase: "easeOutQuad", fadeOutEase: "easeInQuad",

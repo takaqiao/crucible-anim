@@ -1,3 +1,5 @@
+import {SFX, POOL, poolFor, contentEndOf, GAIN_FLOOR, GAIN_CEIL} from "./sound-table.mjs";
+
 /**
  * S5 persist：状态效果的持续特效。由 ActiveEffect 增删驱动，不属于任何动作。
  *
@@ -365,9 +367,173 @@ export const LAYER = Object.freeze({
   below: Object.freeze({belowTokens: true, zIndex: 25})
 });
 
+/**
+ * ## 状态层的**声音**（批次 E · 规格 §4.2）
+ *
+ * 交付前 persist 槽 46 个状态 **0 条声音**——`effects.mjs:396-398` 的注释自陈
+ * 「目前 persist 兵库里没有一条 sound cue」。管线其实早就铺好了：`normalize()` 接受
+ * 数组、`keepTied()` 只丢「persist:true 却没 tieTo」的 cue（非 persist 的 sound 直接
+ * 放行），缺的只是选材与这张表。
+ *
+ * ### 一条 cue 的形状，以及为什么它排在画面 cue **后面**
+ *
+ * 动作四槽的 sound cue 排在画面之前（`armory/sounds.mjs` 的构造顺序），本槽**相反**：
+ * `plan.cues[0]` 在本槽是既有三条守卫（armory-persist / -distinct / -occlusion）的
+ * 取用方式，那三条问的都是「这一组的**画面**长什么样」。把声音插到 [0] 会让它们静默
+ * 改问一条 sound cue 的 file/tint/objectScale——不是变红，是**变成在测别的东西**。
+ * 所以本槽的顺序是「画面在前、声音在后」，而**取用方一律按 `kind` 过滤**（新写的守卫
+ * 都这么写），下标只是历史遗留的兼容点。
+ *
+ * ### 素材：12 组各一池，判据「短」
+ *
+ * 全部取自 `docs/ASSET-NOTES.md` 主表带 `【E·状态】` 前缀的 12 行（逐文件量测在那里）。
+ * 选材判据只有一条硬的：**`min(duration, effectiveMs) < 1500ms`**。状态提示音是「上身了」
+ * 这一下的标点，不是一段音乐；拖过 1.5 秒就会盖住紧随其后的下一个动作，而状态在一场
+ * 战斗里出现的频次远高于任何一条动作规则。
+ *
+ * 五池的有效声长越过这条线，靠 `capMs` 硬切（**不能用引擎 fade**：规格 §3.3 —— Sequencer
+ * 4.2.3 的 `fadeOutAudio` 的 `to:1` 是字面量、不读 `data.volume`，一加就把归一化到
+ * 0.2-0.5 的音量跳回 1.0）。所以切点必须自己落在包络低点上，逐条实测过
+ * （ffmpeg 解单声道 22050Hz、10ms 窗 RMS、50ms 平滑，报切点相对本条峰值的百分比）：
+ *
+ * | 组 | capMs | 切点处剩余包络（逐文件） |
+ * | --- | --- | --- |
+ * | burning | 1400 | 0.0 / 0.0 / 0.1 / 0.3 / 0.9 % |
+ * | bleed | 1400 | 0.4 / 0.5 / 1.2 / 8.4 % |
+ * | fear | 1300 | 6.4 / 6.0 / 9.7 / 5.7 % |
+ * | haste | 1490 | 7.5 / 9.3 / 9.6 % |
+ * | buff | 1400 | 3.4 / 5.0 / 0.2 % |
+ *
+ * haste 的 1490 不是笔误：ASSET-NOTES 量的低点在 1500ms（剩 7.5-8.4%），而判据是**严格
+ * 小于** 1500，所以取它前面 10ms 的那一格（剩 7.5-9.6%，同一段衰减里的同一个低点）。
+ *
+ * 其余七组的整池有效声长天然在线内（最长的 slow 1250ms），不需要切。
+ *
+ * ### 响度：与 GAIN_TARGET 同一个公式，目标 −18 dBFS 峰值
+ *
+ * 批次 C+D 立的规矩是「volume 由量测反算，不许手挑常数」（`sound-table.mjs` 的
+ * `gainFor`）。状态音沿用同一个公式与同一副钳位，只是目标档不同：
+ *
+ *   impact −12（打中）> **status −18** > cast −30 rms（施法床垫）
+ *
+ * 取 −18（与 swing 同档）而不是 impact 的 −12：状态提示音是**次级**信息，它在时间上
+ * 紧跟着造成它的那一击（`PERSIST_LEAD_MS` 让路之后才播），比那一击还响就是喧宾夺主；
+ * 而比施法床垫还轻就等于没播。−18 这个数是 ASSET-NOTES 主表里 12 行逐条按它算过
+ * volume 的（`【E·状态】` 各行「归一化后…」那一句），换档就要重算那 12 行。
+ *
+ * **为什么不写进 `GAIN_TARGET`**：那张表在 `armory/sound-table.mjs` 里，而那个文件由
+ * `tools/gen-sound-table.mjs` **整份生成**（表体连同注释都在生成器的模板字符串里）。
+ * 往里加一档要改生成器，那不是本批次的文件。基准列（`SFX[file][4]` = peakDb）、钳位
+ * （GAIN_FLOOR / GAIN_CEIL）与公式都从那边 import，唯一留在本文件的是目标 dB 这个数。
+ * 记在案：`status` 与下面 persist-off 的 `statusOff` 两档应当并进 `GAIN_TARGET`。
+ */
+export const STATUS_SOUND_DB = -18;
+
+/** 状态提示音的时长硬上限（ms），严格小于。见上面「素材」一段。 */
+export const STATUS_SOUND_MAX_MS = 1500;
+
+/**
+ * 12 组的上身音。`capMs` = 硬切点（null = 整池天然在判据内，不切）。
+ *
+ * ⚠ 三条不是「随便挑了个近义词」的配对，ASSET-NOTES 逐条写了依据，这里只留结论：
+ *  · poison 的路径写着 `water.cast.bubble`，厂商文件名是 **Ailments Poison 001-004**
+ *    ——ggg 归错了档，素材本身就是中毒提示音（是「路径对不上声音」，不是「声音对不上
+ *    用途」；后者是被否掉的 `tasks.stealth.sneak` 灌木沙沙那一类）；
+ *  · fear 的路径写着 `tasks.stealth.spotted`，素材是一记很沉的定音鼓重击，
+ *    「被逮到那一沉」与「恐惧上身」是同一个身体反应；
+ *  · hidden 用「空气被一口抽走」而不是脚步/沙沙——读作「人没了」而不是「有人在走」。
+ *
+ * decay 这一组是本表唯一的**零新依赖**素材（canim/MGS，模组本来就装着）。
+ */
+export const GROUP_SOUND = Object.freeze({
+  burning:  Object.freeze({path: "ggg-sfx.magic.fire.impact.spark.01", capMs: 1400}),
+  freezing: Object.freeze({path: "ggg-sfx.magic.ice.freeze.03", capMs: null}),
+  poison:   Object.freeze({path: "ggg-sfx.magic.water.cast.bubble.01", capMs: null}),
+  decay:    Object.freeze({path: "canim.mgs.basic.combat.necrotic_damage", capMs: null}),
+  bleed:    Object.freeze({path: "ggg-sfx.magic.misc.debuffs.bleed.01", capMs: 1400}),
+  stun:     Object.freeze({path: "ggg-sfx.magic.occult.curse.stun.01", capMs: null}),
+  fear:     Object.freeze({path: "ggg-sfx.tasks.stealth.spotted.02", capMs: 1300}),
+  hidden:   Object.freeze({path: "ggg-sfx.magic.air.cast.suck.01", capMs: null}),
+  haste:    Object.freeze({path: "ggg-sfx.magic.electricity.buff.general.01", capMs: 1490}),
+  slow:     Object.freeze({path: "ggg-sfx.magic.misc.debuffs.grease.01", capMs: null}),
+  buff:     Object.freeze({path: "ggg-sfx.magic.arcane.buff.general.02", capMs: 1400}),
+  debuff:   Object.freeze({path: "ggg-sfx.magic.misc.debuffs.hunger.01", capMs: null})
+});
+
+/**
+ * 一个状态属于哪一个**声音分组**。
+ *
+ * 与 `STATUS_GROUP` 同一张表，只补一个「表外状态」的名字——它是 `trigger/effects.mjs`
+ * 的 AoE 去重键（规格 §4.2 闸 b：一次给 5 个人上毒 = 5 条独立 ActiveEffect = 5 份计划
+ * 各自播，画面上 5 圈光环必须同时出现，声音上就是同一条 ogg 叠 5 层）。
+ * 去重按**组**而不是按 statusId：AoE 常常给一堆人上的是同一个 statusId，但
+ * `poisoned` 与 `diseased` 同时上身同样该只响一声——它们本来就共用同一池素材。
+ *
+ * `dead` 在本表里映射到 `stun` 组，但它永远走不到这里：`status.silent`（pri 900）在
+ * 分组规则之前就返回 null。这条注释留着是因为「照抄 STATUS_GROUP 就会让每次有人倒下
+ * 都播一声眩晕音」正是规格 §4.2 闸 c 点名的坑。
+ */
+export const soundGroupOf = statusId => STATUS_GROUP[statusId] ?? "generic";
+
+/**
+ * 音效池取材：ggg-sfx 全库是**并列的编号子枝**（`….01` / `….02` / …），
+ * `assets.resolve` 对分支只取其下第一个叶子作代表，单条路径恒定拿到同一个文件。
+ * 整池由 `sound-table.mjs` 的 `POOL` 机械展开（叶子路径写不进兵库，`armory-assets`
+ * 那道闸只认登记的那一级或它的父路径）。表里没有的（canim/MGS 那种数组叶子）
+ * `poolFor` 原样返回，退回 `ctx.sound` 的老路。与 `armory/sounds.mjs` 的同名 helper
+ * 同源同写法。
+ */
+function pickSound(ctx, path) {
+  if (!path) return null;
+  return ctx.soundFrom?.(poolFor(path)) ?? ctx.sound(path);
+}
+
+/**
+ * 这条素材在状态档上该用多大 volume。
+ *
+ * `volume = 10^((STATUS_SOUND_DB − peakDb) / 20)`，钳到 `[GAIN_FLOOR, GAIN_CEIL]`——
+ * 与 `sound-table.mjs` 的 `gainFor()` 逐字同一个公式、同一副钳位、同一个基准列
+ * （第 5 列 peakDb：状态音是瞬态，对齐峰值而不是 RMS）。差别只有目标 dB，理由与
+ * 「为什么不写进 GAIN_TARGET」见上面 `STATUS_SOUND_DB` 的注释。
+ *
+ * @returns {number|null} null = SFX 表里没有这个文件（调用方必须 `?? 常数` 兜底，
+ *          不许静默按 1——按 1 会让一条查不到的素材突然比全场响 6-10 dB）
+ */
+export function statusGain(file) {
+  const s = SFX[file];
+  if (!s || typeof s[4] !== "number" || !Number.isFinite(s[4])) return null;
+  const raw = 10 ** ((STATUS_SOUND_DB - s[4]) / 20);
+  return Math.round(Math.min(GAIN_CEIL, Math.max(GAIN_FLOOR, raw)) * 1000) / 1000;
+}
+
+/**
+ * 一条状态音 cue，或 null（选材失败 / 这一组没配声音）。
+ *
+ * `duration` 取 `min(capMs, 有声内容结束时刻)` 两条上限中的小者：
+ *  · `contentEndOf` = `min(totalMs, onsetMs + effectiveMs)`，把尾部静音剪掉——poison
+ *    一族总长 2.0s 而有声内容只到 0.9s，不剪就是 1.1 秒的空转；
+ *  · `capMs` 是上面那张表里逐条实测过包络的硬切点。
+ * 两个都拿不到（素材不在 SFX 表里）时写 null = 播到素材自然结束，与仓库既有口径一致。
+ *
+ * **不写 `startTime`、不走 `soundAt`**：状态音没有「要在第几毫秒响」的对齐要求
+ * （它不跟任何一帧画面对拍，光环是稳态标记），从第 0 毫秒起播即可。这也避开了
+ * `soundAt().playFor` 与 `startTime` 必须成对写进 cue 的那个坑（见 `contentEndOf` 注释）。
+ */
+function statusSoundCue(cfg, ctx) {
+  const fx = cfg && pickSound(ctx, cfg.path);
+  if (!fx?.file) return null;
+  const ends = [cfg.capMs, contentEndOf(fx.file)].filter(v => typeof v === "number" && v > 0);
+  return {
+    kind: "sound", file: fx.file, soundRole: "status",
+    volume: statusGain(fx.file) ?? 0.4,
+    delay: 0, duration: ends.length ? Math.min(...ends) : null
+  };
+}
+
 /** 为一个分组生成规则。12 组结构相同，只有素材与呈现参数不同。 */
 function groupRule(group, pri) {
   const cfg = GROUP_FX[group];
+  const sfx = GROUP_SOUND[group];
   const layer = ABOVE_TOKENS.has(group) ? LAYER.above : LAYER.below;
   return {
     id: `status.${group}`, pri,
@@ -375,7 +541,7 @@ function groupRule(group, pri) {
     build: (e, ctx) => {
       const fx = ctx.pick(cfg.path);
       if (!fx) return null;
-      return {
+      const aura = {
         file: fx.file,
         objectScale: cfg.scale, attachTo: true, bindScale: true,
         belowTokens: layer.belowTokens, zIndex: layer.zIndex,
@@ -383,6 +549,21 @@ function groupRule(group, pri) {
         persist: true, tieTo: e.effectUuid, extraEndDuration: cfg.fadeOut,
         fadeIn: cfg.fadeIn, fadeOut: cfg.fadeOut
       };
+      // 画面在前、声音在后：`plan.cues[0]` 是既有三条画面守卫的取用方式，见
+      // `GROUP_SOUND` 上方那段注释。声音选材失败（素材包没装）时只出光环，不静默失声。
+      //
+      // ⚠ **上身音只在「状态真的落地」那一刻响，不在补齐稳态时响**——但那个判断
+      // **不在这里**。`resolveEffect` 必须对同一份快照恒定产出同一份计划（DESIGN §5.4：
+      // 出手端固化 + 各客户端本地解析必须一致，预览宏与实际播放也必须对得上），在
+      // resolve 侧按「这次是不是转变」分叉会让同一个状态解析出两种计划。剥离点在
+      // **播放侧**：`trigger/effects.mjs` 的 `planForEffect(…, {transition})`。
+      // 少了那一层的后果是确定的、不是概率的：persist cue 恒 `worldPersist:false`
+      // → 一条都不落世界 flag → 每次画布加载 Sequencer 先 `tearDownPersistentEffects()`
+      // → `resyncPersist` 时 `isPlayingPersist` 查的是刚被清空的表、恒为假 → 每个
+      // (状态, token) 走完整 plan：每次 F5 / 切场景 / 中途进场，场上所有状态的上身音
+      // 在同一帧一起响。
+      const sound = statusSoundCue(sfx, ctx);
+      return sound ? [aura, sound] : aura;
     }
   };
 }

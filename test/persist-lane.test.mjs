@@ -28,7 +28,7 @@ import {playPlan} from "../scripts/player/play.mjs";
 import {createSemaphore} from "../scripts/player/semaphore.mjs";
 import {buildPlanFor} from "../scripts/trigger/wrap.mjs";
 import {queueDepth, runAnimation, runPersistAnimation} from "../scripts/trigger/dispatch.mjs";
-import {installEffectTriggers, planForEffect, resetPersistInFlight}
+import {installEffectTriggers, planForEffect, resetPersistInFlight, resetGroupSoundClaims}
   from "../scripts/trigger/effects.mjs";
 import {PERSIST_LEAD_MS} from "../scripts/const.mjs";
 
@@ -115,7 +115,7 @@ test("普通计划：playPlan() 仍然等到序列真正播完才返回", async 
 /*  语料不变式：提前返回那条过近似判据的依据      */
 /* -------------------------------------------- */
 
-test("语料不变式：动作计划 0 条 persist cue，状态计划 100% persist cue", () => {
+test("语料不变式：动作计划 0 条 persist cue，状态计划的画面 cue 100% persist", () => {
   const mk = () => ({assets: createAssets(offlineBackend(index)), armory: ARMORY});
   let actionPersist = 0, actionPlans = 0;
   for (const s of actions) {
@@ -124,18 +124,24 @@ test("语料不变式：动作计划 0 条 persist cue，状态计划 100% persi
     actionPlans++;
     actionPersist += p.cues.filter(c => c.persist === true).length;
   }
-  let effectPlans = 0, allPersist = true;
+  // 【批次 E】状态计划从此是「一条持久光环 + 一条一次性上身音」。判据按 `kind` 拆开：
+  // 画面 cue 必须条条 persist（`playPlan` 的提前返回就是按「这份计划里有没有 persist
+  // cue」分路的），而 sound cue 必须条条**不** persist——一枚绑不上 tiedDocuments 的
+  // 持久音效是清不掉的（keepTied 那一整段注释讲的就是它）。
+  let effectPlans = 0, allPersist = true, allTransient = true;
   for (const e of effects) {
     const p = resolveEffect(e, mk());
     if (!p) continue;
     effectPlans++;
-    if (!p.cues.every(c => c.persist === true)) allPersist = false;
+    if (!p.cues.filter(c => c.kind !== "sound").every(c => c.persist === true)) allPersist = false;
+    if (!p.cues.filter(c => c.kind === "sound").every(c => c.persist === false)) allTransient = false;
   }
   assert.ok(actionPlans > 400, `动作计划只有 ${actionPlans} 条，语料可疑`);
   assert.equal(actionPersist, 0,
     "动作计划里出现了 persist cue：playPlan 的提前返回会让那条动作动画不再被等待");
   assert.ok(effectPlans > 40, `状态计划只有 ${effectPlans} 条，语料可疑`);
-  assert.ok(allPersist, "状态计划里出现了非 persist cue");
+  assert.ok(allPersist, "状态计划的画面层出现了非 persist cue");
+  assert.ok(allTransient, "状态计划的上身音被标成了 persist —— 那是一枚清不掉的音效");
 });
 
 /* -------------------------------------------- */
@@ -271,6 +277,9 @@ function stubFoundry({tokens, effectAlive = () => true}) {
   // 有界超时」为止，而本文件两条用例用的是同一个 (uuid, tokenId)——不清零，第二条会被
   // 第一条留下的登记挡住，于是「状态已被移除时不播」变成一条什么都没验证的假绿。
   resetPersistInFlight();
+  // 同刻去重也是模块级状态（150ms 时间窗），同理要给测试留归零点，否则上一条用例记的账
+  // 会把下一条的上身音静默剥掉。
+  resetGroupSoundClaims();
   const prev = {
     Hooks: globalThis.Hooks, Actor: globalThis.Actor, game: globalThis.game,
     canvas: globalThis.canvas, fromUuidSync: globalThis.fromUuidSync,
@@ -336,5 +345,79 @@ test("存活闸：让路期间状态被移除时放弃播放，不留一枚清�
     await bounded(sleep(PERSIST_LEAD_MS + 150), 3000);
     assert.equal(fake.sequences.length, 0,
       "状态已被移除仍然播出了持久特效——两条清理链路此刻都失效，那枚光永远清不掉");
+  } finally { world.restore(); fake.restore(); }
+});
+
+/* -------------------------------------------- */
+/*  【批次 E · 闸 b】AoE 同刻叠播                  */
+/* -------------------------------------------- */
+
+/**
+ * 规格 §4.2 闸 b。
+ *
+ * 本文件上面那两道幂等闸——`flightKey` 与 `isPlayingPersist(effectUuid, token)`——都是逐
+ * **(效果, token)** 的。而一次 AoE 给 5 个人上毒是 **5 条各自独立的 ActiveEffect**，
+ * 两道闸一条都拦不住，5 份计划各播各的。
+ *
+ * 画面上这是**对的、不能动**：`playPersist` 里那句「AoE 一次让 5 个人上毒，5 圈光环
+ * 必须同时出现」是明写的要求。声音上就是同一条 ogg 在同一帧叠 5 层——相位完全相同的
+ * 5 倍振幅，听起来不是「更响」而是破音。
+ *
+ * 所以去重换一个维度：按**声音本身**（键取 sound cue 的 `rule`，persist 槽的规则 id
+ * 就是 `status.<组名>`）在 150ms 窗口内只放行第一条，且**只吃 sound cue**。
+ *
+ * 两条变异各打红一半：
+ *  · 让 `gateGroupSound` 连画面 cue 一起过滤 → 「5 圈光环」那条红（实测降到 1）；
+ *  · 让 `gateGroupSound` 直接 `return plan` → 「只响一声」那条红（实测涨到 5）。
+ */
+test("闸 b：AoE 同刻给 5 个目标上同一状态 —— 5 圈光环，只响一声", async () => {
+  const fake = installFakeSequencer();
+  const tokens = [1, 2, 3, 4, 5].map(i =>
+    tokenPlaceable({id: `aoe${i}`, center: {x: 300 + i * 100, y: 500}}));
+  const world = stubFoundry({tokens});
+  try {
+    installEffectTriggers(deps());
+    // AoE 的真实形状：每个目标各有**一条自己的** ActiveEffect（各自的 uuid、各自的
+    // actor），不是一条效果挂在五个 token 上。后者是 linked actor 的情形，两道既有闸
+    // 本来就管得住。
+    for (const t of tokens) {
+      const actor = Object.assign(new globalThis.Actor(), {getActiveTokens: () => [t]});
+      world.fire("createActiveEffect", {
+        uuid: `Scene.s.Token.${t.id}.ActiveEffect.poisoned`,
+        statuses: new Set(["poisoned"]), id: "poisoned", parent: actor
+      });
+    }
+    await bounded(sleep(PERSIST_LEAD_MS + 200), 3000);
+    const art = fake.records.filter(r => r.kind === "effect").length;
+    const sfx = fake.records.filter(r => r.kind === "sound").length;
+    assert.equal(art, 5, "5 圈光环必须同时出现——去重只许吃声音，一条画面 cue 都不许动");
+    assert.equal(sfx, 1, `同一条 ogg 叠了 ${sfx} 层（相位相同的 N 倍振幅 = 破音）`);
+  } finally { world.restore(); fake.restore(); }
+});
+
+/**
+ * 反向：去重是**时间窗**不是永久名单。窗口过去之后同一组必须能再响。
+ *
+ * 少了这一条，「只放行第一条」可以被一个「每个组一辈子只响一次」的实现蒙混过去——
+ * 那种实现在实机上的表现是「一场战斗里中毒只在第一次响，之后再也不响」。
+ */
+test("闸 b · 反向：窗口过去之后同一组能再响", async () => {
+  const fake = installFakeSequencer();
+  const t = tokenPlaceable({id: "again", center: {x: 500, y: 500}});
+  const world = stubFoundry({tokens: [t]});
+  try {
+    installEffectTriggers(deps());
+    const fire = n => world.fire("createActiveEffect", {
+      uuid: `Scene.s.Token.again.ActiveEffect.poisoned${n}`,
+      statuses: new Set(["poisoned"]), id: "poisoned", parent: world.actor
+    });
+    fire(1);
+    // 150ms 的窗口过去之后再来一条。记账在**建计划时**（让路期有 500ms，等到播出再记
+    // 就来不及了），所以这里等的是「两次 createActiveEffect 之间」的间隔。
+    await bounded(sleep(200));
+    fire(2);
+    await bounded(sleep(PERSIST_LEAD_MS + 250), 3000);
+    assert.equal(fake.records.filter(r => r.kind === "sound").length, 2,
+      "窗口过去之后同一组仍然不响 —— 去重被写成了永久名单");
   } finally { world.restore(); fake.restore(); }
 });

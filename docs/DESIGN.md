@@ -104,8 +104,15 @@ Feats 30 / Equipment 10 / Class Features 8 / Handlers 6 / Basic Actions 3 / Crea
 
 1. `play.local` 出现在 220 次中的 209 次 —— trove 的动画绝大多数是**各客户端本地播放**，
    不靠 socket 广播。独立印证了本设计的传输方案。
-2. `aim.missed` 出现在 140 次瞄准中的 88 次 —— 未命中处理是常态，且应使用 Sequencer 的
-   `.missed()` 而非自行计算偏移。
+2. `aim.missed` 出现在 140 次瞄准中的 88 次 —— 未命中处理是常态。
+   ⚠ **「应使用 Sequencer 的 `.missed()` 而非自行计算偏移」这半句已于 2026-08-29
+   （批次 B 第 6 步 / 施工清单 §0.7）部分翻案**，理由见 §6.5 的 DODGE / MISS 两行：
+   `calculate_missed_position` 的 `!target` 分支（sequencer.js:17976-17985）用的是
+   `creationTimestamp` 播下的 twister，**逐客户端不同**；而本模组的传输模型是「出手端
+   广播一份 plan、各客户端本地播」（上面第 1 条），随机选材早已在出手端固化。
+   所以攻击动作的命中反馈（`impact.layered`）改用确定性几何；**飞行物落空仍然用
+   `.missed()`**——那一侧偏的是拉伸终点，本来就该有随机感，且不转向、不与 rotateTowards
+   冲突。`generic.impact` 那条兜底同样保留，理由见 §6.5 表下的注。
 3. `style.filterType` 111 次 vs `style.tint` 11 次 —— 换色的主力手段是滤镜而非 tint。
 
 采纳：完整字段 schema 作为 FXPlan 的字段清单、`.missed()`、本地播放。
@@ -453,7 +460,7 @@ Crucible 源码上，上游漂移会先让测试变红。判据用**真值**而�
 | `ctx.runeColor(s)` / `ctx.damageColor(s)` | 查 §6.6 的两张色表 |
 | `ctx.sound(type, key)` | 同 `pick`，走音效命名空间 |
 | `ctx.rng()` | 由 `snapshot.seed` 驱动的确定性随机，保证全场一致与测试可复现 |
-| `ctx.geom` | §8.2 的几何修正（贴身判定、大体型补偿、镜像朝向） |
+| `ctx.geom` | §8.2 的几何修正（现存两项：`adjacent` 贴身判定、`sizeScale` 大体型补偿；`offsetFor` / `onLeft` 已于批次 B 退休） |
 
 ### 6.5 impact 是叠加的，不是穷举的
 
@@ -471,12 +478,29 @@ impact = 结果层（8 选 1，与元素无关） + 元素层（仅命中类叠�
 | `BLOCK` (3) | 盾牌闪光 + 冲击环 | 否 |
 | `PARRY` (2) | 兵器交击火花 | 否 |
 | `RESIST` (5) | 抗性辉光，特效被吞 | 否 |
-| `DODGE` (1) | `.missed()` 偏移落空 + 残影 | 否 |
-| `MISS` (0) | `.missed()` 落空，无 impact | 否 |
+| `DODGE` (1) | 按走位方向 rotate 的残影（`impact.layered` 不再用 `.missed()`，见下） | 否 |
+| `MISS` (0) | 落空提示 + 构图居中补偿（`impact.layered` 不再用 `.missed()`，见下） | 否 |
 | `critical` | 追加一层 + 抖动 + 加重音效 | — |
 
 条件以 `playIf` 声明式字段承载（学自 blfx），动画 / 声音 / 抖动各有各的条件，
 播放层始终构造完整序列，只是各 cue 条件播放。
+
+> ⚠ **DODGE / MISS 两行 2026-08-29 翻案**（批次 B 第 6 步 / 施工清单 §0.7）。原文写的是
+> 「`.missed()` 偏移落空 + 残影」与「`.missed()` 落空，无 impact」，依据是 §3.2 第 2 条
+> 「trove 140 次瞄准里 88 次用 missed」。推翻它的是两条源码事实，不是审美：
+>  1. `_getOffset`（sequencer.js:15360）的判据是 `data.missed && (!source || !data.target)`，
+>     而 DODGE 现在要跟着走位方向转，`rotateTowards` 经 `EffectSection._target`
+>     （23184-23186）把 `data.target` 填上——`missed` 在它身上**恒假、本来就不生效**；
+>  2. 真正生效的那一支（`calculate_missed_position` 的 `!target` 分支，17976-17985）用
+>     `creationTimestamp` 播种，**逐客户端不同**，与本模组「出手端广播一份 plan、各客户端
+>     本地播」的传输模型相抵触。
+>
+> 落地范围**只限 `impact.layered`**（攻击动作的逐结果层，`armory/impact.mjs` 的
+> `RESULT_GEOM`）：DODGE 的位移改成沿攻击轴的 `selfX 0.096`（素材亮带偏左的量测补偿），
+> MISS 的改成 `selfY -0.23`（把烘死在素材里的那行字挪回构图中心），两者都是**确定性几何**。
+> `generic.impact`（非攻击动作的兜底，impact.mjs:867 起）**仍然保留 `.missed()`**——
+> 它不转向、也没有构图补偿要做，且它服务的正是「没有攻击轴可言」的场景，
+> 那正是 `.missed()` 的原设计用法。
 
 ### 6.6 调色
 
@@ -595,7 +619,7 @@ await mod.jb2aPatreonDatabase("modules");
 | 线 / 锥贴合模板用 `stretchTo()` + `mask(region)` | 52 / 38 次 |
 | 地面层特效 `belowTokens()` | 35 次 |
 | 重复播放加 `randomizeMirrorY()` / `randomRotation` | 12 / 33 次 |
-| 未命中用 `.missed()`，不自行计算偏移 | trove 88/140 |
+| 未命中用 `.missed()`——**仅限飞行物与 `generic.impact` 兜底**，`impact.layered` 的命中反馈改确定性几何 | trove 88/140；翻案见 §3.2 第 2 条与 §6.5 表下的注 |
 | 整条序列用 `new Sequence({moduleName: "crucible-anim", softFail: true})` | 素材缺失时静默跳过 |
 | 条件用 `.playIf()`，不在 JS 中分支 | blfx；序列结构保持稳定可预测 |
 
@@ -603,9 +627,18 @@ await mod.jb2aPatreonDatabase("modules");
 
 1. **贴身 vs 隔格**：`snapshot.targets[].adjacent`（源自 `edgesIntersect`）为真时用近距素材，
    否则用远距变体。近战特效长度必须匹配实际距离。
-2. **大体型补偿**：`origin.width > 1` 时 scale ×1.4；offset 按 `width` 折半
-   （非贴身时 `width * OFFSET / 2`，贴身时 `width * OFFSET`）。
-3. **镜像朝向**：`mirrorY(target.onLeft)`，否则武器反手挥。
+2. **大体型补偿**：`sizeScale() = 1 + 0.4·(origin.width - 1)`。
+   ⚠ 2026-08-29（批次 B 第 7 步 / 施工清单 §2.1、§2.2）改过两处：
+   · 原文的「×1.4」是**两档**（`width > 1 ? 1.4 : 1`），2×2 的狗头人与 4×4 的巨龙拿到
+     同一个系数；现在连续，w=2 处仍是 1.4（那一档才是 blfx 真正的实测值）。
+   · 原文那句「offset 按 `width` 折半」对应的 `ctx.geom.offsetFor` **已整个删除**：
+     它乘的是**施法者**宽，而用它的 cue 锚在**目标**身上，3×3 的施法者会把偏移推到
+     150px、整条特效飞到目标身后。命中反馈的位移改由 `armory/impact.mjs` 的
+     `impactOffset()` 按「攻击轴坐标系 × 目标格宽」给出。
+3. **镜像朝向**：⚠ **已翻案**（批次 B 第 5 步 / 施工清单 §0.2）。原文是
+   `mirrorY(target.onLeft)`——用左右翻转冒充「朝向」，只认得左右、认不得上下。
+   真旋转（`rotateTowards` + 模板锚点）落地之后，`mirrorY` 只负责「同一记挥击的正反手
+   随机变化」，`ctx.geom.onLeft` 已随调用点一起退休。
 4. **抖动**：`copySprite(targetToken)` + `loopProperty('sprite', 'position.x',
    {from: -i, to: i, duration: 60, pingPong: true})`，只抖目标 sprite，不抖全屏。
 5. **高程**：`elevation(target.elevation, {absolute: true})`；zIndex 分层 100 / 50 / 0。

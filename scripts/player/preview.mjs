@@ -97,11 +97,16 @@ async function runPreview({slot = null, filter = null, gap = 1200, isolate = tru
 }
 
 /**
- * 由 ActiveEffect 驱动的两个槽：吃 EffectSnapshot、经 runPersistAnimation 播出，
- * 与生产侧的两条通道（trigger/effects.mjs 的 playPersist / playDeath）保持同一条入口。
- * 只有 persist 需要预览后主动收尾（它是持久特效；death 是一次性的，自己会播完）。
+ * 由 ActiveEffect 驱动的三个槽：吃 EffectSnapshot、经 runPersistAnimation 播出，
+ * 与生产侧的三条通道（trigger/effects.mjs 的 playPersist / playDeath / playPersistOff）
+ * 走同一条装配入口。只有 persist 需要预览后主动收尾（它是持久特效；death 与 persistOff
+ * 都是一次性的，自己会播完）。
+ *
+ * ⚠ persistOff 在生产侧**不**让路（摘下音必须与光环消失同帧，见 armory/persist-off.mjs
+ * 的文件头），预览这里仍走 runPersistAnimation：预览是逐条串着放给人听的，多等一个宽限期
+ * 没有代价，而「预览宏只有一条播放入口」这条约束比复刻让路策略更值钱。
  */
-const EFFECT_SLOTS = ["persist", "death"];
+const EFFECT_SLOTS = ["persist", "death", "persistOff"];
 
 /**
  * 预览用的模板几何。数值与 tools/dump-fixtures.mjs 的 `TARGET_REGION` 逐字段相同
@@ -114,9 +119,16 @@ const EFFECT_SLOTS = ["persist", "death"];
  * 这里不能直接 import tools/dump-fixtures.mjs：那是开发期工具，import 了 node:fs 与
  * classic-level，进不了浏览器运行时。
  */
+/*
+ * 【2026-08-29 同步】radius 300→650、length 400→650、ray.width 100→20，并补 `curvature`。
+ * `tools/dump-fixtures.mjs` 的 `TARGET_REGION` 改成**按 gesture 从 Crucible 源码复算**
+ * （此前是每种 target.type 一个手写的规范摆位），这张镜像表必须跟着走——
+ * `test/preview.test.mjs` 的交叉断言就是为此存在的，它这次如实报了警。
+ */
 const PREVIEW_REGION = Object.freeze({
-  cone: Object.freeze({type: "cone", x: 500, y: 500, radius: 300, angle: 60, rotation: 0}),
-  ray: Object.freeze({type: "line", x: 500, y: 500, length: 400, width: 100, rotation: 0})
+  cone: Object.freeze({type: "cone", x: 500, y: 500, radius: 650, angle: 60,
+                       rotation: 0, curvature: "flat"}),
+  ray: Object.freeze({type: "line", x: 500, y: 500, length: 650, width: 20, rotation: 0})
 });
 
 /**
@@ -256,6 +268,24 @@ export const PREVIEW_FIXTURES = Object.freeze({
     tags: ["strike", "melee"], strikeCategory: "talisman2",
     weapon: "flameStaff", damageType: "fire"
   }),
+  // 借武器施法：`strike` 手势（`cost.weapon` / `range.weapon`）。默认快照的 gesture 是 null，
+  // 打不到它。⚠ 它**不需要** strikes——快照里本来就取不到那把武器（见 travel.mjs 里
+  // `spell.gesture.strike` 的说明），规则用的是通用附魔剑 + 符文色。
+  "travel/spell.gesture.strike": Object.freeze({
+    gesture: "strike", targetType: "single", tags: ["spell"]
+  }),
+  // 贴身接触：`touch` 与 `influence` 两个手势共用一条规则（influence 的 range.maximum
+  // 在 crucible/module/const/spellcraft.mjs 里就是 1，与 touch 同档），默认快照的
+  // gesture 是 null，打不到它。取 touch 这一支——influence 只多一层引导半速，
+  // 走的是同一个 build。
+  "travel/spell.gesture.contact": Object.freeze({
+    gesture: "touch", targetType: "single", tags: ["spell"]
+  }),
+  // 光环：`aura`（向外环）与 `sense`（向内环）共用一条规则，且是 once。
+  // 它不吃模板几何（锚在施法者），所以 region 留空即可。
+  "travel/spell.gesture.aura": Object.freeze({
+    gesture: "aura", targetType: "self", tags: ["spell"]
+  }),
   "aftermath/aftermath.healing": Object.freeze({
     isAttack: false, tags: ["healing"], healed: 6
   }),
@@ -285,7 +315,11 @@ export const ALWAYS_SILENT = Object.freeze([
   "cast/strike.melee.heavy",
   "travel/target.blast",
   "aftermath/generic.aftermath",
-  "persist/status.silent"
+  "persist/status.silent",
+  // 与 persist/status.silent 同一件事的另一端：`dead` 被移除（复活 / GM 撤销那一击）
+  // 不该复用「负面状态解除」那一声。两条规则共用 armory/persist.mjs 的 NO_PERSIST
+  // 名单锁，一起改或一起不改。
+  "persistOff/statusOff.silent"
 ]);
 
 /**

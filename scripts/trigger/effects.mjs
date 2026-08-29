@@ -15,32 +15,125 @@ import {debug, warn, error} from "../log.mjs";
  * 裸着访问 `.statusId` 会在这条完全正常的路径上抛 TypeError，被下面的 catch 接住后
  * 误报成"构造失败"——同一次降级，日志却从"静默"变成"报错"，误导排查。
  *
- * `slot` 让同一段逻辑服务两个由 ActiveEffect 驱动的槽（两者的快照形状与规则签名完全
+ * `slot` 让同一段逻辑服务三个由 ActiveEffect 驱动的槽（三者的快照形状与规则签名完全
  * 相同，见 resolver/resolve.mjs 的 resolveEffect）：默认的 `persist` 是状态光环，
- * `death` 是击杀那一刻的一次性爆发（armory/death.mjs）。日志前缀跟着槽走，免得两条
- * 通道的告警在控制台里分不出是谁。
+ * `death` 是击杀那一刻的一次性爆发（armory/death.mjs），`persistOff` 是状态摘下那一刻
+ * 的提示音（armory/persist-off.mjs）。日志前缀跟着槽走，免得三条通道的告警在控制台里
+ * 分不出是谁。
+ *
+ * `transition` 是**声音**的闸，见下面 `stripSound()`。默认 `false`（= 只补稳态、不发声）
+ * 是刻意的保守值：新增的补齐入口忘了传参时最坏只是少一声，而反过来（默认 true）忘了
+ * 传就是每次画布加载全场齐鸣。
  *
  * @param {ActiveEffect} effect
  * @param {Token|null} token
  * @param {{gridSize: number}} env
  * @param {{assets: object, armory: object}} deps
- * @param {"persist"|"death"} [slot]
+ * @param {"persist"|"death"|"persistOff"} [slot]
+ * @param {{transition?: boolean}} [opts]  transition=true：这一次是「状态真的变了」，
+ *        允许发声；false：只是把该有的稳态补齐，剥掉全部 sound cue。
  * @returns {FXPlan|null}
  */
-export function planForEffect(effect, token, env, deps, slot = "persist") {
+export function planForEffect(effect, token, env, deps, slot = "persist", {transition = false} = {}) {
   try {
     const snapshot = snapshotEffect(effect, token, env);
     if (!snapshot?.statusId) return null;
     const tag = msg => warn(`[${slot}:${snapshot.statusId}] ${msg}`);
     // onWarn 只在 resolveEffect 产出空计划时被调用（见 resolve.mjs 的 drainWarnings）：
-    // persist 规则每条只产 1 个 cue，被 keepTied 丢掉后计划为空、warning 本会随之蒸发。
+    // persist 规则每条只产 1 个画面 cue，被 keepTied 丢掉后计划为空、warning 本会随之蒸发。
     const plan = resolveEffect(snapshot, {...deps, onWarn: tag}, slot);
     if (plan) for (const msg of plan.warnings ?? []) tag(msg);
-    return plan;
+    return transition ? plan : stripSound(plan);
   } catch (err) {
     error("为状态效果构造动画计划失败，已跳过", err);
     return null;
   }
+}
+
+/**
+ * 剥掉一份计划里的全部 sound cue，画面 cue 原样保留；没有 sound cue 时**原对象返回**
+ * （不白拷一份），剥完一条不剩时返回 null。
+ *
+ * ## 为什么非剥不可（规格 §4.2 闸 a）——这不是「可能」，是每次画布加载的必经路径
+ *
+ * persist cue 恒 `worldPersist:false`（resolve.mjs 的 CUE_DEFAULTS）→ play.mjs 走
+ * `e.temporary(true)` → **一条都不落世界 flag** → 每次画布加载 Sequencer 第一件事就是
+ * `tearDownPersistentEffects()` 把 VisibleEffects 全部 destroy（sequencer.js:11920，
+ * 因为没落盘也没东西可恢复）→ 发 `sequencerEffectManagerReady`（:11953）→ 本文件的
+ * `resyncPersist` → `playPersist` → 那里的 `isPlayingPersist` 查的正是**刚被清空的**
+ * VisibleEffects，恒为假 → 每个 (状态, token) 都走一遍完整 plan。
+ * 于是只要 persist 槽出现 sound cue，**每次 F5 / 切场景 / 中途进场，场上每个 token
+ * 每个状态的上身音都在同一帧一起响**。
+ *
+ * ## 为什么剥在这里，而不是在 resolve 侧分叉
+ *
+ * `resolveEffect()` 必须对同一份快照恒定产出同一份计划：本模组的传输模型是各客户端
+ * 本地解析（DESIGN §5.4），解析侧一分叉，预览宏看到的与实战播出的就不是一份东西，
+ * 而「选材是确定的」正是那一节的核心约定。所以兵库照常产出声音，由**播放侧**按
+ * 「这一次到底是不是一次转变」决定要不要它。这与 `playDeath` 已经立好的纪律同源
+ * （那里是靠「只挂 createActiveEffect 这一个钩子」实现的，见其注释第 1 条）。
+ *
+ * @param {FXPlan|null} plan
+ * @returns {FXPlan|null}
+ */
+function stripSound(plan) {
+  if (!plan?.cues?.some(c => c.kind === "sound")) return plan;
+  const cues = plan.cues.filter(c => c.kind !== "sound");
+  return cues.length ? {...plan, cues} : null;
+}
+
+/**
+ * AoE 同刻叠播的闸（规格 §4.2 闸 b）。
+ *
+ * 本文件的两道幂等闸——`flightKey` 与 `isPlayingPersist(effectUuid, token)`——都是逐
+ * **(效果, token)** 的。而一次 AoE 给 5 个人上毒 = **5 条各自独立的 ActiveEffect**，
+ * 5 份计划两道闸一条都拦不住，各播各的。画面上这是对的、而且是明写的要求
+ * （`playPersist` 里那句「AoE 一次让 5 个人上毒，5 圈光环必须同时出现」）；声音上就是
+ * 同一条 ogg 在同一帧叠 5 层——5 倍振幅、相位完全相同，听起来不是「更响」而是「破音」。
+ *
+ * 所以去重键换一个维度：**按声音本身**（不按效果、不按 token），在一个 150ms 的时间窗
+ * 内只放行第一条。键取那条 sound cue 的 `rule` 加槽名——persist 槽的规则 id 就是
+ * `status.<组名>`，所以「同一组」天然同键：AoE 同时给一群人上 `poisoned` 与 `diseased`
+ * 也只响一声，而它们本来就共用同一池素材，响两声只会互相糊掉。
+ *
+ * **只吃 sound cue**：画面 cue 一条都不动，5 圈光环仍然是 5 份。
+ *
+ * 150ms 站得住的依据有两条：同一次 AoE 的 N 条 createActiveEffect 在同一个 socket 批次
+ * 里到达（同一帧，间隔远小于 150ms）；而两次真正独立的施法之间隔着 `PERSIST_LEAD_MS`
+ * (500ms) 量级的让路期，不会被误伤。
+ *
+ * 记账在**建计划时**而不是真正播出时：让路期有 500ms，等到播出再记，同一批的 5 条早就
+ * 全部记过账了。代价是「记了账却在让路期内被撤销」会白吃掉一个窗口——最坏少响一声，
+ * 而反向的代价是叠 5 层。
+ */
+const SOUND_WINDOW_MS = 150;
+const soundClaims = new Map();
+
+/**
+ * 清空同刻去重的记账。**只服务测试隔离**，生产代码不调用（理由与 `resetPersistInFlight`
+ * 逐字相同：模块级状态要给测试留一个归零点，否则同一进程里跑的下一条用例会被上一条
+ * 留下的时间窗静默挡掉——断言「必须有声」的用例假红）。
+ */
+export function resetGroupSoundClaims() {
+  soundClaims.clear();
+}
+
+/**
+ * 按上面那条规矩过滤一份计划的 sound cue。窗口内被挡掉的直接剥掉，画面 cue 不动；
+ * 剥完一条 cue 都不剩时返回 null（persistOff 槽整份都是声音，被挡掉就该整个不播）。
+ */
+function gateGroupSound(plan, slot, now = Date.now()) {
+  if (!plan?.cues?.some(c => c.kind === "sound")) return plan;
+  const cues = plan.cues.filter(c => {
+    if (c.kind !== "sound") return true;
+    const key = `${slot}/${c.rule}`;
+    const last = soundClaims.get(key);
+    if (last !== undefined && now - last < SOUND_WINDOW_MS) return false;
+    soundClaims.set(key, now);
+    return true;
+  });
+  if (cues.length === plan.cues.length) return plan;
+  return cues.length ? {...plan, cues} : null;
 }
 
 /**
@@ -163,7 +256,10 @@ export function installEffectTriggers(deps) {
       // getActiveTokens() 已经把范围限定在 canvas.scene（当前查看的场景）——离场角色、
       // 跨场景、尚未渲染的 token 在这里自然拿到空数组，不需要额外的 isView 判断。
       for (const token of actor.getActiveTokens()) {
-        playPersist(effect, token, deps, env);
+        // transition:true —— 这是「状态真的落地了」那一刻，五个入口里只有它和
+        // updateActiveEffect 的重新生效分支算转变，其余三个是补齐稳态。上身音的闸
+        // 就在这个参数上，见 planForEffect 的 stripSound。
+        playPersist(effect, token, deps, env, {transition: true});
         // 击杀爆发（Task 15b）。**只挂在这一个钩子上**：它是「状态真的落地了」这个
         // 转变本身，而 resyncPersist / createToken 是「把该有的稳态补齐」——把一次性
         // 爆发接上那两条，等于每次切场景、每具尸体都重放一遍。
@@ -209,6 +305,13 @@ export function installEffectTriggers(deps) {
   });
 
   Hooks.on("deleteActiveEffect", (effect) => {
+    // 摘下音（S7 persistOff）。**只挂在这一个钩子上**，与 death 槽的硬约束 1 同理：
+    // resyncPersist / createToken 是补齐稳态，接上一次性提示音 = 每次切场景把全场状态
+    // 摘一遍。updateActiveEffect 的 disable 分支也刻意不接——那是「暂停」不是「摘下」，
+    // 效果还挂在角色身上（armory/persist-off.mjs 的文件头逐条写了）。
+    // 排在收尾之前：这两件事没有先后依赖，但发声属于「这一刻发生了什么」，读起来该在
+    // 清理之前；它自带 try/catch，任何失败都不会挡住下面那条兜底清理。
+    playPersistOffFor(effect, deps);
     // 兜底：tieToDocuments 未生效（或该效果从没产出过 cue）时按 origin 收尾。
     // 只按 origin 过滤：play.mjs 只设 .origin(cue.tieTo)、不设 .name()，而
     // _filterEffects（sequencer.js:11694-11703）的 name 与 origin 是 AND —— 带上 name
@@ -253,7 +356,13 @@ export async function resyncPersist(deps, env) {
   for (const token of canvas.tokens?.placeables ?? []) syncToken(token, deps, env);
 }
 
-/** 一个 token 身上全部生效中的效果各补一遍持续特效。 */
+/**
+ * 一个 token 身上全部生效中的效果各补一遍持续特效。
+ *
+ * `transition` 保持默认的 false：本函数的两个调用方（`resyncPersist` 与 `createToken`）
+ * 都是「把该有的稳态补齐」而不是「状态变了」——补齐时**不发声**，理由见 planForEffect
+ * 的 stripSound（少了这一条，每次 F5 全场所有状态的上身音在同一帧一起响）。
+ */
 function syncToken(token, deps, env) {
   for (const effect of token?.actor?.effects ?? []) {
     if (!effect.active) continue;
@@ -261,10 +370,18 @@ function syncToken(token, deps, env) {
   }
 }
 
-/** 一份效果重新生效（在角色卡效果页上把 disabled 翻回 false）时，给它挂着的每个 token 补齐。 */
+/**
+ * 一份效果重新生效（在角色卡效果页上把 disabled 翻回 false）时，给它挂着的每个 token 补齐。
+ *
+ * `transition:true`：从玩家视角，「刚才没生效、现在生效了」与「刚上身」是同一件事，
+ * 该有同一声提示。它与补齐稳态的区别也很实在——这条路径由一次**用户操作**触发，一次
+ * 只影响一份效果，不会像 resync 那样一帧之内铺满全场。
+ */
 function syncEffect(effect, deps, env) {
   if (!(effect.parent instanceof Actor) || !effect.active) return;
-  for (const token of effect.parent.getActiveTokens()) playPersist(effect, token, deps, env);
+  for (const token of effect.parent.getActiveTokens()) {
+    playPersist(effect, token, deps, env, {transition: true});
+  }
 }
 
 /**
@@ -382,12 +499,15 @@ export async function awaitPersistVisible(effectUuid, token,
  * @param {{assets: object, armory: object}} deps
  * @param {{gridSize: number}} env
  */
-function playPersist(effect, token, deps, env) {
+function playPersist(effect, token, deps, env, {transition = false} = {}) {
   if (!animationsEnabled()) return;
   const key = flightKey(effect.uuid, token);
   if (inFlight.has(key)) return;
   if (isPlayingPersist(effect.uuid, token)) return;
-  const plan = planForEffect(effect, token, env, deps);
+  const raw = planForEffect(effect, token, env, deps, "persist", {transition});
+  // 第四道闸，只对声音：AoE 同刻叠播（见 gateGroupSound）。放在 inFlight/isPlayingPersist
+  // 之后，是因为那两道拦下的计划根本不会播出，提前记账会白吃掉一个时间窗。
+  const plan = gateGroupSound(raw, "persist");
   if (!plan) return;
   debug(`状态 ${plan.source} 上身`, plan);
   // 走 persist 专用通道而不是共享串行队列：持久光环是稳态标记，既不该占住队列，
@@ -493,7 +613,11 @@ function playPersist(effect, token, deps, env) {
  */
 function playDeath(effect, token, deps, env) {
   if (!animationsEnabled()) return;
-  const plan = planForEffect(effect, token, env, deps, "death");
+  // transition:true —— 本槽**只**由 createActiveEffect 驱动（见上面第 1 条硬约束），
+  // 每一次调用都是一次真实的转变，没有「补齐稳态」这条路径。显式写出来而不是吃默认值：
+  // 默认 false 是给 persist 的补齐入口兜底用的，death 槽将来若加了声音（规格 §4.3 的
+  // 倒地 + 血溅两层），吃了默认值就会一声不响。
+  const plan = planForEffect(effect, token, env, deps, "death", {transition: true});
   if (!plan) return;
   debug(`击杀爆发 ${plan.source}@${token.id}`, plan);
   void runPersistAnimation(`击杀 ${plan.source}@${token.id}`, () => {
@@ -510,6 +634,60 @@ function playDeath(effect, token, deps, env) {
       volume: getSetting(SETTINGS.VOLUME), shake: false, resolveRef: resolveRefIn(token.scene)
     });
   });
+}
+
+/**
+ * 摘下音（S7 persistOff）的钩子侧入口：一份效果被删除时，给它挂着的每个 token 各求解
+ * 一次并立刻播出。
+ *
+ * 自带 try/catch 且**先做最便宜的判断**：`deleteActiveEffect` 会为世界上任何一条效果
+ * 触发，其中绝大多数（宏挂的、别的模组挂的、没有 parent Actor 的）根本走不到播放。
+ * `globalThis.Actor &&` 那半句不是防御性冗余——`Actor` 是 Foundry 注入的全局，在只驱动
+ * 本钩子的单测里（test/effects-lifecycle.test.mjs）它压根不存在，裸写 `instanceof Actor`
+ * 会抛 ReferenceError，把一条本该静默跳过的正常路径变成一条控制台报错。
+ *
+ * @param {ActiveEffect} effect
+ * @param {{assets: object, armory: object}} deps
+ */
+function playPersistOffFor(effect, deps) {
+  try {
+    const actor = effect?.parent;
+    if (!(globalThis.Actor && actor instanceof globalThis.Actor)) return;
+    if (!animationsEnabled()) return;
+    const env = currentEnv();
+    for (const token of actor.getActiveTokens?.() ?? []) playPersistOff(effect, token, deps, env);
+  } catch (err) {
+    error("状态摘下音触发失败，已跳过", err);
+  }
+}
+
+/**
+ * 播放一份摘下音。
+ *
+ * 【与 playDeath 的唯一实质差别：不让路】`playDeath` 走 `runPersistAnimation`，因为击杀
+ * 爆发比造成它的那一击**更早**到达（Crucible 先落地 ActiveEffect、后翻聊天卡 confirmed，
+ * 见 const.mjs 的 PERSIST_LEAD_MS），不让路就是「先见血、后见挥剑」。摘下音的时序正好
+ * 相反：它对应的画面是同一帧里 `endPersist` 收掉的那圈光环，让路 500ms 再响，听起来与
+ * 画面无关。所以这里直接 `playPlan`，不入共享队列、也不等宽限期。
+ *
+ * 不 await：本函数在钩子回调里被调用，而它后面还跟着兜底清理；`playPlan` 对纯 sound
+ * 计划会一直 await 到序列播完（play.mjs 只有带 persist cue 的计划才提前返回），
+ * await 它等于把整条删除处理挂在一声音效上。失败落 warn，不外抛。
+ *
+ * 【为什么不进 inFlight / 不查 isPlayingPersist】与 death 同理：这枚 cue 没有「结束」
+ * 语义、不该被去重——同一条状态第二次被摘下就该再响一次。同刻叠播由 `gateGroupSound`
+ * 按声音本身去重（AoE 一次解除 5 个人的中毒 = 5 条 deleteActiveEffect）。
+ */
+function playPersistOff(effect, token, deps, env) {
+  const raw = planForEffect(effect, token, env, deps, "persistOff", {transition: true});
+  const plan = gateGroupSound(raw, "persistOff");
+  if (!plan) return;
+  debug(`状态 ${plan.source} 摘下`, plan);
+  Promise.resolve()
+    .then(() => playPlan(plan, {
+      volume: getSetting(SETTINGS.VOLUME), shake: false, resolveRef: resolveRefIn(token.scene)
+    }))
+    .catch(err => warn(`状态 ${plan.source} 的摘下音播放失败`, err));
 }
 
 /**

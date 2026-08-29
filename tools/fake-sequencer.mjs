@@ -24,7 +24,15 @@ export const EFFECT_METHODS = Object.freeze([
   "missed", "stretchTo", "scale", "scaleToObject", "spriteOffset", "mirrorY", "randomizeMirrorY",
   "randomRotation", "rotate", "elevation", "duration", "tint", "filter", "mask", "persist", "temporary",
   "tieToDocuments", "origin", "extraEndDuration", "waitUntilFinished", "copySprite", "loopProperty",
-  "name", "anchor", "center", "size", "spriteScale", "moveTowards"
+  "name", "anchor", "center", "size", "spriteScale", "moveTowards",
+  /*
+   * `template` 必须在白名单里，否则 play.mjs 的 `.template()` 调用会在桩上得到
+   * undefined、抛 TypeError，被 play.mjs:444 的 catch 连同整条 cue 一起丢掉——
+   * 而那条 catch 只打一行 warn，测试看到的是「cue 少了几条」而不是「方法名错了」。
+   * 实测漏加时 play-contract 转红 8 条，且失败讯息全都指向别处。
+   * 真实定义在 sequencer.js:24079 `template({gridSize, startPoint, endPoint} = {})`。
+   */
+  "template"
 ]);
 
 export const SOUND_METHODS = Object.freeze([

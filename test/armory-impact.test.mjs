@@ -8,6 +8,8 @@ import {resolve} from "../scripts/resolver/resolve.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 import {RESULT} from "../scripts/const.mjs";
 import {ELEMENT_LAYER, DAMAGE_ALIAS, elementFor} from "../scripts/armory/impact.mjs";
+import {DIRS, placeAt, pointResolver, rotates, heading, bearing} from "../tools/geom-probe.mjs";
+import {RESULT_NAME} from "../scripts/const.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const index = JSON.parse(readFileSync(join(ROOT, "data/asset-index.json"), "utf8"));
@@ -171,13 +173,184 @@ test("全量攻击动作：掠过与命中的 impact 绝不只差一个 playIf",
     "本用例最关键的那一档（impact 只剩元素层）随之失守，需要补一个这样的夹具");
 });
 
-test("未命中与闪避走 missed，其余不走", () => {
-  for (const r of [RESULT.MISS, RESULT.DODGE]) {
-    const c = impactCues(r).find(x => x.kind === "effect");
-    assert.equal(c.aim?.missed, true, `结果 ${r} 应 missed`);
+// 2026-08-29 批次 B 第 6 步：本用例整条翻案（施工清单 §0.7）。
+//
+// 旧判据是「未命中与闪避走 missed，其余不走」。翻案的依据不是观感而是两条源码事实：
+//   1. `_getOffset`（sequencer.js:15360）的 `missed && (!source || !data.target)` 在
+//      非拉伸 cue 上走 `calculate_missed_position` 的 `!target` 分支（17976-17985）——
+//      `twister.random() * 2π` 的整圈随机，而 twister 的种子是 `creationTimestamp`，
+//      **逐客户端不同**。本模组每台机器本地播同一份 plan，这是最后一个漏网的随机项。
+//   2. DODGE 现在要按走位方向转（ASSET-NOTES 的逐字指令），而 rotateTowards 会填上
+//      data.target，判据里的 `!data.target` 恒假——`.missed()` 在它身上根本不生效，
+//      只会让 test/play-contract.test.mjs 的「落空的非拉伸反馈不带 data.target」转红。
+// 所以 impact 主规则整槽退出 missed，位移改由 RESULT_GEOM 的确定性几何给出。
+test("impact 主规则整槽不再申报 missed，落空改用确定性几何", () => {
+  const r6 = v => Math.round(v * 1e6) / 1e6;
+  const tw = base.targets[0].width ?? 1;
+
+  for (const [name, code] of Object.entries(RESULT)) {
+    for (const c of impactCues(code)) {
+      assert.notEqual(c.aim?.missed, true,
+        `结果 ${name} 的 ${c.layer} 层还在申报 missed——那是逐客户端随机的落点，`
+        + "同一次落空每个玩家看到的方向都不一样");
+    }
   }
-  const hit = impactCues(RESULT.HIT).find(x => x.kind === "effect");
-  assert.equal(hit.aim?.missed, false);
+
+  // MISS：不转（烘死的英文字一转就废），但要把构图推回中心。
+  const miss = impactCues(RESULT.MISS).find(c => c.layer === "result");
+  assert.ok(miss, "MISS 的结果层应当出得来");
+  assert.equal(miss.aim, null, "MISS 不该有 aim：它不转向，也不需要 missed 载体了");
+  assert.equal(miss.gridUnits, true, "构图补偿的单位是格，必须显式声明 gridUnits");
+  assert.equal(miss.offset.x, 0, "MISS 只沿贴图自身 -y 推，横向不动");
+  // 数值钉死：ASSET-NOTES 量到静止段文字重心在画幅 73% 处，0.73-0.50 = 0.23 个**身位**，
+  // 而身位 = objectScale × 目标格宽（scaleToObject 的定义）。
+  assert.equal(miss.offset.y, r6(-0.23 * miss.objectScale * tw),
+    "MISS 的构图补偿不等于 -0.23 × objectScale × 目标格宽");
+
+  // DODGE：转，且转的是「背对攻击者」那一侧；同样带构图补偿（亮带偏左 (250-202)/500）。
+  const dodge = impactCues(RESULT.DODGE).find(c => c.layer === "result");
+  assert.ok(dodge?.aim, "DODGE 应当带 aim（按走位方向 rotate，不是 mirror）");
+  assert.equal(dodge.aim.missed, false);
+  assert.equal(dodge.offset.y, 0, "DODGE 的补偿只沿拖影展开的方向（贴图自身 +x）");
+  assert.equal(dodge.offset.x, r6(0.096 * dodge.objectScale * tw));
+
+  // generic.impact（非攻击动作的兜底）**保留** missed：那一支不转向、也没有构图补偿，
+  // .missed() 在它身上是原设计的用法。这条同时防止有人把翻案顺手扩大到整个仓库。
+  const nonAttack = actions.find(a => a.usage?.isAttack !== true && a.targets?.length);
+  assert.ok(nonAttack, "语料里没有带目标的非攻击动作，generic.impact 那一支测不到");
+  const generic = impactOf(nonAttack, RESULT.MISS).find(c => c.rule === "generic.impact");
+  assert.ok(generic, "非攻击动作应当走 generic.impact");
+  assert.equal(generic.aim?.missed, true,
+    "generic.impact 的落空两档仍应走 .missed()：它不转向，随机偏移在这里是原设计");
+  // 构图补偿必须**不**跟过来：selfX/selfY 补的是结果层那八条素材各自的偏心，而本规则恒用
+  // jb2a.impact.005.white（ASSET-NOTES 实测内容正居中）。套别人的补偿就是纯错位。
+  assert.deepEqual(generic.offset, {x: 0, y: 0},
+    "generic.impact 不该带构图补偿：它的素材是居中的 jb2a.impact.005.white，"
+    + "MISS 那条 -0.23 补的是「Miss!」那行字压在画幅 73% 处，与本规则无关");
+  // 反向：非落空档照吃攻击轴位移（那是结果语义，与素材无关），否则「同型」就成了空话。
+  const genericHit = impactOf(nonAttack, RESULT.HIT).find(c => c.rule === "generic.impact");
+  assert.ok(genericHit?.offset.x || genericHit?.offset.y,
+    "generic.impact 的命中档应当照吃 RESULT_GEOM 的沿攻击轴位移");
+});
+
+/**
+ * 施工清单 §0.7 的守卫 (a) + (b)，**两侧同时钉死**。
+ *
+ * (a) 该转的（HIT / GLANCE / DODGE 与元素层）：8 个罗盘方向必须给出 8 种世界朝向，
+ *     且每一种都等于该方向的攻击轴（扣掉本条 cue 自己声明的 rotationOffset 与 angle）。
+ * (b) 不该转的（ARMOR / PARRY / BLOCK / RESIST / MISS）：`rotates()` 恒 false，
+ *     世界朝向在 8 个方向上恒为 1 种。
+ *
+ * 为什么 (b) 也要断言：那五条是**产品决定**而不是「还没做」——ASSET-NOTES 对它们要么
+ * 给的是重力方向、要么一个字都没写（PARRY 的 Λ 构图转过头会变 V）。没有这一条，后来者
+ * 「顺手补全方向」不会有任何阻力。要改它必须先补上对应的质心量测。
+ *
+ * 几何公式一律 import tools/geom-probe.mjs 的 heading/rotates/bearing，不在这里重写
+ * （那两条公式与 sequencer.js:17070 / 16346 逐条对过，重写一份必然漂）。
+ */
+/**
+ * 位移必须真的落在**攻击轴**上，不是落在贴图的 +x 上。
+ *
+ * 这两件事只有在 `rotationOffset` 非零时才分得开，而全表只有 HIT 那一行是非零的
+ * （-47.86°，因为 ASSET-NOTES 量到那团灰烟火星的漂移方向是右下 47.86° 而不是 +x）。
+ * `spriteOffset` 写的是 sprite.position，它挂在
+ *   rotationContainer（rotation = 瞄准角 + rotationOffset，sequencer.js:17070）
+ *     └ spriteContainer（rotation = -toRadians(cue.angle)，sequencer.js:16346）
+ * 之下——**两层**旋转。impact.mjs 的 impactOffset() 因此要先把 (along, lateral) 反向转
+ * 掉 rotationOffset - angle；漏掉这一步，HIT 那句「沿攻击轴前移 0.1 格」就会变成
+ * 「朝攻击轴右下 47.86° 前移 0.1 格」，而上面那条朝向断言**看不出来**（它只看朝向）。
+ *
+ * 判据：把 cue.offset 按这条 cue 的世界朝向转到世界坐标系，再投影回攻击轴，
+ * 沿轴分量必须等于表里的 along、垂直分量的绝对值必须等于表里的 lateral。
+ */
+test("轴向位移落在攻击轴上，不落在贴图 +x 上", () => {
+  // 与 RESULT_GEOM 的 along / lateral 同一组数，手抄（理由同上一条：import 过来就是自证）。
+  const AXIAL = {HIT: {along: 0.10, lateral: 0}, GLANCE: {along: 0.35, lateral: 0.20}};
+  const tw = base.targets[0].width ?? 1;
+  const bad = [];
+  for (const [name, want] of Object.entries(AXIAL)) {
+    for (const d of DIRS) {
+      const snap = placeAt({
+        ...base,
+        targets: [{...base.targets[0], results: [{result: RESULT[name], critical: false}],
+                   damage: {total: 8, type: "slashing", resource: "health"}}]
+      }, d, 1);
+      const plan = resolve(snap, {assets: mk(), armory: ARMORY});
+      const pt = pointResolver(snap);
+      const c = (plan?.cues ?? []).find(x => x.slot === "impact" && x.layer === "result");
+      assert.ok(c?.offset, `结果 ${name} / 方向 ${d.name.trim()} 没有结果层或没有偏移`);
+      // 世界坐标系里的偏移向量：绕这条 cue 的世界朝向转（heading 已经把两层旋转合起来了）
+      const h = heading(c, pt) * Math.PI / 180;
+      const wx = c.offset.x * Math.cos(h) - c.offset.y * Math.sin(h);
+      const wy = c.offset.x * Math.sin(h) + c.offset.y * Math.cos(h);
+      // 投影回攻击轴
+      const a = bearing({x: snap.origin.x, y: snap.origin.y}, snap.targets[0]) * Math.PI / 180;
+      const along = wx * Math.cos(a) + wy * Math.sin(a);
+      const lateral = -wx * Math.sin(a) + wy * Math.cos(a);
+      if (Math.abs(along - want.along * tw) > 1e-3) {
+        bad.push(`${name}/${d.name.trim()}：沿攻击轴 ${along.toFixed(4)} 格，应为 ${want.along * tw}`);
+      }
+      if (Math.abs(Math.abs(lateral) - want.lateral * tw) > 1e-3) {
+        bad.push(`${name}/${d.name.trim()}：垂直攻击轴 ${Math.abs(lateral).toFixed(4)} 格，`
+          + `应为 ${want.lateral * tw}`);
+      }
+    }
+  }
+  assert.deepEqual(bad.slice(0, 6), [],
+    `${bad.length} 处位移没落在攻击轴上——多半是 impactOffset() 里那次 `
+    + "R(angle - rotationOffset) 反向换算被省掉了");
+});
+
+test("逐结果裁定：该转的 8 方向 8 种朝向，不该转的恒 1 种", () => {
+  // 与 scripts/armory/impact.mjs 的 RESULT_GEOM 同一张表。刻意手抄一份而不是 import：
+  // 守卫要能在「有人把表改了」的时候转红，import 过来就变成自证。
+  const SHOULD_ROTATE = {HIT: true, GLANCE: true, DODGE: true,
+                         ARMOR: false, PARRY: false, BLOCK: false, RESIST: false, MISS: false};
+  const withResult = code => ({
+    ...base,
+    targets: [{...base.targets[0], results: [{result: code, critical: false}],
+               damage: {total: 8, type: "slashing", resource: "health"}}]
+  });
+
+  for (const [name, code] of Object.entries(RESULT)) {
+    const byLayer = new Map();          // layer -> {headings: Set, rots: Set, worst: string}
+    for (const d of DIRS) {
+      const snap = placeAt(withResult(code), d, 1);
+      const plan = resolve(snap, {assets: mk(), armory: ARMORY});
+      const pt = pointResolver(snap);
+      const want = bearing({x: snap.origin.x, y: snap.origin.y}, snap.targets[0]);
+      for (const c of (plan?.cues ?? [])) {
+        if (c.slot !== "impact" || c.kind !== "effect") continue;
+        const e = byLayer.get(c.layer) ?? {headings: new Set(), rots: new Set(), bad: []};
+        byLayer.set(c.layer, e);
+        const h = heading(c, pt);
+        e.headings.add(h == null ? "?" : h.toFixed(3));
+        e.rots.add(rotates(c, pt));
+        // 转的那些还要真的落在攻击轴上（扣掉自己声明的常量偏置）
+        if (rotates(c, pt)) {
+          const axis = want + (c.aim?.rotationOffset ?? 0) - (c.angle ?? 0);
+          const err = Math.abs(((h - axis) % 360 + 540) % 360 - 180);
+          if (err > 1) e.bad.push(`${d.name.trim()} 差 ${err.toFixed(1)}°`);
+        }
+      }
+    }
+    assert.ok(byLayer.size > 0, `结果 ${name} 一条 impact effect 都没有，本用例在空转`);
+    for (const [layer, e] of byLayer) {
+      // 元素层只在 HIT/GLANCE 上出现，它恒转（残留有弱方向性）。
+      const shouldRotate = layer === "element" ? true : SHOULD_ROTATE[name];
+      assert.deepEqual([...e.rots], [shouldRotate],
+        `结果 ${name} 的 ${layer} 层：rotates() 应当恒为 ${shouldRotate}，实测 ${[...e.rots]}`);
+      assert.deepEqual(e.bad, [],
+        `结果 ${name} 的 ${layer} 层转了，却没转到攻击轴上：${e.bad.join("、")}`);
+      assert.equal(e.headings.size, shouldRotate ? DIRS.length : 1,
+        shouldRotate
+          ? `结果 ${name} 的 ${layer} 层：8 个方向只给出 ${e.headings.size} 种朝向`
+            + "（该转的必须逐方向不同，否则「击打方向不对」原样复发）"
+          : `结果 ${name} 的 ${layer} 层：8 个方向给出了 ${e.headings.size} 种朝向。`
+            + "这五档是**故意**不转的（ASSET-NOTES 要么给的是重力方向、要么一个字都没写），"
+            + "要改必须先补上质心量测，不能顺手补全方向");
+    }
+  }
 });
 
 test("暴击追加抖动轨且抖动只作用于目标 sprite", () => {
@@ -196,13 +369,16 @@ test("12 种伤害类型的元素层各自可解析", () => {
     assert.ok(el?.file, `伤害类型 ${d} 无元素层素材`);
     seen.add(el.file);
   }
-  // 只钉「条数」：12 种类型 = 物理三系共用的 1 条血迹 + eskie.damage 八支 + void 的
-  // jb2a.impact.012，正好 10 条素材。真正的区分度判定（file+hue 不重复、同模板家族内
-  // 颜色分支不复用、残留主色 CIEDE2000 达标）在 test/armory-element-distinct.test.mjs——
-  // 原先这里写的是 `seen.size >= 5`，而 acid 与 poison 是两个不同的文件，撞车的时候
-  // 它照样数成两种，拦不住 ASSET-NOTES 明确点名的那一类问题。
-  assert.equal(seen.size, 10,
-    `12 种伤害类型应解析出 10 条素材（物理三系共用一条血迹），实际 ${seen.size} 条`);
+  // 只钉「条数」：12 种类型 = eskie.damage 十一支（八种元素 + 批次 D1 拆开的物理三系）
+  // + void 的 jb2a.impact.012，正好 12 条素材，**一个键一条**。
+  // 这个数字从 10 变成 12 就是本轮 KPI 本身：D1 之前物理三系共用一条 jb2a.liquid.splash.red，
+  // impact/element 那个最大桶（本地基线 82 个动作）整个压在那一条上。
+  // 真正的区分度判定（file+hue 不重复、同模板家族内颜色分支不复用、残留主色 CIEDE2000
+  // 达标、物理三系的形状判据）在 test/armory-element-distinct.test.mjs——原先这里写的是
+  // `seen.size >= 5`，而 acid 与 poison 是两个不同的文件，撞车的时候它照样数成两种，
+  // 拦不住 ASSET-NOTES 明确点名的那一类问题。
+  assert.equal(seen.size, DAMAGE_TYPES.length,
+    `12 种伤害类型应当一个键一条素材，实际 ${seen.size} 条`);
 });
 
 test("每个 cue 的 playIf 与实际结果一致", () => {
@@ -293,14 +469,17 @@ test("查不到元素时必须 ctx.warn 留痕，而不是静默退回血溅", (
   assert.equal(elementCue({targetType: "elemental"}).warnings.length, 1);
 });
 
-test('kinesis 符文的 "physical" 走别名到血溅，且不算降级', () => {
+test('kinesis 符文的 "physical" 走别名到钝击，且不算降级', () => {
   // spellcraft.mjs 的 RUNES.kinesis.damageType 是 "physical"——DAMAGE_CATEGORIES 的顶层
   // 类别，不在 DAMAGE_TYPES 的 12 键里。spell-action.mjs 的 #prepareDamage
   // （`type: this.damageType ?? this.rune.damageType`）在玩家没经对话框选类型时会把它
   // 原样写进 damage.type，所以这是真实可达的输入，不是假想输入。
   assert.equal(DAMAGE_ALIAS.physical, "bludgeoning");
   const r = elementCue({targetType: "physical"});
-  assert.equal(r.cue.element, "bludgeoning", "physical 应落到血溅（与对话框的三选一等价）");
+  // ⚠ 批次 D1 之后落到 bludgeoning 不再「视觉等价于落到另外两个」：三键各有各的素材，
+  // 走这条别名的 kinesis 法术会稳定显示成钝击的火花螺旋。仍然是兜底而不是错配，
+  // 说理见 impact.mjs 的 DAMAGE_ALIAS 注释。
+  assert.equal(r.cue.element, "bludgeoning", "physical 应落到钝击（对话框候选列表的第一项）");
   assert.deepEqual(r.warnings, [], "已登记的类别别名是正常路径，不该留降级痕迹");
   // 而且它是走别名落地的，不是被兜底吞掉的：语料里 spell.kinesis.* 全系都靠这条。
   const kinesis = actions.filter(a => a.spell?.rune === "kinesis" && a.targets.length);
@@ -358,8 +537,11 @@ const ASSET_MS = {
   "jb2a.extras.tmfx.inpulse.circle.02.normal":    {ms: 1800, fps: 30},
   "jb2a.teleport.01.white":                       {ms: 900,  fps: 30},
   "jb2a.ui.miss.white":                           {ms: 2800, fps: 30},
-  // 元素层 12 条去重后 10 个文件（物理三系共用血溅）
-  "jb2a.liquid.splash.red":                       {ms: 3542, fps: 24},
+  // 元素层 12 条 = 12 个文件（批次 D1 之前物理三系共用一条 jb2a.liquid.splash.red，
+  // 施工清单 §0.15 已把那条「66/92 件武器命中层逐字相同」的合并翻案）
+  "eskie.damage.slashing.01.red":                 {ms: 501,  fps: 30000 / 1001},
+  "eskie.damage.piercing.01.red":                 {ms: 501,  fps: 30000 / 1001},
+  "eskie.damage.bludgeoning.01.red":              {ms: 501,  fps: 30000 / 1001},
   "eskie.damage.fire.01.orange":                  {ms: 501,  fps: 30000 / 1001},
   "eskie.damage.cold.01.blue":                    {ms: 501,  fps: 30000 / 1001},
   "eskie.damage.electricity.01.blue":             {ms: 501,  fps: 30000 / 1001},
@@ -368,7 +550,9 @@ const ASSET_MS = {
   "eskie.damage.radiant.01.yellow":               {ms: 501,  fps: 30000 / 1001},
   "eskie.damage.psychic.01.pink":                 {ms: 501,  fps: 30000 / 1001},
   "eskie.damage.necrotic.01.teal":                {ms: 501,  fps: 30000 / 1001},
-  "jb2a.impact.012.dark_purple":                  {ms: 1100, fps: 30}
+  "jb2a.impact.012.dark_purple":                  {ms: 1100, fps: 30},
+  // 治疗汇聚层（批次 D2，RESTORATION_LAYER）——真的治到人时它取代结果层
+  "eskie.buff.one_shot.health.green":             {ms: 1502, fps: 30000 / 1001}
 };
 
 /**
@@ -409,6 +593,16 @@ function allImpactEffects() {
   };
   for (const c of resolve(plain, {assets: mk(), armory: ARMORY}).cues) {
     if (c.slot === "impact" && c.kind === "effect") seen.set(`fallback|${c.file}`, c);
+  }
+  // 治疗汇聚层（批次 D2）：主语料的 healed 恒为 0（dump-fixtures 自陈那条路径跑不到），
+  // 所以这一层必须用合成快照才够得着——否则它会绕开下面全部 fade / 时长守卫。
+  const healing = {
+    ...base, usage: {...base.usage, resource: "health"},
+    targets: [{...base.targets[0], results: [{result: RESULT.HIT, critical: false}],
+               damage: null, healed: 8}]
+  };
+  for (const c of resolve(healing, {assets: mk(), armory: ARMORY}).cues) {
+    if (c.slot === "impact" && c.kind === "effect") seen.set(`restoration|${c.file}`, c);
   }
   return [...seen.values()];
 }
@@ -473,10 +667,12 @@ test("fade 预算不超过 cue 有效时长的三成", () => {
 });
 
 test("eskie 元素层不做淡出、也不许大淡入：裁完只剩 233-266ms", () => {
-  // 8 支 eskie 用 startTime 裁掉自带白爆闪之后有效时长只剩 233-266ms，30% 预算就是
-  // 70-80ms。f7 是一张已成形的满幅图，硬切入需要一点淡入遮丑（60ms 约两帧），
-  // 而残留段素材自己就衰减到 0、duration 又补到素材自然收尾，再叠 fadeOut 是二次衰减。
-  for (const d of ["fire", "cold", "electricity", "acid", "poison", "radiant", "psychic", "corruption"]) {
+  // 11 支 eskie（批次 D1 之后物理三系也在其中）用 startTime 裁掉自带白爆闪之后有效时长
+  // 只剩 233-266ms，30% 预算就是 70-80ms。f7 是一张已成形的满幅图，硬切入需要一点淡入
+  // 遮丑（60ms 约两帧），而残留段素材自己就衰减到 0、duration 又补到素材自然收尾，
+  // 再叠 fadeOut 是二次衰减。
+  for (const d of ["fire", "cold", "electricity", "acid", "poison", "radiant", "psychic", "corruption",
+                   "slashing", "piercing", "bludgeoning"]) {
     const el = impactCues(RESULT.HIT, {damageType: d}).find(c => c.layer === "element");
     assert.ok(el.fadeIn > 0 && el.fadeIn <= 80,
       `${d} 元素层 fadeIn 应在 (0,80]，实际 ${el.fadeIn}——startTime 从半空中切入需要遮丑，` +

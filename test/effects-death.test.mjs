@@ -29,6 +29,7 @@ import {NO_PERSIST} from "../scripts/armory/persist.mjs";
 import {resolveEffect} from "../scripts/resolver/resolve.mjs";
 import {installEffectTriggers, resyncPersist, resetPersistInFlight}
   from "../scripts/trigger/effects.mjs";
+import {SFX} from "../scripts/armory/sound-table.mjs";
 import {PERSIST_LEAD_MS} from "../scripts/const.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -55,8 +56,11 @@ test("death 槽：dead 状态解析出一条一次性血泊 cue", () => {
   const plan = resolveEffect(deadSnapshot(), {assets: createAssets(offlineBackend(index)),
                                               armory: ARMORY}, "death");
   assert.ok(plan, "dead 落地却没有击杀爆发——这条链断了就等于回到修复前");
-  assert.equal(plan.cues.length, 1);
-  const [cue] = plan.cues;
+  // 【批次 E】本槽从「1 条画面」变成「2 条音 + 1 条画面」（倒地 + 血溅 + 血泊）。
+  // ⚠ 取画面必须过滤 `kind !== "sound"`：音效排在画面之前，取 cues[0] 会拿错。
+  const shots = plan.cues.filter(c => c.kind !== "sound");
+  assert.equal(shots.length, 1, "击杀画面仍然只有一份血泊");
+  const [cue] = shots;
   assert.equal(cue.rule, "death.kill");
   assert.equal(cue.slot, "death");
   assert.match(cue.file, new RegExp(BLOOD));
@@ -66,6 +70,53 @@ test("death 槽：dead 状态解析出一条一次性血泊 cue", () => {
   assert.equal(cue.tieTo, null);
   assert.equal(cue.belowTokens, true, "血泊是地面层，应压在 token 之下");
   assert.deepEqual(plan.warnings, []);
+});
+
+/**
+ * 【批次 E】击杀两层音。
+ *
+ * 三件事各自独立取证，没有一条是从生成表核生成表：
+ *  1. **条数**：恰好 2 条 sound + 1 条 effect。少一层（把 `killSound` 的某一条删掉）立刻红。
+ *  2. **响点间隔**：血溅比倒地晚 100-200ms。判据不是 cue 上的 `delay`，而是
+ *     `delay + (peakMs − startTime)`——**真正被听到的那一刻**。这一条正是「把 atMs 写成 0」
+ *     或「两层写成同一个 atMs」时会红的那条：两层挤在同一瞬只会糊成一声。
+ *     ⚠ 素材的起振晚于 atMs 时 `soundAt` 顶不上去（它只能延迟不能提前），所以两个 atMs
+ *     取的是「让四个变体都同刻响」的值，间隔因此**恒为 200**，不随种子抖动 —— 下面
+ *     跨 200 个种子逐条断言，任何一个变体排歪都红。
+ *  3. **频谱分层**：两层的 centroid 必须差 3 倍以上，否则「分两层」只是名义上的。
+ *     判据回 `data/audio-profiles.json` 现算，不读兵库里的注释。
+ */
+test("death 槽：倒地 + 血溅两层音，血溅晚 100-200ms 且与倒地分属两个频段", () => {
+  const profiles = JSON.parse(readFileSync(join(ROOT, "data/audio-profiles.json"), "utf8")).profiles;
+  const base = deadSnapshot();
+  const gaps = new Set();
+  const lowSeen = [], highSeen = [];
+  for (let i = 0; i < 200; i++) {
+    const snap = {...base, seed: (base.seed + i * 7919) >>> 0};
+    const plan = resolveEffect(snap, {assets: createAssets(offlineBackend(index)),
+                                      armory: ARMORY}, "death");
+    const sounds = plan.cues.filter(c => c.kind === "sound");
+    assert.equal(sounds.length, 2, `种子 ${i}：击杀音不是两层（${sounds.length} 条）`);
+    assert.equal(plan.cues.filter(c => c.kind !== "sound").length, 1);
+    // 被听到的时刻 = 排程延迟 + （素材峰值 − 跳进音频的偏移）
+    const heard = sounds.map(c => {
+      const row = SFX[c.file];
+      assert.ok(row, `${c.file} 不在 SFX 表里——soundAt 与 gainFor 会同时静默退化`);
+      return c.delay + (row[0] - c.startTime);
+    });
+    gaps.add(heard[1] - heard[0]);
+    lowSeen.push(profiles[sounds[0].file]?.centroidHz);
+    highSeen.push(profiles[sounds[1].file]?.centroidHz);
+  }
+  for (const g of gaps) {
+    assert.ok(g >= 100 && g <= 200,
+      `血溅比倒地晚 ${g}ms，落在 100-200ms 之外——两声要么糊成一团要么脱节`);
+  }
+  const lowMax = Math.max(...lowSeen);
+  const highMin = Math.min(...highSeen);
+  assert.ok(highMin / lowMax >= 3,
+    `两层频谱没分开：倒地最高 centroid ${Math.round(lowMax)}Hz、血溅最低 ${Math.round(highMin)}Hz，`
+    + `比值 ${(highMin / lowMax).toFixed(2)} < 3`);
 });
 
 test("death 槽：除 dead 之外的 45 个状态一条都不出击杀爆发", () => {
@@ -169,10 +220,13 @@ test("createActiveEffect：dead 落地时放一次击杀爆发", async () => {
     world.fire("createActiveEffect", Object.assign(activeEffect(t, "dead"), {parent: world.actor}));
     await afterGrace();
     assert.equal(bloodCount(fake), 1, "dead 落地却没有击杀爆发");
-    // dead 在 NO_PERSIST 里，所以这一枚**只**该有血泊，不该另有一圈持久光环。
-    assert.equal(fake.records.length, 1);
-    assert.equal(fake.records[0].argOf("persist"), undefined,
-      "击杀爆发被当成持久特效播出去了");
+    // dead 在 NO_PERSIST 里，所以这一枚**只**该有血泊 + 两层击杀音，不该另有一圈持久光环。
+    // 【批次 E】从 1 改成 3：判据仍是「一份画面」，只是画面之外多了倒地与血溅两条 sound。
+    // 光环若真的回来了，它是 effect 且带 persist，下面两条会各自抓到。
+    assert.equal(fake.records.length, 3, "击杀这一枚应当是 2 条音 + 1 条画面");
+    for (const r of fake.records) {
+      assert.equal(r.argOf("persist"), undefined, "击杀爆发被当成持久特效播出去了");
+    }
   } finally { world.restore(); fake.restore(); }
 });
 

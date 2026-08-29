@@ -25,7 +25,8 @@ import {tokenPlaceable} from "../tools/token-mocks.mjs";
 import {offlineBackend, createAssets} from "../scripts/resolver/assets.mjs";
 import {ARMORY} from "../scripts/armory/index.mjs";
 import {installEffectTriggers, installPersistResync, flushPersistResync, resyncPersist,
-        awaitPersistVisible, resetPersistInFlight} from "../scripts/trigger/effects.mjs";
+        awaitPersistVisible, resetPersistInFlight, resetGroupSoundClaims}
+  from "../scripts/trigger/effects.mjs";
 import {queueDepth} from "../scripts/trigger/dispatch.mjs";
 import {PERSIST_LEAD_MS} from "../scripts/const.mjs";
 
@@ -56,6 +57,10 @@ function stubFoundry({tokens, effectAlive = () => true, effectActive = () => tru
   // 轮 2）。本文件每条用例都用 t1 + 同名状态，键完全相同——不清零的话，上一条用例留下
   // 的登记会让下一条用例的播放被静默挡掉（断 0 的假绿、断 1 的假红）。
   resetPersistInFlight();
+  // 同刻去重（150ms 时间窗，见 effects.mjs 的 gateGroupSound）同样是模块级状态，而本
+  // 文件每条用例都用同一个状态组：不清零，上一条用例刚记的账会把下一条的上身音静默
+  // 剥掉——断言「必须有声」的用例假红。理由与上一行逐字相同。
+  resetGroupSoundClaims();
   const prev = {
     Hooks: globalThis.Hooks, Actor: globalThis.Actor, game: globalThis.game,
     canvas: globalThis.canvas, fromUuidSync: globalThis.fromUuidSync,
@@ -657,5 +662,93 @@ test("E3：对照组——让路期内一直生效时照常播出", async () => 
     await resyncPersist(deps(), ENV);
     await afterGrace();
     assert.equal(fake.sequences.length, 1);
+  } finally { world.restore(); fake.restore(); }
+});
+
+/* -------------------------------------------- */
+/*  【批次 E · 闸 a】上身音只在「状态真的变了」时响 */
+/* -------------------------------------------- */
+
+/**
+ * 规格 §4.2 闸 a。**这不是「可能」，是每次画布加载的必经路径**：
+ *
+ * persist cue 恒 `worldPersist:false` → `e.temporary(true)` → 一条都不落世界 flag →
+ * 每次画布加载 Sequencer 先 `tearDownPersistentEffects()` 把 VisibleEffects 全部 destroy
+ * （sequencer.js:11920）→ 发 `sequencerEffectManagerReady`（:11953）→ `resyncPersist` →
+ * `playPersist` 里的 `isPlayingPersist` 查的正是刚被清空的那张表、**恒为假** → 每个
+ * (状态, token) 都走一遍完整 plan。少了这道闸，每次 F5 / 切场景 / 中途进场，场上每个
+ * token 每个状态的上身音都在同一帧一起响。
+ *
+ * 三条路径一起验，缺一条都留着同样的洞：createActiveEffect（转变，要有声）、
+ * resyncPersist 与 createToken（补齐稳态，必须无声）。每一条都带自己的对照组
+ * ——光环必须照常补齐，否则「0 条声音」可以被「这条路径整个断了」蒙混过去。
+ *
+ * 变异验证：把 `planForEffect` 的 `{transition = false}` 默认值改成 `true`，
+ * 下面两条补齐路径立刻转红（实测各 1 条 sound section）。
+ */
+const soundCount = fake => fake.records.filter(r => r.kind === "sound").length;
+const artCount = fake => fake.records.filter(r => r.kind === "effect").length;
+
+/** 一个身上挂着 burning 的 token，供 resync / createToken 两条补齐路径遍历。 */
+function burningToken(id = "t1") {
+  const t = tokenPlaceable({id, center: {x: 500, y: 500}});
+  Object.assign(t, {actor: {effects: [activeEffect(t, "burning")]}});
+  return t;
+}
+
+test("闸 a：createActiveEffect 带上身音（转变）", async () => {
+  const fake = installFakeSequencer();
+  const t = burningToken();
+  const world = stubFoundry({tokens: [t]});
+  try {
+    installEffectTriggers(deps());
+    world.fire("createActiveEffect",
+               Object.assign(activeEffect(t, "burning"), {parent: world.actor}));
+    await afterGrace();
+    assert.equal(artCount(fake), 1, "对照组：光环必须播出，否则下面那个数没有意义");
+    assert.ok(soundCount(fake) > 0,
+      "状态真的落地了却一声不响——上身音整条链断了（兵库 / transition / 去重窗任一处）");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("闸 a：resyncPersist 只补光环、一条上身音都不许有", async () => {
+  const fake = installFakeSequencer();
+  const t = burningToken();
+  const world = stubFoundry({tokens: [t]});
+  try {
+    await resyncPersist(deps(), ENV);
+    await afterGrace();
+    assert.equal(artCount(fake), 1, "对照组：切场景回来光环必须补齐");
+    assert.equal(soundCount(fake), 0,
+      "每次 F5 / 切场景，场上每个 token 每个状态的上身音都在同一帧一起响");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("闸 a：createToken（带状态的 token 入场）同样不许有上身音", async () => {
+  const fake = installFakeSequencer();
+  const t = burningToken("t9");
+  const world = stubFoundry({tokens: [t]});
+  try {
+    installEffectTriggers(deps());
+    world.fire("createToken", {parent: {isView: true}, object: t});
+    await afterGrace();
+    assert.equal(artCount(fake), 1, "对照组：入场 token 的光环必须补齐");
+    assert.equal(soundCount(fake), 0, "每拖一次 token 进场就响一声");
+  } finally { world.restore(); fake.restore(); }
+});
+
+test("闸 a：在角色卡上重新启用一条效果算转变，要有声", async () => {
+  // updateActiveEffect 的 disabled 翻假：一次用户操作、一次只影响一份效果，不会像
+  // resync 那样一帧之内铺满全场，所以它与 createActiveEffect 同侧。
+  const fake = installFakeSequencer();
+  const t = burningToken("t8");
+  const world = stubFoundry({tokens: [t]});
+  try {
+    installEffectTriggers(deps());
+    const effect = {...activeEffect(t, "burning"), parent: world.actor, active: true};
+    world.fire("updateActiveEffect", effect, {disabled: false});
+    await afterGrace();
+    assert.equal(artCount(fake), 1);
+    assert.ok(soundCount(fake) > 0, "重新生效与刚上身在玩家眼里是同一件事，该有同一声");
   } finally { world.restore(); fake.restore(); }
 });

@@ -1,13 +1,246 @@
 # V2 进度与架构评审结论
 
-> 每一轮更新，供跨会话接手。最后更新：2026-08-23。
+> 每一轮更新，供跨会话接手。最后更新：**2026-08-30，发布 v1.0.0**。
 > 上游文档：`V2-PLAN.md`（计划）、`LOCAL-STATUS.md`（本机环境）、`ASSET-NOTES.md`（选材依据）。
+
+---
+
+# v1.0.0（2026-08-30）
+
+**跨会话接手先读这一节。**
+
+## 起因：owner 实机测 0.9 报的三条
+
+| | 原话 | 根因 | 结果 |
+| --- | --- | --- | --- |
+| a | 近战 angle 不对，A 打 B 动画出现在 B 的其他方向 | `at` ≡ `aim` 退化 → `play.mjs` 的 `rotates` 恒 false，**rotateTowards 一次都不调**；偏移恒沿屏幕 +x；方向只有 `isOnLeft` 一个布尔 | 8 罗盘方向 **8 种朝向**；2448 样本复算握把↔施法者、刀锋↔目标偏差 **0.000 格**，格宽 20/100/150/400 四档同结果 |
+| a' | 起点终点过短 | stretchTo 素材两端留白从未补偿（jb2a `ranged` 首尾各 12.5%·d） | 内容段占比 `[0.125,0.875]` → **`[0,1]`** |
+| b | 不够炫酷 / 对不上 / 不够全 | 素材利用率 0.84%，四个命名空间零使用 | 兜底 cue 307 → **100**；画面素材 107 → **173**；travel 最大桶 84 → **19** |
+| c | 声效不够明显 / 不够对 / 不够好 | ①播出窗早收一个 `onsetMs`，**33 条挥击风声的峰值根本没播** ②响度跨度 21.3 dB 且 volume 手挑 ③8 档结果坍缩成 2 种 | 峰值丢失 **33 → 0**；跨度 **21.3 → 12.9 dB**；8 档 **8 种音源**；有声动作 306 → **429/434**；状态层 **0 → 45/46** |
+
+## 过程中挖出、owner 没报但更致命的四条
+
+1. **`fanOfArrows` / `flamingArrow` 在真游戏里一次都不会播** —— 原生 strike VFX 只给
+   `projectile1/2` 造画面（`canvas/vfx/strikes.mjs:44`），`wrap.mjs:48` 见到非 null 就让位；
+   而离线语料**不模拟原生链**，测试全绿。10 条带 `strike` 标签又用弓弩的动作同理。
+2. **`.template()` 静默丢弃 `startPoint === 0`** → `_setAnchors:17024` 无 `?? 0` 兜底 →
+   `anchor.set(NaN)` → **172 条 cue 整条不可见**。不知道这条就会把「短一截」修成「完全不见」。
+3. **运行时 `.30ft` 形同虚设** —— Sequencer 的 `FEET_REGEX` 带前导点，匹配出 `".30ft"`
+   而 json 键是 `"30ft"`，于是恒返回整族、随机取一支，**命中目标档只有 1/5**。
+   离线沿树走到叶子恒单文件，**这条离线永远测不出来**。
+4. **`module.json` 缺 `ggg`** —— 36% 的音效 cue 依赖它，缺包时 cue **静默消失**，而 618 条测试全绿。
+
+## 守卫本身的账（这一轮最值钱的部分）
+
+每一处都是同一个形状：**测的不是想测的那件事**。
+
+- `geom-guard` 13 条里 **8 条是空真断言** —— 把被守功能整个删光，它反而从 9 红变 3 红
+- `sound-layer` 的 `heard()` 不看播出窗 —— 33 条静音 cue 被判成「对齐良好」
+- `clip-table` 的检查条件带 `&& profiles[f]` —— **把唯一的硬阻塞排除在检查之外**（尚未修，见下）
+- 新写的依赖守卫第一次变异也没红 —— `index.modules` 以模块 id 为键，
+  而 `ggg` 注册了两个命名空间，表里只留得下一个
+
+测试 404 → **619 条**；真正的变化是判据从「等于某个数」换成「等于独立算出来的性质」。
+
+## owner 定的一条原则（已写进选材纪律）
+
+> 「闪爆作为一种数据没问题，但是**数据本身导致不使用某个动画这件事情本身不太合理**，
+> 因为合适/更好更重要。**它再闪又如何。**」
+
+据此翻出**三次同型翻车**（`explosion.02.green` / 召唤法阵 6 个 `dark_*` /
+`palette.mjs` 的「同距非 dark 恒赢」），三次都是**拿量 A 回答问题 B + 跳过看图**。
+第三次是全库性的——它把 12 色的族压回 6 色，正好抵消前一次翻案的收益。
+
+**验收一条否决的判据**：把数字从理由里拿掉之后，还剩下一句关于「这东西**是什么**」的判断吗？
+剩得下才是合法否决。三类数字的角色见 `ASSET-NOTES` 顶部：
+排期输入 / 文档粒度条件 / 排序提示——**没有一类是否决线**，
+唯一的硬阻塞是「压根没有量测」（`clipOf` 返回 null → 退回硬编码常数 → 静默错拍）。
+
+## P0 十五条：14.5 条清，剩半条
+
+⚠ **唯一未清的是 0.15 的画面侧**：92 件武器的 impact **结果层**仍是 1 个文件
+（`jb2a.impact.005.white`）。音效侧已清（8 档 8 种音源，逐档验过）。
+
+**为什么留着**：`RESULT_LAYER` 每一档的 `duration`/`fadeIn`/`fadeOut`/`flash` 窗口都是
+**逐帧量出来的**（HIT 那条注释精确到「f16.5 只剩 2%」）。按打击分量分档要给 2-3 支新素材
+做同等级的逐帧量测 + 读图签字，那是选材流程不是改代码。**半量测的素材塞进去会把命中时刻
+搞错，而错拍比复用更糟。**
+
+## 已知欠账（v1.0.0 之后）
+
+1. **`test/clip-table.test.mjs` 的 `&& profiles[f]`** —— 没量测的文件被跳过检查，
+   而那正是唯一的硬阻塞。今天缺口 0，但全库有 43 个文件没量测，一次升级就够触发。
+2. **否决复审判定该翻的 11 条**（shield `.02/.03/.04`、`impact.fire.01.orange`、
+   `eskie.aura.fire.01.orange`、4 个 markers/energy_field 等），见 scratchpad 的 `veto-audit.md`。
+3. **§一「怎么变炫酷」九条一条没做** —— `DENSITY` 是个死设置（所有加特效改动的统一闸门，
+   必须先做）、叠层最多 2 层（≥3 层 0 组）、滤镜只用了 `ColorMatrix.hue`、
+   `copySprite` blfx 用了 5 种玩法我们只用 1 种、`shake` 只在暴击出现。
+4. **`spell.gesture.strike` 按真实武器形制画** —— 需要 `snapshotAction` 为 `cost.weapon`
+   的手势捕获主手武器（快照层改动）。现在用的是通用附魔剑 + 符文色。
+5. **`strike.ranged.draw` 11 条 cue 未归一化**（写死 `volume: 0.8`），已被 `sound-gain` 棘轮挂着。
+6. **`necrotic-00` 32 条**是现在最大的音效桶 —— 12 个伤害类型里 7 个是单文件池。
+
+---
+
+---
+
+# 当前状态（2026-08-29 收盘，批次 0/1 + A + B 已落地，**未提交**）
+
+> **跨会话接手从这里读起。** 下面那一节「当前状态（2026-08-23 收盘，v0.9.0）」是**上一轮**
+> 的收盘快照，四大块的补全度数字仍然有效，但它对**几何**的描述已经全面过时——
+> 这一轮改的正是几何。
+
+## 下一个人的阅读顺序
+
+1. **本节**（这一轮做了什么、推翻了什么）。
+2. `docs/ASSET-NOTES.md` 末尾两节：**「射程口径：贴图内部像素 ≠ 画布距离」**与
+   **「`stretchTo` 素材两端的透明留白（已补偿）」**。这两节是本轮所有几何改动的账本，
+   带完整的原结论 + 推翻依据。
+3. 代码里三处「说理写在注释上」的地方，按这个顺序读：
+   `scripts/armory/travel.mjs` 的 `swingScale()` 与 `meleeGeom()`（近战几何的全部代数）→
+   `scripts/player/play.mjs` 的 `.template()` 补偿块（留白补偿 + NaN 锚点陷阱）→
+   `scripts/armory/impact.mjs` 的 `RESULT_GEOM` / `attackAxis()` / `impactOffset()`
+   （八种攻击结果各转不转、位移怎么算）。
+4. `test/geom-guard.test.mjs` 的文件头（∀ 守卫为什么必须配样本量下限）与
+   `test/todo-retire.test.mjs`（为什么「修好一条 = 悄悄退休一条守卫」需要一道闸）。
+5. 施工清单原文在会话临时目录的 `geom-plan.md`（§零 13 条缺陷 + §五 批次表 A–G）。
+   ⚠ **那是临时文件，可能已经没了**；它里面属于本轮的结论都已经搬进上面 2、3、4 三处，
+   没搬的是**尚未开工的批次 C–G**。
+
+## 验收数字（可复现）
+
+跑全套：`node --test --test-reporter=tap` 加上 `test/*.test.mjs` 展开的全部文件，
+输出 `# tests 521 / pass 520 / fail 0 / skipped 1 / todo 0`。
+
+⚠ **必须加 `--test-reporter=tap`**：spec reporter 在非 TTY 下不打 `# fail` 汇总，
+这一轮踩过一次（看起来全绿，其实有红）。
+
+`node tools/geom-probe.mjs strike` 的 travel 行：8 个罗盘方向给出 **8 种朝向**，
+且每一行的「朝向」与「方位角」逐字相等（改造前恒为 0°）。
+
+## 一、批次 0 / 1：音效播出窗（`playFor`）
+
+**病象**：33 条挥击风声的响度峰值被切在播出窗外——玩家侧的表现不是「声音小」，
+是那一声**根本没播出来**。
+
+**根因**：`sound-table.mjs` 的四个量**基准不一样**。`peakMs` / `onsetMs` / `totalMs`
+相对素材第 0 毫秒，而 `effectiveMs` 相对**起振点**。把 `effectiveMs` 直接当 cue 的
+`duration` 用，播出窗会整整早收一个 `onsetMs`（psfx swooshes 的起振点普遍 170-190ms）。
+
+**修法**：`SFX` 表加第四列 `totalMs`（每条从三元组变成
+`[peakMs, onsetMs, effectiveMs, totalMs]`，由 `npm run sounds` 重新生成），
+`soundAt()` 改成 `contentEnd = min(totalMs, onsetMs + effectiveMs)`、
+`playFor = contentEnd − startTime`。
+`totalMs` 的上钳是必需的：10ms 包络窗的量化误差会让 `onset+effective` 比素材总长多几
+毫秒，不钳会写出越界的 `timeRange`。实测被误裁的是 **379 条 cue**。
+
+**顺带**：`scripts/player/preview.mjs` 的 `PREVIEW_REGION` 跟着
+`tools/dump-fixtures.mjs` 的 `TARGET_REGION` 改口径——后者从「每种 target.type 一个
+手写的规范摆位」改成**按 gesture 从 Crucible 源码复算**（含 `curvature`），
+预览镜像表因此 radius 300→650、length 400→650、ray.width 100→20。
+`test/preview.test.mjs` 的交叉断言如实报了警，这正是它存在的理由。
+
+## 二、批次 A：守卫地基（不改任何画面）
+
+**这一批存在的唯一理由**：B 批的每一条改动都要能被「单条变异精确点红」验收，
+而改之前那套守卫做不到。
+
+- `test/geom-guard.test.mjs`：13 条里 **8 条是空真断言**（62%）。判据是「对所有声明了 P
+  的 cue 必须 Q」的 ∀ 形状，P 空掉时 `assert.deepEqual(bad, [])` 静默通过。
+  隔离副本里把 `resolve.mjs` 的 normalize 改成硬塞 `stretchTo: null, aim: null,
+  offset: {x:0,y:0}`（= 把被守的功能整个删光），文件从 `pass 4 / fail 9` 变成
+  **`pass 10 / fail 3`**——红转绿 6 条、退化成空真 2 条。
+  修法照仓库自己的棘轮惯例（`fallback-ratchet.test.mjs:150`「基线必须贴着实测值，
+  不许留放水余量」）：每条 ∀ 守卫配一对「样本量下限 + 下限必须贴着实测」的断言。
+  现在是 **16 条，全绿，0 todo**。
+- **§1.1 的判据从「8 个方向给出 8 种不同朝向」升级成「朝向 ≡ bearing(施法者→目标)，
+  容差 1°」**。旧判据弱得多：把全部朝向整体偏 90° 也能给出 8 种。
+- **§1.4 的判据本身是个错的不变式**：它写「at == aim 就等于白写 aim」，但
+  `play.mjs:379` 的 `if (cue.aim.missed) e.missed(true)` 落在 `if (rotates)` **之外**，
+  aim 是 missed 的唯一载体。旧判据报的 6392 例退化里 **5992 例（93.7%）是假阳性**。
+  改成 `samePoint(atPt, aimPt) && !c.aim.missed`。
+- 新增 `test/todo-retire.test.mjs`：**修好一条缺陷 = 悄悄退休一条守卫**（todo 的失败
+  不计入 `# fail`），这个文件是那个漏洞的闸。它的探测器自己也有活性检查——
+  旧版靠 `seen > 0` 判活，被 TAP 汇总行喂饱，todo 全摘干净之后它在**零条 todo**
+  的情况下照样绿（批次 B 第 6 步实测踩到），现在改成现造一份「一条通过 + 一条失败」
+  的合成 todo 去验探测器。
+- 新增 `test/impact-harmless.test.mjs`（4 条）与 `test/fixtures/edge-cases.json`
+  （**100 条**合成样本：非 HIT 结果 / critical / healed / `origin.width ∈ {2,3}` /
+  inflection / 带 strikes 的 strike 手势）。这些支路此前是**零覆盖**，先写守卫只会得到空绿。
+- 新增工具 `tools/geom-probe.mjs`（8 罗盘方向落点几何，含 heading/bearing）与
+  `tools/has-path.mjs`（DB 路径校验）。geom-guard 直接 import 前者的 `heading()` /
+  `placeAt()`，**两边不许各写一份**。
+- `test/asset-families.test.mjs`：族级记录的合法性判据从四条扩到六条，并把
+  `jb2a.melee_attack.03.greataxe` **拆成 `.01` / `.02` 两族**（`.02` 有 9 色轴而 `.01`
+  没有，本来就是两种素材），`greatsword` 成员数 4→8。
+  其中第 4 条判据整个换掉了：**「内容占比离散度上限」是错的**——同一族里变体号常常就是
+  「几种不同的挥砍形状」，占画幅不同是设计不是缺陷。族级记录的承诺是「看过的能代表没看
+  过的」，所以对的要求是**看全形态**（按 10% 相对容差聚簇，聚出几簇就得抽过几簇），
+  不是**长得都一样**。
+
+## 三、批次 B：几何原子改动（owner 实机报的头号问题）
+
+owner 原话：「起点/终点不一致/不对。例如近战的 angle 不对——A 打 B，动画在 B 的其他方向
+受到击打，而且击打方向也不对。例如法术，有的时候位置不对，有的时候起点终点过短。」
+
+七步**顺序不可换**，全部落地：
+
+| 步 | 改哪 | 做了什么 |
+| --- | --- | --- |
+| 1 | `tools/fake-sequencer.mjs` | `EFFECT_METHODS` 白名单加 `"template"`。不先加，`play.mjs:444` 的 catch 会把整条 cue 静默吞掉（实测漏加时 play-contract 转红 8 条） |
+| 2 | `scripts/resolver/assets.mjs` | 加 `bandOf()`：运行时后端自己按路径里的 `.30ft` 挑档 |
+| 3 | `scripts/resolver/resolve.mjs` | `CUE_DEFAULTS` 加 `template: null` |
+| 4 | `scripts/player/play.mjs` | `.template()` 留白补偿块 + `rotateTowards` 的 template 分支 + `sizePx` + round-cone 遮罩 |
+| 5 | `scripts/armory/travel.mjs` | 8 条 stretchTo 规则透传 `template`；4 条近战规则收敛成 `meleeGeom()`；`strike.thrown` 删 mirrorY；surge 改落点 |
+| 6 | `scripts/armory/impact.mjs` | 删 1164 条的死 aim；元素层 `randomRotation` → 攻击轴；逐结果裁定表 `RESULT_GEOM`；MISS 的构图补偿 |
+| 7 | `scripts/resolver/context.mjs` | `offsetFor` / `onLeft` 整个删除；`sizeScale` 改连续 `1 + 0.4·(w−1)` |
+
+### 三个必须记住的陷阱（都是实测出来的）
+
+1. **`.template()` 会静默丢弃为 0 的 startPoint → NaN 锚点 → 整条特效不可见。**
+   `EffectSection.template()`（sequencer.js:24079-24108）三条赋值都是
+   `if (x) this._template[k] = x`，0 被丢掉；丢掉后 `_setAnchors:17024` 的
+   `this.template.startPoint / textureWidth` **没有 `?? 0` 兜底**（同一字段在 16971 处
+   **有**），算出 NaN → `sprite.anchor.set(NaN, 0.5)` → vertexData 全 NaN。
+   **不传 template 是安全的，打了补丁反而炸**；影响 172 条 cue = 待修 249 条的 69%。
+   修法 `startPoint: Math.max(startPoint, 1)`（代价上界 0.143%·d，像素读不出来）
+   加上「两端全 0 的模板整条跳过」。
+2. **运行时 `.30ft` 形同虚设**，命中目标档只有 1/5（`FEET_REGEX` 带前导点，
+   `:6768` 恒 undefined → 原样返回整族 → `ctx.pick` 随机取一支）。
+   **离线不这样**——典型的「离线全绿、上机走样」。不修它，陷阱一的补偿会被随机档稀释。
+3. **`at` 改施法者会同时改变 `scaleToObject` 的参照物**（`_applyScaleToObject`
+   17171-17190 取的是 atLocation 那个对象的宽度）。所以近战的「改锚点」与「改尺寸」
+   **必须一次原子落地**，拆两步会让大体型挥击翻倍。
+
+### 推翻的既有结论（本轮落地的部分）
+
+| 文档 / 代码 | 原结论 | 凭什么推翻 |
+| --- | --- | --- |
+| `ASSET-NOTES.md` 末节 | stretchTo 留白不补偿，「理由是 `data/asset-index.json` 里没有这项元数据」 | `git show HEAD:data/asset-index.json` 逐字数：那份索引 `generated: 2026-08-22`，**正是写下这句话的同一批**，四张 `_templates` 表已在（jb2a 13 / eskie 7 / blfx 6 / ggg-vfx 3）、带 `_template` 的节点 **326 个**；`assets.mjs` 的 `templateOfEntry()` 早就把它读成数值三元组。**这句话从落笔起就不成立，不是「过期」** |
+| `ASSET-NOTES.md` 主表 84/85/160/161 四行 + `travel.mjs` 两处注释 | 「野太刀是全族唯一够得到隔一格的一支」 | 那些 x 值量的是**贴图内部像素**；改造前 `scaleToObject` 把画幅差归一化掉（净增益 9.4 画布 px = 0.094 格，缺口是 1 整格），改造后握把→刀锋恒等于中心距、与素材无关。换素材的理由只剩「画面像不像」 |
+| `DESIGN.md` §3.2 / §6.5 / §8.1 | 「未命中用 `.missed()`，不自行计算偏移」 | `calculate_missed_position` 的 `!target` 分支用 `creationTimestamp` 播种、**逐客户端不同**，与本模组「出手端广播一份 plan、各客户端本地播」相抵触；且 DODGE 一旦转向，`rotateTowards` 会填上 `data.target`，`missed && !data.target` 恒假——**它本来就不生效**。范围只限 `impact.layered`，飞行物落空与 `generic.impact` 兜底继续用 |
+| `DESIGN.md` §8.2 第 3 条 | 「镜像朝向：`mirrorY(target.onLeft)`，否则武器反手挥」 | `mirrorY` 翻的是 y 轴，物理上表达不了左右；探针实测 8 方向朝向恒 0°。朝向改由真旋转承担，`ctx.geom.onLeft` 随调用点一起退休 |
+| `DESIGN.md` §8.2 第 2 条 | 「大体型 ×1.4；offset 按 `width` 折半」 | ×1.4 是**一档**的经验值被当成了一条曲线（2×2 与 4×4 同系数），改连续 `1+0.4·(w−1)`（w=2 处仍是 1.4）；`offsetFor` 乘的是**施法者**宽而用它的 cue 锚在**目标**身上，3×3 的施法者会把偏移推到 150px，整个删除 |
+| `sound-table.mjs` 的用法 | 拿 `effectiveMs` 当 cue 的 `duration` | 两者基准差一个 `onsetMs`，379 条 cue 被误裁、33 条挥击风声的峰值落在窗外 |
+| `asset-families.test.mjs` 第 4 条判据 | 「族内均匀 = 内容占比离散度 ≤ 0.20」 | 同族变体号常常就是几种挥砍形状，占画幅不同是设计。改成「抽样必须覆盖每一种形态簇」 |
+| `geom-guard.test.mjs` §1.4 | 「at == aim = 等于白写 aim」 | `play.mjs:379` 的 `e.missed(true)` 落在 `if (rotates)` 之外，aim 是 missed 的唯一载体；旧判据 93.7% 是假阳性 |
+
+## 下一步
+
+批次 **C**（法术区域几何，依赖 B 的 template + sizePx + round-cone）、**D**（素材语义，
+可与 C 并行，每条都要走 ASSET-NOTES 读图流程）、**E**（音效）、**F**（状态时间轴）、
+**G**（架构清理）都还没开工。C 有一个已知阻塞点：fan 的 210° 会触发 `coneYScale` 的 warn
+从而弄红 `coverage.test.mjs`。
+
+**本轮全部改动仍在工作区，未 commit**——提交由 owner 决定。
 
 ---
 
 # 当前状态（2026-08-23 收盘，v0.9.0）
 
-> **跨会话接手先读这一节。** 下面的数字都是实测的，重跑 `node --test "test/*.test.mjs"`
+> **这是上一轮（2026-08-23）的收盘快照。** 四大块的补全度数字仍然有效；
+> **但它对几何的描述已被 2026-08-29 那一轮全面订正**，几何相关的话以上一节为准。
+> 下面的数字都是实测的，重跑 `node --test "test/*.test.mjs"`
 > 与 `test/weapon-dispatch.test.mjs` 可复现。
 
 ## 四大块

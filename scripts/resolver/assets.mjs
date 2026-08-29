@@ -9,6 +9,8 @@
  * 运行时后端读 Sequencer.Database 供游戏内使用。同源数据，测试与运行时天然一致。
  */
 
+import {warn} from "../log.mjs";
+
 const META_KEYS = new Set(["_template", "_metadata", "_templates"]);
 
 /* -------------------------------------------- */
@@ -140,6 +142,60 @@ export function flattenEntry(e) {
   return [];
 }
 
+/**
+ * 从一个 `SequencerFileRangeFind` 条目里挑出路径写明的那一档距离（`…​.30ft`）。
+ *
+ * **这是第二处「离线全绿、上机走样」**（与 flattenEntry 那处同源，见其表格）。
+ * Sequencer 4.2.3 的 `Database.getEntry`（sequencer.js:6749-6770）自己就选不中档：
+ *
+ *   · `CONSTANTS.FEET_REGEX = /\.[0-9]+ft\.*​/g`（sequencer.js:20）**带前导点**，
+ *     `:6753 ft = inString.match(FEET_REGEX)[0]` 实测得到的是 `".30ft"`；
+ *   · 而模块 json 里 `entry.file` 的键是**无点**的 `"30ft"`
+ *     （`grep -c '"\.[0-9]\+ft"' jb2a_sequencer.js` = 0）；
+ *   · 于是 `:6768 if (ft) foundFile = entry.file?.[ft] ?? foundFile;` 恒 undefined，
+ *     `?? foundFile` 把**整个 RangeFind 条目原样返回**。
+ *
+ * 三处互证这是漏网而非有意：Sequencer 自己的 `copyPath`（:7273-7276）写
+ * `specificFt[0].replaceAll(".", "")`，`getPreviewFile`（:6522-6527）按无点段取，
+ * `SequencerFileRangeFind.getFile(inFt)`（:6512）收的也是无点的 `"15ft"`。
+ *
+ * 后果：条目原样回来 → `flattenEntry` 走 `getAllFiles()`（:6508
+ * `Object.values(this.file)`）把**所有距离档**一起摊平 → `ctx.pick` 从全池里随机摇一支，
+ * 命中路径写明那一档的概率只有 1/档数（jb2a 箭是 1/5）。各档贴图宽差到 600↔4000，
+ * 留白比例也不同（05ft 档 33.3%·d vs 30ft 档 12.5%·d），下面 play 层的模板补偿会被
+ * 随机档整个稀释；`psfx.ranged-weapons.longbow.v1.05ft` 这类 ASSET-NOTES 明令否决的
+ * 素材也会照播（sound-table 的时序是按 30ft 档逐条实测的）。
+ *
+ * **离线后端不会这样**：`offlineBackend.getEntry` 沿点分路径一路走到 `.30ft` 那个叶子，
+ * 拿到的恒是单文件。所以这条缺陷只在运行时存在，只能靠钉住上游源码的守卫看住
+ * （test/sequencer-contract.test.mjs 把 FEET_REGEX 与 :6768 那一行同时钉死——上游哪天
+ * 把点去掉，这个函数就该退休）。
+ *
+ * @param {string} path            调用方请求的原始路径（**带**点分的 ft 段）
+ * @param {*}      entry           `Sequencer.Database.getEntry` 的返回值
+ * @returns {*}                    该档的文件（string 或 string[]），或原样的 entry
+ */
+function bandOf(path, entry) {
+  // 只对「带距离档的条目」动手。非 RangeFind 的条目 file 是字符串/数组，
+  // 按 ft 键去索引只会得到 undefined，白白多绕一圈。
+  if (!entry || entry.rangeFind !== true || !entry.file || typeof entry.file !== "object") return entry;
+  // 局部字面量、**不带 /g**：CONSTANTS.FEET_REGEX 是带 /g 的共享实例，`.test`/`.exec`
+  // 会推进 lastIndex，同一个正则连续调两次结果不同（Sequencer 自己 :6752 先 test 再
+  // match 就踩在这个语义上，只是它每次都从 0 重新开始才没出事）。
+  // 捕获组取**无点**的 `30ft`，`(?=\.|$)` 保证只匹配完整的一段。
+  const m = /\.(\d+ft)(?=\.|$)/.exec(path);
+  if (!m) return entry;
+  const band = entry.file[m[1]];
+  if (band === undefined) {
+    // 明确留痕而不是静默回退整族：路径写了一档、库里没有这一档，说明兵库的路径
+    // 与素材包对不上，随机摇一支只会把错误埋到画面里。
+    warn(`素材路径 "${path}" 指名了距离档 "${m[1]}"，但该条目只有 `
+      + `[${Object.keys(entry.file).join(", ")}]；回退到整族随机取，画面可能与兵库实测的档位不符`);
+    return entry;
+  }
+  return band;
+}
+
 /** 条目自带的锚点模板（授权网格 px / 前导 px / 拖尾 px），拿不到就 null。 */
 function templateOfEntry(e) {
   if (Array.isArray(e)) return templateOfEntry(e[0]);
@@ -166,7 +222,10 @@ export function runtimeBackend() {
       try {
         const e = Sequencer.Database.getEntry(path, {softFail: true}); // foundry-global-ok
         if (e === false || !e) return null;
-        const files = flattenEntry(e);
+        // 先按路径里的 `.30ft` 选档再摊平（见 bandOf）；
+        // `templateOfEntry` **仍然传原始的 e**——模板挂在条目上，不挂在某一档上，
+        // 选完档拿到的是纯文件名/文件名数组，那上面没有 template 可读。
+        const files = flattenEntry(bandOf(path, e));
         if (!files.length) return null;
         return {file: files.length === 1 ? files[0] : files, template: templateOfEntry(e)};
       } catch { return null; }

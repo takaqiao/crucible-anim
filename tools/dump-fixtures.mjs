@@ -40,10 +40,39 @@ const WEAPONS = existsSync(join(ROOT, "data/weapons.json"))
 const DEFAULT_ACTIONS = ["cast", "move", "fall", "defend", "delay", "escape", "reactiveStrike",
                          "throwWeapon", "investiture", "recover", "reload", "rest", "strike"];
 
+/**
+ * `dice/attack-roll.mjs:67-76` 的 `AttackRoll.RESULT_TYPES`。语料从前 642/642 全是
+ * HIT(7)，于是 impact 的 8 个结果层里 7 个从没被任何测试跑到过（施工清单 §4.3）。
+ */
+const RESULT = {MISS: 0, DODGE: 1, PARRY: 2, BLOCK: 3, ARMOR: 4, RESIST: 5, GLANCE: 6, HIT: 7};
+const RESULT_HIT = RESULT.HIT;
+
 const RUNES = ["control", "death", "earth", "flame", "frost", "illumination",
                "illusion", "kinesis", "life", "oblivion", "soul", "storm"];
 const GESTURES = ["arrow", "aspect", "aura", "blast", "cone", "conjure", "create", "fan",
                   "influence", "pulse", "ray", "sense", "step", "strike", "surge", "touch", "ward"];
+
+/**
+ * `const/spellcraft.mjs` 的 `INFLECTIONS` 顶层 10 个键（屈折 / 变体施法）。
+ * 主语料 204 条法术的 `spell.inflection` **全是 null**（`spellSnapshot` 的默认值），
+ * 这条轴在离线侧一条样本都没有——施工清单 §4.3 点名的六个结构性盲区之一。
+ * 由 test/source-tables.test.mjs 解析源码核对锁定。
+ */
+export const INFLECTIONS = ["compose", "determine", "eluding", "extend", "negate",
+                            "pull", "push", "quicken", "react", "reshape"];
+
+/**
+ * 8 个罗盘方向的单位向量。**画布 y 向下**，所以 +y 是正南。
+ *
+ * 主语料的施法者恒在 (500,500)、两个目标恒在**正右方**——施工清单 §4.3 把这条列为
+ * 「比空真断言更根本」的结构性盲区：任何「朝向跟着目标走」的断言在只有正东一个方向的
+ * 语料上都是既证不伪也证不实的。8 方向样本让它们有定义域。
+ */
+export const DIRECTIONS = {
+  east: {dx: 1, dy: 0}, southeast: {dx: 1, dy: 1}, south: {dx: 0, dy: 1},
+  southwest: {dx: -1, dy: 1}, west: {dx: -1, dy: 0}, northwest: {dx: -1, dy: -1},
+  north: {dx: 0, dy: -1}, northeast: {dx: 1, dy: -1}
+};
 
 /**
  * 12 个符文的伤害类型与资源池，取自 crucible/module/const/spellcraft.mjs 的
@@ -121,12 +150,55 @@ export const RUNE_RESOURCE = {
  * `armory/travel.mjs:349` 的注释早就写着「现有 fixture 的 strikes 恒为 [] 正好掩盖了
  * 这个实战 bug」——知道，但没人回头补语料。
  */
-const TAG_PROPAGATE = {
+/**
+ * `const/action.mjs` 的 `export const TAGS = {...}` 字面量里**静态写死**的 12 条传播。
+ * 逐条取自源码的 `TAGS.<tag>.propagate`（行号 299/317/346/366/409/805/828/852/866/885/
+ * 904/931），由 test/source-tables.test.mjs 的「TAG_PROPAGATE 与 const/action.mjs 的
+ * propagate 逐条一致」解析核对。
+ */
+const STATIC_TAG_PROPAGATE = {
   projectile: ["ranged"], mechanical: ["ranged"], talisman: ["strike"],
   unarmed: ["melee"], rest: ["noncombat"], melee: ["strike"], ranged: ["strike"],
   mainhand: ["strike"], twohand: ["strike"], offhand: ["strike"], thrown: ["melee"],
   natural: ["melee"]
 };
+
+/**
+ * `const/skills.mjs` 的 `SKILLS` 顶层 12 个键。`const/action.mjs:1369-1394` 的
+ * `for (const {id, abilities, label} of Object.values(SKILLS))` 循环把每一个都注册成
+ * `TAGS[id] = {category: "skills", propagate: ["skill"], initialize(){ ... this.usage.skillId = id ... }}`。
+ *
+ * **这 12 条从前一条都没复刻**，于是离线语料里带技能标签的动作 `tags.includes("skill")`
+ * 恒假、`usage.isAttack` 恒 false（判据是 `["strike","spell","skill"]`），实机却是 true——
+ * 同一个动作离线走兜底、上机走攻击通路，是施工清单 §4.3 点名的「本仓库最贵的失败模式」。
+ * 顺带 `usage.skillId` 也是靠这条循环的 `initialize()` 填的，语料从前恒为 null。
+ */
+const SKILL_TAGS = ["athletics", "awareness", "stealth", "wilderness", "arcana", "medicine",
+                    "science", "society", "deception", "diplomacy", "intimidation", "performance"];
+
+/**
+ * `const/actor.mjs` 的 `MOVEMENT_ACTIONS` 顶层 9 个键。`const/action.mjs:1299-1310` 的
+ * `for (const id of Object.keys(MOVEMENT_ACTIONS))` 循环把每一个注册成
+ * `TAGS[id] = {category: "movement", propagate: ["movement"]}`。
+ *
+ * 与技能同因同果：`walk`/`jump`/`fly` 这些标签在离线语料里不会传出 `movement`，
+ * 而兵库里按 `movement` 分支的规则（travel 的冲扑、cast 的 self.shape）因此少接一批动作。
+ */
+const MOVEMENT_TAGS = ["walk", "step", "crawl", "jump", "climb", "swim", "fly",
+                       "blink", "burrow"];
+
+/**
+ * Crucible 的标签传播表 = 静态 12 条 + 技能 12 条 + 移动 9 条 = **33 条**。
+ * 三个来源各自的行号与后果见上面三段注释；整表由 test/source-tables.test.mjs 解析
+ * `const/action.mjs`（含两条 `for ... TAGS[id] = {...}` 循环）逐条核对，上游加标签这里先红。
+ */
+const TAG_PROPAGATE = {
+  ...STATIC_TAG_PROPAGATE,
+  ...Object.fromEntries(SKILL_TAGS.map(t => [t, ["skill"]])),
+  ...Object.fromEntries(MOVEMENT_TAGS.map(t => [t, ["movement"]]))
+};
+
+export {STATIC_TAG_PROPAGATE, SKILL_TAGS, MOVEMENT_TAGS, TAG_PROPAGATE};
 
 /** 传递闭包：`thrown → melee → strike`、`projectile → ranged → strike` 都要走到底。 */
 function propagateTags(tags) {
@@ -209,23 +281,178 @@ export const GESTURE_TARGET = {
   ray: "ray", sense: "aura", step: "movement", strike: "single", surge: "ray",
   touch: "single", ward: "self"
 };
+/* -------------------------------------------------------------------------- */
+/*  模板区域：按 gesture 复算，公式逐行抄自 crucible 的 #getRegionData             */
+/* -------------------------------------------------------------------------- */
+
 /**
- * 每种 target.type 一个规范摆位。**注意 rotation 一律为 0、cone 的 angle 取自
- * crucible/module/const/action.mjs 的 TARGET_TYPES.<key>.region.angle（cone=60、
- * fan=210，由 test/source-tables.test.mjs 逐项解析源码核对锁定，不是手抄）**：
- * 真实放置时 rotation 由玩家鼠标现算（crucible 的 dice/action-use-dialog.mjs 按
- * directionDelta 吸附后写进 shape.rotation），compendium 里没有「真值」可抽，
- * 这份语料天然覆盖不到旋转。任何依赖模板朝向/张角的规则都不能靠这里证伪，
- * 必须在 test/armory-travel.test.mjs 的「模板几何」一组里就地合成旋转过的 region。
+ * 每尺多少像素 —— 就是 `canvas.dimensions.distancePixels`，`#getRegionData` 里的那个 `d`。
+ *
+ * Crucible 的 `system.json` 写死 `grid: {type: 1, distance: 5, units: "ft"}`；
+ * `documents/scene.mjs:34-38` 的微格（microgrid）把 `grid.size /= 5`、`grid.distance = 1`，
+ * 两种口径算出来的 `size/distance` **是同一个数**：源格 100px/5ft ≡ 微格 20px/1ft。
+ * 这份语料的 `GRID = 100` 走源格口径，于是 d = 100/5 = 20 px/尺。
  */
-export const TARGET_REGION = {
-  blast: {type: "circle", x: 900, y: 500, radius: 200},
-  cone: {type: "cone", x: 500, y: 500, radius: 300, angle: 60, rotation: 0},
-  fan: {type: "cone", x: 500, y: 500, radius: 200, angle: 210, rotation: 0},
-  ray: {type: "line", x: 500, y: 500, length: 400, width: 100, rotation: 0},
-  pulse: {type: "circle", x: 500, y: 500, radius: 200},
-  aura: {type: "circle", x: 500, y: 500, radius: 150}
+const FT_PER_SQUARE = 5;
+const D = GRID / FT_PER_SQUARE;
+
+/**
+ * 合成施法者的体型，单位**尺**。`#getRegionData:498` 的 `addRange = regionConfig.addSize
+ * ? (this.actor.size / 2) : 0`，而 `documents/actor.mjs:185 get size()` 返回
+ * `system.movement.size`（微格单位＝尺；`models/actor-hero.mjs:104` 的祖先默认 `size = 4`）。
+ *
+ * ⚠ **已知近似**：语料的 `origin.width` 单位是 5 尺格（中体型 = 1），这里按
+ * `width × 5` 折算成尺，中体型得 5 尺，比真实英雄的 4 尺大 1 尺（addRange 差 0.5 尺 = 10px）。
+ * 语料里的 token 宽度本来就是「整格」而不是 Crucible 的微格真值，改这一处不能单独修好，
+ * 只有把整份语料迁到微格坐标才行——那会移动全仓库每一个几何断言，不属本批。
+ * 守卫（test/source-tables.test.mjs）用的是**同一条折算式**再从源码复算，
+ * 所以它盯的是公式而不是这个近似值。
+ */
+const casterSizeFt = width => width * FT_PER_SQUARE;
+
+/**
+ * `const/action.mjs` 的 `TARGET_TYPES.<key>.region`，逐字段抄下来（`region: null` 的四个
+ * 目标类型也列进来，好让守卫能核对**键集合**而不只是有 region 的那几个）。
+ *
+ * 五个字段各有各的用处，缺一个就有一整类模板算错：
+ *   · `shape`     决定 `#getRegionData` 走哪个 switch 分支（circle/cone/emanation/line/rectangle）
+ *   · `anchor`    "self" = 锚在施法者身上（区域中心/锥尖/线首）；"vertex" = 玩家在射程内点一个顶点
+ *   · `addSize`   true 时半径/长度额外加 `actor.size / 2` 尺
+ *   · `width`     line 形状的**宽度**（格），ray=1 / wall=2；`ray` 目标类型还会被 target.size 覆盖
+ *   · `angle`     cone 形状的张角，并决定 `curvature`（≤90° 平底 flat，>90° 圆底 round）
+ *
+ * 由 test/source-tables.test.mjs 解析源码逐项核对锁定。
+ */
+export const TARGET_TYPE_REGION = {
+  none: null, self: null, single: null, movement: null,
+  cone:   {shape: "cone",      angle: 60,  directionDelta: 15, anchor: "self",   addSize: true,  ephemeral: true},
+  fan:    {shape: "cone",      angle: 210, directionDelta: 15, anchor: "self",   addSize: true,  ephemeral: true},
+  pulse:  {shape: "circle",                                    anchor: "self",   addSize: true,  ephemeral: true},
+  aura:   {shape: "emanation",                                 anchor: "self",   addSize: false, ephemeral: false},
+  blast:  {shape: "circle",                                    anchor: "vertex",                 ephemeral: true},
+  ray:    {shape: "line",      width: 1,   directionDelta: 3,  anchor: "self",   addSize: true,  ephemeral: true},
+  summon: {shape: "rectangle", size: 3,                        anchor: "vertex",                 ephemeral: true},
+  wall:   {shape: "line",      width: 2,                       anchor: "vertex",                 ephemeral: false}
 };
+
+/**
+ * `const/spellcraft.mjs` 的 `GESTURES.<gesture>.target.size`（只有 6 个手势写了 size）。
+ * **这就是「按 gesture 复算」的全部理由**：老表按 target.type 建，于是
+ *   · `aura`（20 尺）与 `sense`（30 尺）共用一条 —— 半径差 1.5 倍；
+ *   · `ray`（宽 1 尺）与 `surge`（宽 10 尺）共用一条 —— **宽度差一个数量级**，
+ *     而 surge 正是施工清单 §0.11 那条「画面是脚下爆闪、模板却是 15×10 尺直线」的动作。
+ */
+export const GESTURE_TARGET_SIZE = {aura: 20, blast: 6, pulse: 10, ray: 1, sense: 30, surge: 10};
+
+/**
+ * `const/spellcraft.mjs` 的 `GESTURES.<gesture>.range.maximum`。没有 range 块的四个手势
+ * （aspect / aura / sense / ward）与 `range: {weapon: true}` 的 strike 不在表里 —— 它们的
+ * 目标类型也都不带 region，取不到就是 0，不影响任何形状。
+ */
+export const GESTURE_RANGE = {
+  arrow: 60, blast: 60, cone: 30, conjure: 30, create: 10, fan: 6,
+  influence: 1, pulse: 0, ray: 30, step: 20, surge: 15, touch: 1
+};
+
+/**
+ * 「玩家会把 anchor:"vertex" 的区域放在哪」的规范答案：沿 +x 放到**远目标身上**
+ * （ORIGIN 东侧 400px = 20 尺），射程不够时贴着射程上限。
+ * blast（射程 60 尺）与 conjure（30 尺）落在远目标处，create（10 尺）落在 200px 处。
+ */
+function vertexPoint(maxRangeFt) {
+  const distantFt = (DISTANT.x - ORIGIN.x) / D;
+  return {x: ORIGIN.x + Math.min(maxRangeFt, distantFt) * D, y: ORIGIN.y};
+}
+
+/**
+ * 复算一个手势的落地区域，**逐行对着 crucible `dice/action-use-dialog.mjs` 的
+ * `#getRegionData`（:491-600）翻译**，产出的形状就是 `trigger/snapshot.mjs:229-231`
+ * 从 `action.region.shapes[0].toObject()` 抄进快照的那个对象。
+ *
+ * 老表（按 target.type 手写六条）与源码至少五处不符：aura 写成 circle 而源码是 emanation、
+ * ray 与 surge 共用一条而真值差一个数量级、summon 整个缺项、pulse/blast 半径错、
+ * **cone 的 curvature 全表缺失**（fan 的 210° 是圆底，画面按平底做就会畸形）。
+ *
+ * ⚠ `rotation` 一律为 0：真实放置时它由玩家鼠标现算
+ * （`#onPlaceRegion` 的 onMove 按 `regionConfig.directionDelta` 吸附后 `updateSource({rotation})`），
+ * compendium 里没有真值可抽。任何依赖模板朝向的规则都不能靠这份语料证伪，
+ * 必须在 test/armory-travel.test.mjs 的「模板几何」一组里就地合成旋转过的 region。
+ *
+ * @param {string} gesture           手势 id
+ * @param {{x: number, y: number, width: number}} caster  施法者 token（中心点与格宽）
+ * @returns {object|null}            RegionShape 数据；该手势的目标类型没有 region 时返回 null
+ */
+export function regionForGesture(gesture, caster = {x: ORIGIN.x, y: ORIGIN.y, width: 1}) {
+  const cfg = TARGET_TYPE_REGION[GESTURE_TARGET[gesture]];
+  if (!cfg) return null;
+
+  // #getRegionData:495-498
+  const maxRange = GESTURE_RANGE[gesture] ?? 0;
+  const targetSize = GESTURE_TARGET_SIZE[gesture] ?? null;
+  const baseRange = targetSize ? targetSize : maxRange;
+  const addRange = cfg.addSize ? casterSizeFt(caster.width) / 2 : 0;
+
+  const self = {x: caster.x, y: caster.y};
+  const vertex = vertexPoint(maxRange);
+  let shape;
+  switch (cfg.shape) {
+    case "circle":                                                   // :510-518
+      shape = {type: "circle", ...(cfg.anchor === "self" ? self : vertex),
+               radius: (baseRange + addRange) * D};
+      break;
+    case "cone":                                                     // :519-529
+      shape = {type: "cone", ...self,
+               radius: (baseRange + addRange) * D,
+               angle: cfg.angle ?? 60, rotation: 0,
+               curvature: (cfg.angle ?? 60) <= 90 ? "flat" : "round"};
+      break;
+    case "emanation":                                                // :530-545
+      shape = {type: "emanation", ...self,
+               radius: (baseRange + addRange) * D,
+               // token 的 x/y 是**左上角**（source 字段），不是中心；shape 是
+               // CONST.TOKEN_SHAPES，方格网格下恒为 0。
+               base: {type: "token", x: caster.x - (caster.width * GRID) / 2,
+                      y: caster.y - (caster.width * GRID) / 2,
+                      width: caster.width, height: caster.width, shape: 0}};
+      break;
+    case "line":                                                     // :546-555
+      shape = {type: "line", ...(cfg.anchor === "self" ? self : vertex),
+               length: (maxRange + addRange) * D,
+               width: (cfg.width ?? 1) * D, rotation: 0};
+      break;
+    case "rectangle": {                                              // :556-568
+      const size = cfg.width ?? 1;
+      shape = {type: "rectangle", ...(cfg.anchor === "self" ? self : vertex),
+               width: size * D, height: maxRange * D,
+               anchorX: 0.5, anchorY: 0.5, rotation: 0};
+      break;
+    }
+    default: throw new Error(`未知的 region.shape "${cfg.shape}"`);
+  }
+
+  // 按 target.type 的后处理（#getRegionData:573-587）
+  switch (GESTURE_TARGET[gesture]) {
+    case "summon": {                                                 // :575-580
+      const size = targetSize ?? cfg.size ?? 1;
+      shape.height = shape.width = size * D;
+      shape.anchorX = shape.anchorY = 0;
+      break;
+    }
+    case "ray":                                                      // :581-583
+      if (targetSize) shape.width = targetSize * D;
+      break;
+  }
+  return shape;
+}
+
+/**
+ * 17 个手势各一份规范区域，按中体型（width = 1）施法者复算。键是**手势**不是目标类型。
+ *
+ * 没有 region 的 7 个手势（arrow / aspect / influence / step / strike / touch / ward）取值 null，
+ * 与 `TARGET_TYPES.<type>.region === null` 一一对应。
+ */
+export const TARGET_REGION = Object.fromEntries(
+  GESTURES.map(g => [g, regionForGesture(g)]));
 
 /** 一个确定性的字符串哈希，用作 fixture 的 seed，保证跨机器可复现。 */
 function hashSeed(s) {
@@ -235,7 +462,8 @@ function hashSeed(s) {
 }
 
 function makeToken(pos, {width = 1} = {}) {
-  const tokenId = `tok-${pos.x}-${pos.y}`;
+  // 体型后缀只在 width > 1 时加，好让改动前就有的 434+92 条样本 tokenId 一字不变
+  const tokenId = width === 1 ? `tok-${pos.x}-${pos.y}` : `tok-${pos.x}-${pos.y}-w${width}`;
   return {
     // uuid 不可省：生产环境 trigger/snapshot.mjs 的 tokenGeom() 一定会写它
     // （`token.document?.uuid`），语料缺它会让一整批断言退化成同义反复——例如
@@ -249,18 +477,33 @@ function makeToken(pos, {width = 1} = {}) {
   };
 }
 
-function makeTarget(pos, {adjacent, damageType, resource = "health", width = 1}) {
+/**
+ * 一个目标的结算结果。
+ *
+ * `result` / `critical` / `healed` 三个参数的默认值就是从前写死的那一组
+ * （HIT / 非暴击 / 不治疗），**默认调用逐字段等价于改动前**——现有 434+92 条样本
+ * 一个字节都不该动（施工清单 §批次 A：新维度只许「额外生成」，不许替换）。
+ * 三个参数只给下面的「边界语料」用，见 EDGE_CASES 那一段。
+ *
+ * `healed > 0` 时 damage 置 null：`trigger/snapshot.mjs:207-213` 按 `r.delta` 的符号
+ * 分流（负数进 damage、正数进 healed），同一次结算不会两边都有。
+ */
+function makeTarget(pos, {adjacent, damageType, resource = "health", width = 1,
+                          result = RESULT_HIT, critical = false, healed = 0,
+                          origin = ORIGIN}) {
   const t = makeToken(pos, {width});
   return {
-    ...t, adjacent, onLeft: pos.x < ORIGIN.x,
-    results: [{result: 7, critical: false}],
-    damage: damageType ? {total: 8, type: damageType, resource} : null,
-    healed: 0, effects: []
+    ...t, adjacent, onLeft: pos.x < origin.x,
+    results: [{result, critical}],
+    damage: (damageType && !healed) ? {total: 8, type: damageType, resource} : null,
+    healed, effects: []
   };
 }
 
 function baseSnapshot(id, {tags = [], target, range, cost, spell = null, region = null,
-                          strikes = [], usage = {}, dealt = null}) {
+                          strikes = [], usage = {}, dealt = null,
+                          origin = ORIGIN, originWidth = 1, targetsAt = null,
+                          result = RESULT_HIT, critical = false, healed = 0}) {
   const dmg = tags.find(t => ["bludgeoning", "corruption", "piercing", "slashing", "poison",
     "acid", "fire", "cold", "electricity", "psychic", "radiant", "void"].includes(t)) ?? null;
   const wantsTargets = target?.type && !["none", "self", "summon"].includes(target.type);
@@ -269,13 +512,16 @@ function baseSnapshot(id, {tags = [], target, range, cost, spell = null, region 
   // RUNES.<rune>.damageType，见 RUNE_DAMAGE），否则退回 tags 里的伤害类型词
   // （TAGS[<damageType>].initialize 写的那个 usage.damageType ??= id）。
   const hitType = dealt?.type ?? dmg;
+  // targetsAt 不给时用「正东贴身 + 正东隔格」这一对老摆位，与改动前逐字段相同。
+  const spots = targetsAt ?? [{pos: ADJACENT, adjacent: true}, {pos: DISTANT, adjacent: false}];
   return {
     id, name: id, actorType: "hero",
     tags, target, range, cost, spell, region, strikes,
-    origin: makeToken(ORIGIN),
+    origin: makeToken(origin, {width: originWidth}),
     targets: wantsTargets
-      ? [makeTarget(ADJACENT, {adjacent: true, damageType: hitType, resource}),
-         makeTarget(DISTANT, {adjacent: false, damageType: hitType, resource})]
+      ? spots.map(({pos, adjacent, width = 1}) =>
+          makeTarget(pos, {adjacent, damageType: hitType, resource, width,
+                           result, critical, healed, origin}))
       : [],
     usage: {
       damageType: dmg, isAttack: !!usage.isAttack, isRanged: !!usage.isRanged,
@@ -283,6 +529,45 @@ function baseSnapshot(id, {tags = [], target, range, cost, spell = null, region 
     },
     seed: hashSeed(id)
   };
+}
+
+/**
+ * 一条组合法术的快照。主语料的 204 条（12 符文 × 17 手势）与下面「边界语料」的
+ * 治疗 / 屈折 / strike 手势 / 大体型样本共用它，省得两边慢慢漂开。
+ *
+ * ⚠ **已知不一致**：`range` 写死 `{minimum: 0, maximum: 10}`、`target.distance` 写死 5，
+ * 而 `region` 现在是按 `GESTURE_RANGE`（cone 的真射程是 30 尺）复算的。没有任何兵库规则
+ * 读这两个字段（全仓 grep：`s.range` / `s.target.distance` 零命中），所以本轮不动它们——
+ * 改了会平白移动 434 条样本的字节而换不来任何守卫。要修的时候把这两处一起换成
+ * `GESTURE_RANGE` / `GESTURE_TARGET_SIZE` 即可。
+ *
+ * @param {string} id
+ * @param {string} rune
+ * @param {string} gesture
+ * @param {object} [variant]  透传给 baseSnapshot 的边界维度（result / critical / healed /
+ *                            origin / originWidth / targetsAt / strikes / inflection）
+ */
+function spellSnapshot(id, rune, gesture, {inflection = null, strikes = [], ...variant} = {}) {
+  const tt = GESTURE_TARGET[gesture];
+  return baseSnapshot(id, {
+    tags: ["spell", "composed"],
+    target: {type: tt, number: tt === "single" ? 1 : 0, distance: 5, scope: 2},
+    range: {minimum: 0, maximum: 10},
+    cost: {action: 1, focus: 1, heroism: 0, health: 0},
+    spell: {rune, gesture, inflection},
+    strikes,
+    // 按**手势**取，不是按目标类型：aura/sense 与 ray/surge 各自共用一个 target.type
+    // 但尺寸完全不同（见 GESTURE_TARGET_SIZE 的注释）
+    region: regionForGesture(gesture, {x: variant.origin?.x ?? ORIGIN.x,
+                                       y: variant.origin?.y ?? ORIGIN.y,
+                                       width: variant.originWidth ?? 1}),
+    // 组合法术的伤害类型只写在 targets[].damage 上、不写 usage.damageType——
+    // crucible 的 CrucibleSpellAction#prepareDamage 只产出 action.damage.type，
+    // usage.damageType 对法术恒为 undefined（见 models/spell-action.mjs）。
+    dealt: {type: RUNE_DAMAGE[rune]},
+    usage: {isAttack: true, isRanged: tt !== "self", resource: RUNE_RESOURCE[rune]},
+    ...variant
+  });
 }
 
 /**
@@ -337,7 +622,10 @@ if (isMain) {
           strikes: (cost?.weapon === true || full.includes("strike")) ? synthWeapon(full) : [],
           usage: {
             isAttack: full.some(t => ["strike", "spell", "skill"].includes(t)),
-            isRanged: full.includes("ranged")
+            isRanged: full.includes("ranged"),
+            // 技能标签的 initialize() 会写 `this.usage.skillId = id`
+            // （const/action.mjs:1374-1382）。语料从前恒为 null，因为技能标签压根没进传播表。
+            skillId: full.find(t => SKILL_TAGS.includes(t)) ?? null
           }
         }));
       }
@@ -364,23 +652,7 @@ if (isMain) {
   }
 
   for (const rune of RUNES) {
-    for (const gesture of GESTURES) {
-      const id = `spell.${rune}.${gesture}`;
-      const tt = GESTURE_TARGET[gesture];
-      out.push(baseSnapshot(id, {
-        tags: ["spell", "composed"],
-        target: {type: tt, number: tt === "single" ? 1 : 0, distance: 5, scope: 2},
-        range: {minimum: 0, maximum: 10},
-        cost: {action: 1, focus: 1, heroism: 0, health: 0},
-        spell: {rune, gesture, inflection: null},
-        region: TARGET_REGION[tt] ?? null,
-        // 组合法术的伤害类型只写在 targets[].damage 上、不写 usage.damageType——
-        // crucible 的 CrucibleSpellAction#prepareDamage 只产出 action.damage.type，
-        // usage.damageType 对法术恒为 undefined（见 models/spell-action.mjs）。
-        dealt: {type: RUNE_DAMAGE[rune]},
-        usage: {isAttack: true, isRanged: tt !== "self", resource: RUNE_RESOURCE[rune]}
-      }));
-    }
+    for (const gesture of GESTURES) out.push(spellSnapshot(`spell.${rune}.${gesture}`, rune, gesture));
   }
 
   // ---- 武器语料：92 件武器各一份平打快照 -------------------------------------
@@ -416,6 +688,113 @@ if (isMain) {
 
   writeFileSync(join(ROOT, "test/fixtures/actions.json"), JSON.stringify(out));
   console.log(`actions.json: ${out.length} 个快照`);
+
+  // ---- 边界语料：六条盲区轴的合成样本 ---------------------------------------
+  //
+  // **额外生成，不替换现有样本**（施工清单 §批次 A；不能替换的理由见本文件 RUNE_DAMAGE
+  // 下方那段「已知简化」——主语料的 result/damage/healed 是有意固定的合成值，动它会让
+  // 元素层覆盖从 12/12 退回 11/12）。
+  //
+  // 单独一份 `edge-cases.json` 而不是并进 actions.json，理由与 weapon-strikes.json 完全
+  // 相同：兜底棘轮的三个基线是 V2 的进度表，掺进这批「专为打某条支路而造」的样本会让
+  // 数字读不出进度。
+  //
+  // 六条轴逐条对应施工清单 §4.3 的盲区表：
+  //   1. 8 罗盘方向        —— 主语料施法者恒在 (500,500)、目标恒在正右方
+  //   2. 8 档结果 + 暴击   —— 主语料 642/642 全 HIT、critical 全 false
+  //   3. healed            —— 主语料 642 个 healed 字段全 0（§0.8 治疗在被治疗者身上炸血溅）
+  //   4. origin.width 2/3  —— 主语料全 1，sizeScale/offsetFor 的大体型分支零覆盖
+  //   5. inflection ×10    —— 主语料全 null
+  //   6. strike 手势带武器 —— 法术的 strike 手势（cost.weapon:true）在主语料里 strikes 恒 []
+  //
+  // 样本量下限由 test/source-tables.test.mjs 的「边界语料六条轴」按**实测值**钉住：
+  // 生成器哪天少发一条，那条轴先红，而不是等某个 ∀ 断言悄悄退化成空真。
+  const edge = [];
+
+  /** 沿某个方向摆一对目标（贴身 1 格 + 隔格 4 格），距离与主语料的 ADJACENT/DISTANT 相同。 */
+  const spotsToward = ({dx, dy}, origin = ORIGIN, far = (DISTANT.x - ORIGIN.x) / GRID) => [
+    {pos: {x: origin.x + (dx * GRID), y: origin.y + (dy * GRID)}, adjacent: true},
+    {pos: {x: origin.x + (dx * far * GRID), y: origin.y + (dy * far * GRID)}, adjacent: false}
+  ];
+
+  /** 近战平砍原型：与默认动作 `strike` 同形，但目标摆位/结果/体型可换。 */
+  const meleeEdge = (id, variant = {}) => {
+    const tags = propagateTags(["strike", "melee", "slashing"]);
+    return baseSnapshot(id, {
+      tags,
+      target: {type: "single", number: 1, distance: 1, scope: 3},
+      range: {minimum: 0, maximum: 1},
+      cost: {action: 1, focus: 0, heroism: 0, health: 0, weapon: true},
+      strikes: synthWeapon(tags),
+      usage: {isAttack: true, isRanged: false},
+      ...variant
+    });
+  };
+
+  // 轴 1：8 罗盘方向 × {近战, 远程法术}
+  for (const [name, dir] of Object.entries(DIRECTIONS)) {
+    edge.push(meleeEdge(`edge.dir.${name}.melee`, {targetsAt: spotsToward(dir)}));
+    edge.push(spellSnapshot(`edge.dir.${name}.arrow`, "storm", "arrow",
+                            {targetsAt: spotsToward(dir)}));
+  }
+
+  // 轴 2：8 档结果（MISS…HIT）× {近战, 远程法术}，外加 GLANCE/HIT 的暴击变体
+  for (const [name, result] of Object.entries(RESULT)) {
+    edge.push(meleeEdge(`edge.result.${name}.melee`, {result}));
+    edge.push(spellSnapshot(`edge.result.${name}.arrow`, "flame", "arrow", {result}));
+  }
+  for (const name of ["GLANCE", "HIT"]) {                 // 只有命中类结果才谈得上暴击
+    edge.push(meleeEdge(`edge.crit.${name}.melee`, {result: RESULT[name], critical: true}));
+    edge.push(spellSnapshot(`edge.crit.${name}.arrow`, "frost", "arrow",
+                            {result: RESULT[name], critical: true}));
+  }
+
+  // 轴 3：治疗。life / soul 是源码里 restoration:true 的两个符文
+  // （spellcraft.mjs 的 RUNES.<rune>.restoration，由 source-tables.test.mjs 锁定），
+  // 结算走 models/action.mjs:2060 的 `restoration ? 1 : -1`，正 delta 落进 healed。
+  for (const rune of ["life", "soul"]) {
+    for (const gesture of GESTURES) {
+      edge.push(spellSnapshot(`edge.heal.${rune}.${gesture}`, rune, gesture, {healed: 8}));
+    }
+  }
+  // 非法术治疗：harmless / healing 标签那一簇（施工清单 §0.9 的 28 条动作同形）
+  for (const tag of ["healing", "harmless"]) {
+    edge.push(baseSnapshot(`edge.heal.action.${tag}`, {
+      tags: [tag],
+      target: {type: "single", number: 1, distance: 1, scope: 2},
+      range: {minimum: 0, maximum: 1},
+      cost: {action: 1, focus: 0, heroism: 0, health: 0},
+      usage: {isAttack: false, isRanged: false},
+      healed: 8
+    }));
+  }
+
+  // 轴 4：大体型施法者。sizeScale 只有 1 / 1.4 两档、offsetFor 乘的是施法者宽，
+  // 主语料 origin.width 恒为 1，两条分支一次都没走过。
+  for (const originWidth of [2, 3]) {
+    edge.push(meleeEdge(`edge.size.w${originWidth}.melee`, {originWidth}));
+    edge.push(spellSnapshot(`edge.size.w${originWidth}.arrow`, "storm", "arrow", {originWidth}));
+    // cone 走模板分支：addSize 让半径跟着施法者体型涨（regionForGesture 的 addRange）
+    edge.push(spellSnapshot(`edge.size.w${originWidth}.cone`, "flame", "cone", {originWidth}));
+  }
+
+  // 轴 5：10 个屈折各一条。手势按下标轮换，免得 10 条样本全落在同一条规则上。
+  INFLECTIONS.forEach((inflection, i) => {
+    const gesture = GESTURES[i % GESTURES.length];
+    edge.push(spellSnapshot(`edge.inflection.${inflection}`, RUNES[i % RUNES.length],
+                            gesture, {inflection}));
+  });
+
+  // 轴 6：strike 手势带武器。GESTURES.strike 的 cost 是 `{action: 0, focus: 1, weapon: true}`、
+  // range 是 `{weapon: true}`——它是「给武器附魔后砍一刀」，主语料里 strikes 恒为 []，
+  // 于是 12 条 strike 手势法术在离线侧全部退回法术兜底。
+  for (const rune of RUNES) {
+    edge.push(spellSnapshot(`edge.strike-gesture.${rune}`, rune, "strike",
+                            {strikes: synthWeapon(propagateTags(["strike", "melee"]))}));
+  }
+
+  writeFileSync(join(ROOT, "test/fixtures/edge-cases.json"), JSON.stringify(edge));
+  console.log(`edge-cases.json: ${edge.length} 条边界样本`);
 
   const effects = STATUSES.map(statusId => ({
     statusId, effectUuid: `Scene.s.Token.t.ActiveEffect.${statusId}`,

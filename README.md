@@ -12,13 +12,20 @@ Crucible 0.10.2 自带完整的 VFX 框架，但**内容**只覆盖一小部分�
 
 | | 原生已实现 | 本模组补齐 |
 | --- | --- | --- |
-| 法术姿态 | 6 / 17 | **11**：aspect, aura, cone, conjure, create, pulse, sense, step, strike, surge, ward |
-| 符文 | 4 / 12 | **8**：control, earth, illumination, illusion, kinesis, oblivion, soul, storm |
+| 法术姿态 | 6 / 17（arrow, blast, fan, influence, ray, touch，且各自只认部分符文） | **11**：aspect, aura, cone, conjure, create, pulse, sense, step, strike, surge, ward |
+| 符文 | 4 / 12（flame, frost, life, death） | **8**：control, earth, illumination, illusion, kinesis, oblivion, soul, storm |
 | 武器攻击 | 仅弓弩（`projectile1/2`） | **全部近战** 12 类 |
-| 默认动作 | 0 | 13 个 |
+| 默认动作 | 仅 `fall`（`canvas/vfx/landing.mjs`） | 12 个 |
 | 天赋动作 | 0 | ≈ 218 个 |
-| 变格 inflection | 0 | 全部 10 个 |
-| 状态效果 | 0 | 全部 46 个 |
+| 状态效果 | 0 | 45 / 46（`dead` 刻意静默，由 `death` 槽出一次性血溅） |
+| 音效 | 4 符文 + 弓弩（`assets/sfx`，**许可仅限系统内使用**） | 429 / 434 个动作 |
+
+⚠ **变格 inflection：本模组同样没有覆盖。** v0.9 的 README 在这里写着「全部 10 个」——
+那是错的：`grep -rn "inflection" scripts/` 只有 `snapshot.mjs` 记录了这个字段，
+**没有任何规则读它**。留档而不是悄悄删掉这一行。
+
+v1.0.0 的实测规模：434 个动作 / 1977 条 cue / **画面素材 173 个、音效素材 126 个** /
+兜底 cue 100 条（v0.9 是 307）。
 
 粒子图集 `CrucibleVFX0.json` 里只有 death / life / frost / flame 四个符文的美术资源，
 另外 8 个符文一张贴图都没有 —— 缺失部分只能靠外部素材。
@@ -45,8 +52,16 @@ ActiveEffect 创建/删除 → persist 槽（持续光环）/ death 槽（击杀
 ## 依赖
 
 - **必需**：`sequencer` ≥ 4.2
-- **素材**（缺失则相应动画降级，不报错）：`jb2a_patreon`、`eskie-effects`、
-  `blfx-assets-pack01`、`psfx-patreon`
+- **素材**：`jb2a_patreon`、`eskie-effects`、`blfx-assets-pack01`、`psfx-patreon`、
+  **`ggg`**（v1.0.0 新增，36% 的音效 cue 来自它）、**`soundfxlibrary`**
+
+  ⚠ **缺包不是「降级」，是那条 cue 静默消失**——路径 resolve 返回 null，不报错、不兜底、
+  不留 warn，玩家侧只看到「这个动作怎么没声音/没画面」。所以这几个包全部写进了
+  `module.json` 的 `relationships.requires`，并由 `test/manifest.test.mjs` 的
+  「兵库引用的每个命名空间都必须声明依赖」钉住（v1.0.0 补的守卫，第一次跑就抓到 `ggg` 漏声明）。
+
+- **MGS 音效**（`canim` 命名空间，120 条 cue）是 Data 下的**裸目录**不是模块，
+  `module.json` 结构上挂不住它——素材得随世界一起走。这是既有的分发限制。
 
 ## 开发
 

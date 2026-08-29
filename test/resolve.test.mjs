@@ -25,17 +25,28 @@ test("rng 由 seed 决定，同 seed 同序列", () => {
   assert.notDeepEqual(sa, [c.rng(), c.rng(), c.rng()]);
 });
 
-test("geom.sizeScale 对大体型 token 放大 1.4 倍", () => {
-  const small = createContext({assets: mkAssets(), snapshot: {seed: 1, origin: {width: 1}}, seed: 1});
-  const big = createContext({assets: mkAssets(), snapshot: {seed: 1, origin: {width: 3}}, seed: 1});
-  assert.equal(small.geom.sizeScale(), 1);
-  assert.equal(big.geom.sizeScale(), 1.4);
+// 2026-08-29 批次 B 第 7 步：两条用例按施工清单 §2.1 / §2.2 改写。
+//   · sizeScale 从 `width > 1 ? 1.4 : 1` 两档改成连续的 `1 + 0.4*(w-1)`——2×2 的狗头人
+//     与 4×4 的巨龙从前拿到同一个 1.4；
+//   · offsetFor **整个删掉**（不是改系数）：它乘的是施法者宽，而用它的 cue 锚在目标身上，
+//     3×3 的施法者会把偏移推到 150px、整条特效飞到目标身后。调用点在第 5 步已归零。
+// 「不许长回来」那一半由 test/geom-guard.test.mjs §2.2 连行为一起钉（它同时验偏移随
+// 目标体型线性、随施法者体型不变），这里只留能力袋本身的形状。
+test("geom.sizeScale 随施法者体型连续放大", () => {
+  const at = w => createContext({assets: mkAssets(), snapshot: {seed: 1, origin: {width: w}}, seed: 1});
+  assert.equal(at(1).geom.sizeScale(), 1);
+  // 1.4 这一档与旧实现逐字相同：全语料 origin.width 都是 1，2 这一档是唯一有过实测依据的
+  // 大体型值（取自 blfx），改成连续曲线时刻意让它落在原处，避免顺手改掉观感。
+  assert.equal(at(2).geom.sizeScale(), 1.4);
+  assert.equal(at(3).geom.sizeScale(), 1.8);
+  assert.equal(at(4).geom.sizeScale(), 2.2);
 });
 
-test("geom.offsetFor 贴身不折半、隔格折半", () => {
+test("geom 能力袋上不再有 offsetFor / onLeft", () => {
   const ctx = createContext({assets: mkAssets(), snapshot: {seed: 1, origin: {width: 3}}, seed: 1});
-  assert.equal(ctx.geom.offsetFor({adjacent: true}, 0.5), 3 * 0.5);
-  assert.equal(ctx.geom.offsetFor({adjacent: false}, 0.5), (3 * 0.5) / 2);
+  assert.equal(typeof ctx.geom.offsetFor, "undefined");
+  assert.equal(typeof ctx.geom.onLeft, "undefined");
+  assert.equal(typeof ctx.geom.adjacent, "function", "adjacent 仍在用（近战/隔格分支）");
 });
 
 test("解析产出带版本号与 cues 的计划", () => {

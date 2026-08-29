@@ -23,13 +23,38 @@ test("persist 规则表规模", () => {
   assert.ok(persist.length >= 14, `只有 ${persist.length} 条（静默 + 12 组 + 兜底）`);
 });
 
-test("每个 persist cue 都带 persist 与非空 tieTo，否则效果移除后动画不会清理", () => {
+/**
+ * 【批次 E】每一组都必须**同时**出画面与声音。
+ *
+ * 这一条钉的是交付前的那个缺口本身：persist 槽 46 个状态 0 条声音。反向的两半都要有，
+ * 否则「12 组都有声音」可以被「只剩声音、光环没了」蒙混过去。
+ */
+test("每个分组同时产出一条画面 cue 与一条上身音 cue", () => {
+  const bad = [];
+  for (const e of audible) {
+    const cues = resolveEffect(e, {assets: mk(), armory: ARMORY}).cues;
+    const art = cues.filter(c => c.kind !== "sound");
+    const sfx = cues.filter(c => c.kind === "sound");
+    if (art.length !== 1 || sfx.length !== 1) {
+      bad.push(`${e.statusId}: 画面 ${art.length} 条 / 声音 ${sfx.length} 条`);
+    }
+    // 顺序是本槽的约定：画面在前、声音在后（三条既有守卫按 cues[0] 取画面）。
+    if (cues[0]?.kind === "sound") bad.push(`${e.statusId}: 声音排到了 cues[0]`);
+  }
+  assert.deepEqual(bad.slice(0, 8), [], `${bad.length} 个状态的 cue 构成不对`);
+});
+
+test("每个 persist 画面 cue 都带 persist 与非空 tieTo，否则效果移除后动画不会清理", () => {
   for (const e of audible) {
     // 先钉住语料本身：fixture 若自己就没有 effectUuid，下面的 tieTo 断言会退化成
     // null === null 的同义反复，永远钉不住回归。
     assert.ok(e.effectUuid, `fixture ${e.statusId} 没有 effectUuid，这条断言测不出东西`);
     const plan = resolveEffect(e, {assets: mk(), armory: ARMORY});
-    for (const c of plan.cues) {
+    // 【批次 E】本槽从此每组还产一条**上身音**（armory/persist.mjs 的 statusSoundCue）。
+    // sound cue 是一次性的、恒 `persist:false`、没有 tieTo——它压根不进 Sequencer 的
+    // 持久化通路，本条断言问的「移除之后清不清得掉」对它不成立。按 `kind` 过滤而不是
+    // 按下标取 [0]：本槽的顺序是「画面在前、声音在后」，但下标是历史兼容点、不是契约。
+    for (const c of plan.cues.filter(c => c.kind !== "sound")) {
       assert.equal(c.persist, true, `${e.statusId} 的 cue 没开 persist`);
       // 真值断言是主断言：tieTo 为空 ⇒ Sequencer 两条清理链路全部失效 ⇒ 光效永久残留。
       assert.ok(c.tieTo, `${e.statusId} 的 tieTo 是空值（${c.tieTo}），持久特效将无法清理`);
@@ -105,7 +130,9 @@ test("NO_PERSIST 的状态确实一条 cue 都不产", () => {
 test("persist cue 一律不落世界存档、一律本地播放", () => {
   for (const e of audible) {
     const plan = resolveEffect(e, {assets: mk(), armory: ARMORY});
-    for (const c of plan.cues) {
+    // 同上：这两条契约（不落世界存档、本地播放）针对的是**持久**画面 cue。sound cue
+    // 的 local:true 由 CUE_DEFAULTS 一样给到，worldPersist 对它没有意义。
+    for (const c of plan.cues.filter(c => c.kind !== "sound")) {
       assert.equal(c.worldPersist, false,
         `${e.statusId}/${c.rule}: 一旦让 Sequencer 落盘，N 个在线客户端会各写一条记录`
         + "（落盘判据里没有 !data.local 子句），GM 重载后光环叠 N 层");

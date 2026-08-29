@@ -63,43 +63,95 @@ test("锥形姿态贴合模板张角", () => {
   assert.equal(c.mask, "region");
 });
 
-test("近战贴身与隔格用不同素材", () => {
+/**
+ * 近战的「够得着」现在是**几何量**，不再靠换一支更大的素材来假装。
+ *
+ * 旧断言是 `notEqual(a.file, b.file)`——「贴身与隔格应换素材，否则长度对不上」。
+ * 那守的是改造前的做法：贴身用武器自己的形制、隔格一律换成野太刀（全族唯一 1000×800、
+ * 弧幅够得到隔一格的一支），本质是**拿画幅冒充长度**。代价是施工清单 §0.14 记的那条——
+ * **48 件真能够到的近战武器塌成同一记野太刀下劈**，武器身份在隔格时全部丢失。
+ *
+ * 批次 B 之后握把锚在施法者、刀锋锚在目标，长度由 `scale = 中心距（格）` 表达，
+ * 与画幅无关（`.scale(d)` 让握手→刀锋恰好 d 格，代数已在批次 B 验过）。于是
+ * **同一支素材能同时服务贴身与隔格**，武器身份得以保留——这正是要的结果。
+ *
+ * 新判据因此比旧的更强：不是「换不换素材」，而是**长度必须真的跟着距离走**。
+ */
+test("近战的够得着由 scale 表达，不靠换素材冒充", () => {
   const base = melee();
   const near = {...base, targets: [base.targets.find(t => t.adjacent)]};
   const far = {...base, targets: [base.targets.find(t => !t.adjacent)]};
   const a = travelCues(near)[0];
   const b = travelCues(far)[0];
   assert.ok(a && b);
-  assert.notEqual(a.file, b.file, "贴身与隔格应换素材，否则长度对不上");
+  assert.ok(a.scale > 0 && b.scale > 0, "两档都必须给出正的 scale");
+  assert.ok(b.scale > a.scale,
+    `隔格的 scale（${b.scale}）必须大于贴身（${a.scale}）——长度是距离的函数。`
+    + "两者相等说明 scale 退化成常数，刀锋不会落在目标身上。");
+  // 反过来钉住「别再退回换素材那条路」：同一件武器在两档下**应当**是同一个形制，
+  // 换掉就说明武器身份又在隔格时被丢了（§0.14）。
+  assert.equal(a.file, b.file,
+    "同一件武器在贴身与隔格应当用同一支形制素材——换素材就是又回到「拿画幅冒充长度」，"
+    + "48 件够得到的近战武器会再次塌成同一记野太刀下劈");
 });
 
-test("目标在左侧时挥击镜像", () => {
+/**
+ * 挥击的朝向从此由「锚源 → 瞄目标」这条真旋转表达，镜像退出方向职责。
+ *
+ * 旧断言是「目标在左侧时 mirrorY 为真」。那守的是**错几何**：改造前 `at` 与 `aim.towards`
+ * 是同一个目标，`play.mjs` 的 `rotates` 恒 false、一次都不转向，于是 SW/W/NW 三个方向只能
+ * 靠翻转贴图冒充「打向左边」，其余五个方向连冒充都做不到（施工清单 §0.2：8 个罗盘方向朝向
+ * 恒 0°）。新判据比旧的**更强**：不是放宽成「镜像随便」，而是要求方向由 at→aim 承担，
+ * 并**反过来**钉住「镜像不许再随左右翻」——回退到旧实现时这条会红。
+ */
+test("挥击的方向由锚源→瞄目标承担，镜像不再跟着左右翻", () => {
   const base = melee();
   const left = {...base, targets: [{...base.targets[0], onLeft: true, x: 300}]};
   const right = {...base, targets: [{...base.targets[0], onLeft: false, x: 700}]};
-  assert.equal(travelCues(left)[0].mirrorY, true);
-  assert.equal(travelCues(right)[0].mirrorY, false);
+  const l = travelCues(left)[0], r = travelCues(right)[0];
+  for (const [name, c, s] of [["左", l, left], ["右", r, right]]) {
+    assert.equal(c.at.ref, "origin", `${name}：挥击必须锚在施法者，at 与 aim 同点就转不起来`);
+    assert.deepEqual([c.at.x, c.at.y], [s.origin.x, s.origin.y], `${name}：锚点是施法者中心`);
+    assert.deepEqual([c.aim.towards.x, c.aim.towards.y], [s.targets[0].x, s.targets[0].y],
+      `${name}：瞄准点是这一击自己的目标`);
+    assert.ok(c.template, `${name}：「锚点＝握把」靠素材模板表达，template 不许为空`);
+  }
+  assert.equal(l.mirrorY, r.mirrorY,
+    "镜像不许再随 onLeft 翻——方向由 at→aim 的旋转表达，翻转只负责变体多样性");
 });
 
-test("大体型施法者的挥击放大且偏移折半", () => {
-  // 单调比较（bc.offset.x > sc.offset.x）分不出「折半」和「不折半」：把 offsetFor(t, 0.5)
-  // 换成 (s.origin?.width ?? 1) * 0.5 得到 1.5 vs 0.5，照样满足 >。所以这里一律断具体值，
-  // 并且同时取「大体型贴身」和「大体型隔格」两个点——折半只发生在隔格分支上。
+/**
+ * 尺寸：`scale` = 中心距（格），换算过素材自己的授权网格。
+ *
+ * 旧断言（objectScale 1.4 / offset 0.5 格 / 隔格折半）守的同样是错几何——那三个数
+ * 全都建立在「贴图中心压在目标身上、再沿屏幕 +x 推一点」之上。新判据要求的性质更强：
+ * **握把落在施法者中心、刀锋落在目标中心**，于是尺寸只能是距离的函数，体型自动含在
+ * 距离里（3×3 的施法者中心离贴身目标中心就是更远），不需要再乘 1.4。
+ */
+test("挥击尺寸随中心距连续变化，偏移整族退休", () => {
   const base = melee();
+  // ⚠ 合成大体型必须 width 与 w 一起改：tokenGeom 的构造式是 w = width * gridSize，
+  // 只改 width 会让「一格多少像素」被算成 33.3px（gridPxOf 靠这两者相除还原格宽）。
+  const big = {...base.origin, width: 3, height: 3, w: 300, h: 300, radiusPx: 150};
   const at = (t, patch) => ({...base, ...patch, targets: [{...base.targets[0], ...t}]});
-  const bigFar = travelCues(at({adjacent: false}, {origin: {...base.origin, width: 3}}))[0];
-  const bigNear = travelCues(at({adjacent: true}, {origin: {...base.origin, width: 3}}))[0];
-  const smallFar = travelCues(at({adjacent: false}, {}))[0];
-  const smallNear = travelCues(at({adjacent: true}, {}))[0];
-  assert.equal(bigFar.objectScale, 1.4, "大体型放大 1.4（geom.sizeScale）");
-  assert.equal(smallFar.objectScale, 1, "小体型不放大");
-  assert.equal(smallFar.offset.x, 0.5, "小体型：width*base = 1*0.5");
-  assert.equal(smallNear.offset.x, 0.5, "小体型不分贴身隔格");
-  assert.equal(bigFar.offset.x, 0.75, "大体型隔格折半：(3*0.5)/2");
-  assert.equal(bigNear.offset.x, 1.5, "大体型贴身不折半：3*0.5");
-  assert.equal(bigFar.offset.y, 0);
-  for (const c of [bigFar, bigNear, smallFar, smallNear]) {
-    assert.equal(c.gridUnits, true, "offset 以格为单位；丢了 gridUnits 会被当像素解释，1 格=100px");
+  const near = travelCues(at({adjacent: true, x: 600}, {}))[0];       // 中心距 1 格
+  const far = travelCues(at({adjacent: false, x: 900}, {}))[0];       // 中心距 4 格
+  const bigNear = travelCues(at({adjacent: true, x: 600}, {origin: big}))[0];
+
+  // shortsword 的模板是 [200,300,300]、跨距 1 格；播放层不下发 gridSize（play-contract
+  // 的「不许下发 gridSize」钉死了这条），所以 scale 要把 200px 的授权网格换算回 100。
+  assert.equal(near.scale, 0.5, "贴身：中心距 1 格 × 100 / 授权网格 200");
+  assert.equal(far.scale, 2, "隔格：中心距 4 格（500→900），刀锋照样落在目标中心");
+  assert.ok(far.scale > near.scale, "尺寸必须随距离连续变化，不是贴身/隔格两档");
+  // 大体型贴身：施法者 3×3、目标仍在 (600,500)，中心距还是 1 格 —— 体型已经含在距离里，
+  // 不该再额外乘一个 1.4（乘了刀锋就越过目标 40%）。
+  assert.equal(bigNear.scale, near.scale, "体型不再另乘系数，尺寸只由中心距决定");
+
+  for (const [name, c] of [["贴身", near], ["隔格", far], ["大体型", bigNear]]) {
+    assert.deepEqual(c.offset, {x: 0, y: 0},
+      `${name}：偏移必须归零——它活在旋转之后的坐标系里，锚点定对之后再推就是纯错位`);
+    assert.equal(c.gridUnits, false, `${name}：没有偏移就不该再声明格单位`);
+    assert.ok(c.template, `${name}：scale 的换算要用模板的授权网格，template 不许为空`);
   }
 });
 
@@ -112,9 +164,25 @@ test("未命中时投射物走 missed", () => {
   assert.equal(c.aim?.missed, true);
 });
 
-test("爆发姿态没有飞行段", () => {
+/**
+ * 【2026-08-29 翻案】原断言是「爆发姿态**没有**飞行段，cues.length === 0」。
+ *
+ * 那条是把「blast 没有飞行轨迹」误写成了「blast 在 travel 槽什么都不出」。施工清单 §0.13
+ * 点名的正是这个后果：**blast 一条 travel cue 都不出**，于是 12 条爆发法术在画面上只剩
+ * impact 的白闪——爆炸本体从来没有被画出来过。
+ *
+ * 正确的性质是：blast **没有从施法者飞向目标的那一段**（不 stretchTo、不锚在施法者），
+ * 但它**必须**在爆心出一份爆炸本体，而且因为爆炸只有一个、不该按目标数叠 N 份，
+ * 所以它是 `once`。
+ */
+test("爆发姿态出爆炸本体但没有飞行段", () => {
   const cues = travelCues(byId("spell.death.blast"));
-  assert.equal(cues.length, 0, "blast 不应有 travel 内容");
+  assert.equal(cues.length, 1, "blast 必须出且只出一份爆炸本体（once，不按目标数叠）");
+  const c = cues[0];
+  assert.equal(c.rule, "spell.gesture.blast");
+  assert.ok(!c.stretchTo, "爆发没有飞行轨迹，不该 stretchTo");
+  assert.notEqual(c.at?.ref, "origin",
+    "爆炸锚在爆心（模板），不是施法者身上——锚错了会在施法者脚下炸");
 });
 
 test("travel 规则不引用绝对路径", () => {
@@ -178,7 +246,9 @@ const thrownReal = () => one({
  * 锚点是**冻结的模板坐标**（travel.mjs 的 templateAnchor，ref:"point"）的规则。
  * 其余 once 规则用 resolve.mjs 的默认施法者锚点（ref:"origin" + 施法者 tokenId/坐标）。
  */
-const TEMPLATE_ANCHORED = new Set(["spell.gesture.ray", "spell.gesture.cone"]);
+const TEMPLATE_ANCHORED = new Set(["spell.gesture.ray", "spell.gesture.cone",
+                                   // surge 本轮也搬到了模板上：锚点是线段中点（施工清单 §0.11）
+                                   "spell.gesture.surge"]);
 
 /** fixture 里各姿态的代表动作。断言前先确认它们真的是多目标，否则数量断言测不出重复。 */
 const ONCE_CASES = [
@@ -202,8 +272,17 @@ test("区域与自身姿态每个动作只出一条 travel cue", () => {
 });
 
 test("投射物与近战仍然每个目标一份", () => {
+  // 【2026-08-30 换样本】第二个样本原本是 `spell.flame.strike` / `generic.travel`。
+  //
+  // 两处都过期了：`strike` 手势现在有专属规则（`spell.gesture.strike`，施工清单 §0.10 的后半段
+  // ——它是「借手上的武器施法」，画面是一记染符文色的附魔剑挥砍，**不是飞行物**）；
+  // 而 `generic.travel` 至此**一条「每目标一份的飞行段」都不再产出**——原先落在它那儿的
+  // 84 条法术已全部被 batch C 的六个手势规则 + 本条 strike 规则接管。
+  //
+  // 换成 `strike.thrown`：它仍然是**每目标一份 + 锚施法者 + stretchTo 到各自目标**，
+  // 与 arrow 分属两条不同规则，这条守卫要验的性质一个不少。
   for (const [id, ruleId] of [["spell.storm.arrow", "spell.gesture.arrow"],
-                              ["spell.flame.strike", "generic.travel"]]) {
+                              ["flashOfSteel", "strike.thrown"]]) {
     const s = byId(id);
     const cues = travelCues(s);
     assert.equal(cues.length, s.targets.length,
@@ -226,21 +305,74 @@ test("投射物与近战仍然每个目标一份", () => {
   }
 });
 
-test("自身爆发锚在施法者、不锚任何目标，且用实测过的时序", () => {
+/**
+ * surge 的落点从「施法者脚下」搬到**线模板中点**（施工清单 §0.11）。
+ *
+ * 旧断言是「必须锚在施法者」。那条守的是**错几何**：surge 的模板是一条 15 尺 × 10 尺的
+ * 直线区域（`TARGET_TYPES.ray`，shape:"line" + `shape.width = size * d`），而规则连 at
+ * 都没写、走 once 的默认施法者锚点，画面是脚下一团径向爆闪——上线以来没有一次落点是对的。
+ * 新判据更强：不是「随便锚哪」，而是锚点必须**跟着 region 走**（换一份 region 就得跟着换），
+ * 且必须用 sizePx 而不是 objectScale 表达大小。
+ */
+test("自身爆发锚在线模板中点、按模板出尺寸，且用实测过的时序", () => {
   const s = byId("spell.death.surge");
   const c = travelCues(s)[0];
   assert.equal(c.rule, "spell.gesture.surge");
-  assert.equal(c.at?.ref, "origin", "自身爆发必须锚在施法者，不能锚在某个目标格");
-  assert.equal(c.at.tokenId, s.origin.tokenId,
-    "施法者锚点必须带施法者自己的 token（而不是某个目标的，也不能是裸 ref）");
   assert.equal(c.forTarget, null, "once 规则的 cue 不属于任何单个目标");
   assert.equal(c.aim, null,
-    "锚点已在施法者，再 aim 回施法者就是 atan2(0,0) 的退化旋转，应彻底不设 aim");
-  assert.equal(c.stretchTo, null, "自身爆发不飞向目标");
+    "素材是 center/one_shot 的径向爆闪，没有朝向可言；再 aim 回自己还会退化成 atan2(0,0)");
+  assert.equal(c.stretchTo, null, "保守版不拉伸（激进版才走 templateAnchor + stretchTo）");
+
+  // 锚点＝线段中点。region.x/y 是**起点**不是中心，直接拿它会把爆闪摆在杠子的一端。
+  assert.equal(c.at.ref, "point", "冻结坐标而不是「施法者」这个身份");
+  assert.deepEqual([c.at.x, c.at.y],
+    [s.region.x + (s.region.length / 2), s.region.y],
+    "rotation=0 时中点在起点正东 length/2 处");
+  assert.notDeepEqual([c.at.x, c.at.y], [s.origin.x, s.origin.y],
+    "锚点必须真的离开施法者中心，否则等于没改");
+
+  // 尺寸跟模板走：裸点上的 scaleToObject 恒等于「一格」，表达不了 340×200 的区域。
+  assert.deepEqual(c.sizePx, {width: s.region.length, height: s.region.width},
+    "sizePx 必须是 region 的长 × 宽");
+  assert.equal(c.objectScale, 1, "裸点锚上不许再下发 objectScale（播放层会丢弃并 warn）");
+  assert.equal(c.mask, "region", "溢出模板的部分要裁掉");
+  // ⚠ **反号**：Sequencer 的 `.rotate()` 是 `spriteContainer.rotation =
+  // -normalizeRadians(toRadians(angle))`（sequencer.js:16346），传进去的角度被反着用。
+  // 旧断言写的是 `c.angle === region.rotation`——那守的是**错的**：贴图会往模板的反方向转。
+  // 0/90/180/270 看不出来（矩形足迹在 ±rot 下相同），45/135/225/315 会让贴图长轴与
+  // 遮罩长杠交叉，爆闪被裁成中间一小块菱形。所以必须用一个**非直角**的旋转来验。
+  assert.equal(c.angle, -(s.region.rotation ?? 0) + 0, "画面朝向必须是模板 rotation 的反号");
+  const diag = travelCues(withRegion("spell.death.surge", {rotation: 45}))[0];
+  assert.equal(diag.angle, -45,
+    "对角线方向才分得出正反号——这条红了说明取反被人改回去了");
+
+  // 锚点跟着 region 走：换一份旋转过的 region，中点必须跟着转（写死坐标会红）
+  const turned = withRegion("spell.death.surge", {rotation: 90});
+  const t = travelCues(turned)[0];
+  assert.deepEqual([t.at.x, t.at.y],
+    [turned.region.x, turned.region.y + (turned.region.length / 2)],
+    "rotation=90° 时中点应落在起点正南 length/2 处");
+
   assert.equal(c.startTime, 125, "f0-3 是空帧，必须跳过");
   assert.equal(c.duration, 1125);
+  assert.equal(c.selfFlash?.anchor, "origin",
+    "line 模板 anchor:\"self\"，线首就在施法者脚下，这团爆闪照样罩着他");
   assert.ok(filesOf("eskie.casting.physical.01.center.one_shot.purple").includes(c.file),
     "death 符文应落到紫色分支");
+});
+
+test("自身爆发在没有 region 时退回施法者锚点，而不是掉进蓝箭兜底", () => {
+  // ⚠ 实测把 surge 的 region 置 null，本规则今天照样命中；若把 region?.type === "line"
+  // 写进 when，它会掉进 pri 10 的 generic.travel，变成每个目标一支蓝箭。
+  const s = {...byId("spell.death.surge"), region: null};
+  const cues = travelCues(s);
+  assert.equal(cues.length, 1, "缺模板也只该出一份（once），不是每目标一支箭");
+  const c = cues[0];
+  assert.equal(c.rule, "spell.gesture.surge", "缺 region 不许掉进 generic.travel 兜底");
+  assert.equal(c.at.ref, "origin", "兜底分支锚回施法者");
+  assert.equal(c.sizePx, null, "兜底分支没有模板尺寸可用");
+  assert.equal(c.mask, null, "没有 region 就没有遮罩");
+  assert.equal(c.objectScale, 1, "兜底分支回到按体型缩放的老写法");
 });
 
 test("区域与自身姿态在零目标动作上照样出内容", () => {
@@ -269,15 +401,43 @@ const LAYERED = new Map([
   ["strike.melee", 4]
 ]);
 
-test("全量扫描：once 规则任何动作都不超 1 条，其余规则不超「目标数 × 报备层数」", () => {
+/**
+ * `once` 规则的**拼接片数**，同样走报备制。
+ *
+ * `once` 的语义是「整个动作只出一份画面」，不是「只出一条 cue」——一份画面可以由几片
+ * 拼成。放宽这条上限时必须点名到规则并写清**为什么非拼不可**，否则「once 只出一条」
+ * 这个不变式就等于被关掉了。
+ *
+ * · `spell.gesture.fan` 3 片：Crucible 的 fan 张角是 **210°**（`TARGET_TYPES.fan.region.angle`），
+ *   而 jb2a 的锥形贴图是 53.13° 的 5e 锥，`coneYScale` 的纵向拉伸上限是 4——
+ *   撑到 179° 就已经到顶，210° 无论如何拉不出来（拉伸倍率 `tan(A/2)/0.5` 在 A≥180° 处
+ *   发散甚至转负）。所以改用三片各转 ±70° 的锥拼满整个扇面，而不是把一张贴图抻成面条。
+ *   三片同素材同时刻，观感上仍是**一份**画面。
+ */
+const ONCE_PIECES = new Map([
+  ["spell.gesture.fan", 3]
+]);
+
+test("全量扫描：once 规则不超报备片数，其余规则不超「目标数 × 报备层数」", () => {
   const onceIds = new Set(travel.filter(r => r.once === true).map(r => r.id));
   assert.ok(onceIds.size >= 4, `声明 once 的规则只有 ${onceIds.size} 条，少于区域/自身姿态的条数`);
+  // 报备表不许提前透支：登记了却没真的拼那么多片，说明表过期了（或者一开始就写宽了）。
+  for (const [rule, pieces] of ONCE_PIECES) {
+    assert.ok(onceIds.has(rule), `${rule} 报备了 ${pieces} 片，但它并不是 once 规则`);
+    const most = Math.max(0, ...actions.map(s =>
+      travelCues(s).filter(c => c.rule === rule).length));
+    assert.equal(most, pieces,
+      `${rule} 报备 ${pieces} 片，实测最多 ${most} 片——报备制的意思是「分片是被审过的事实」，`
+      + "不是把上限调松。数字要贴着实测走。");
+  }
   const bad = [];
   for (const s of actions) {
     const n = new Map();
     for (const c of travelCues(s)) n.set(c.rule, (n.get(c.rule) ?? 0) + 1);
     for (const [rule, count] of n) {
-      const cap = onceIds.has(rule) ? 1 : Math.max(s.targets.length, 1) * (LAYERED.get(rule) ?? 1);
+      const cap = onceIds.has(rule)
+        ? (ONCE_PIECES.get(rule) ?? 1)
+        : Math.max(s.targets.length, 1) * (LAYERED.get(rule) ?? 1);
       if (count > cap) bad.push(`${s.id} / ${rule}：${count} 条 > 上限 ${cap}`);
     }
   }
@@ -294,25 +454,46 @@ test("全量扫描：once 规则任何动作都不超 1 条，其余规则不超
  * 而这里要验的恰恰是「同一个动作换个摆位」，就地改 region 是最小且最贴题的做法。
  * -------------------------------------------------------------------------- */
 
+/**
+ * 模板的**尺寸**（radius / length）从语料现取，不写死。
+ *
+ * ⚠ 这里从前把 radius 写死成 300、length 写死成 400。那不是在守「端点 = 锥尖 + 方向×半径」
+ * 这条几何关系，而是在守「语料恰好是这个数」——`tools/dump-fixtures.mjs` 的 `TARGET_REGION`
+ * 一改成按 gesture 复算（radius 650 / length 650），三条断言就整片红，而规则一行没错。
+ * 断言该锁的是**关系**，尺寸是输入不是结论。
+ */
+const regionOf = id => byId(id).region;
+
 test("锥形端点跟着 region.rotation 转", () => {
   // rotation 是度，0=正东，正角度朝 +y；画布 y 向下，所以 90° 指向屏幕下方（正南）。
   // 依据：action-use-dialog.mjs 用 atan2(dy,dx) 写入，vfx/spells.mjs 用 {cos,sin} 消费。
-  // 锥尖 (500,500)、radius 300。
-  for (const [rotation, end] of [[0, {x: 800, y: 500}], [90, {x: 500, y: 800}],
-                                 [180, {x: 200, y: 500}], [-90, {x: 500, y: 200}],
-                                 [270, {x: 500, y: 200}], [45, {x: 712.132034, y: 712.132034}]]) {
+  const {x: ox, y: oy, radius} = regionOf("spell.flame.cone");
+  const at = deg => {
+    const rad = (deg * Math.PI) / 180;
+    const r6 = v => Math.round(v * 1e6) / 1e6;   // 与 travel.mjs 的 r6 同口径
+    return {x: r6(ox + (radius * Math.cos(rad))), y: r6(oy + (radius * Math.sin(rad)))};
+  };
+  for (const rotation of [0, 90, 180, -90, 270, 45]) {
     const c = onlyCue(withRegion("spell.flame.cone", {rotation}));
-    assert.deepEqual(c.stretchTo, end, `rotation=${rotation} 的端点错了`);
+    assert.deepEqual(c.stretchTo, at(rotation), `rotation=${rotation} 的端点错了`);
   }
+  // 四个正交方向必须真的互不相同，否则上面那圈可能在守一个退化成常数的实现
+  const ends = [0, 90, 180, 270].map(d => JSON.stringify(at(d)));
+  assert.equal(new Set(ends).size, 4, "四个正交方向的端点必须互不相同");
 });
 
 test("锥形端点在整圈上都等于 origin + dir(rotation)*radius", () => {
+  const {x: ox, y: oy, radius} = regionOf("spell.flame.cone");
+  assert.ok(radius > 0, `锥形半径必须为正，实得 ${radius}`);
+  let checked = 0;
   for (let deg = 0; deg < 360; deg += 15) {
     const c = onlyCue(withRegion("spell.flame.cone", {rotation: deg}));
     const rad = (deg * Math.PI) / 180;
-    assert.ok(Math.abs(c.stretchTo.x - (500 + (300 * Math.cos(rad)))) < 1e-6, `x@${deg}`);
-    assert.ok(Math.abs(c.stretchTo.y - (500 + (300 * Math.sin(rad)))) < 1e-6, `y@${deg}`);
+    assert.ok(Math.abs(c.stretchTo.x - (ox + (radius * Math.cos(rad)))) < 1e-6, `x@${deg}`);
+    assert.ok(Math.abs(c.stretchTo.y - (oy + (radius * Math.sin(rad)))) < 1e-6, `y@${deg}`);
+    checked++;
   }
+  assert.equal(checked, 24, `整圈应核 24 个角度，实核 ${checked}`);
 });
 
 test("锥形张角按半宽之比撑 scale.y（60°/120° 在贴图可撑范围内，不触发截断告警）", () => {
@@ -373,16 +554,22 @@ test("张角输入非有限数字（NaN/Infinity/坏字符串）时退回默认 
 });
 
 test("射线拉到模板端点而不是目标身上", () => {
-  // 模板 (500,500) 长 400 rot 0 → 端点 (900,500)；两个目标在 (600,500) 与 (900,500)。
+  // 端点 = 线首 + 方向(rotation) × length。长度从语料现取（理由见 regionOf 的说明）。
   const s = byId("spell.frost.ray");
+  const {x: ox, y: oy, length} = s.region;
+  assert.ok(length > 0, `射线长度必须为正，实得 ${length}`);
+  const r6 = v => Math.round(v * 1e6) / 1e6;
+  const at = deg => {
+    const rad = (deg * Math.PI) / 180;
+    return {x: r6(ox + (length * Math.cos(rad))), y: r6(oy + (length * Math.sin(rad)))};
+  };
   const c = onlyCue(s);
-  assert.deepEqual(c.stretchTo, {x: 900, y: 500});
+  assert.deepEqual(c.stretchTo, at(s.region.rotation ?? 0));
   assert.notDeepEqual(c.stretchTo, {x: s.targets[0].x, y: s.targets[0].y},
     "取目标坐标时光束只拉到模板一半长");
   assert.equal(c.mask, "region", "射线必须用模板遮罩，否则会溢出");
-  assert.deepEqual(onlyCue(withRegion("spell.frost.ray", {rotation: 90})).stretchTo, {x: 500, y: 900});
-  assert.deepEqual(onlyCue(withRegion("spell.frost.ray", {rotation: 135})).stretchTo,
-    {x: 217.157288, y: 782.842712});
+  assert.deepEqual(onlyCue(withRegion("spell.frost.ray", {rotation: 90})).stretchTo, at(90));
+  assert.deepEqual(onlyCue(withRegion("spell.frost.ray", {rotation: 135})).stretchTo, at(135));
   assert.deepEqual(onlyCue(withRegion("spell.frost.ray", {length: 700})).stretchTo, {x: 1200, y: 500});
 });
 
@@ -440,25 +627,38 @@ test("拳击三项几何修正齐全，且颜色锁死在 29 帧的安全分支"
   // 走「拳」那一支。
   assert.ok(filesOf("jb2a.melee_generic.creature_attack.fist.001.red").includes(c.file),
     "徒手默认走拳影弧；换成别的说明部位路由被绕过了");
-  assert.equal(c.gridUnits, true, "offset 是格数不是像素");
-  const big = travelCues({...base, origin: {...base.origin, width: 3}})[0];
-  assert.ok(big.objectScale > c.objectScale, "大体型应放大");
-  assert.ok(big.offset.x > c.offset.x, "大体型应前移更多");
-  assert.equal(c.mirrorY, false);
-  assert.equal(travelCues(one(base, {onLeft: true, x: 300}))[0].mirrorY, true, "目标在左侧要镜像");
+  // 几何与另外三条近战规则共用 meleeGeom()：锚源、模板握把、scale=中心距、偏移归零。
+  // 旧断言（gridUnits / 大体型前移更多 / 目标在左侧要镜像）守的是改造前那套错几何，
+  // 已随 offset 与 onLeft 一起退休，详见「挥击尺寸随中心距连续变化」那两条。
+  assert.equal(c.at.ref, "origin", "拳击也必须锚在施法者，否则一次都不转向");
+  assert.deepEqual(c.offset, {x: 0, y: 0}, "偏移整族归零");
+  assert.ok(c.template, "「锚点＝拳锋起点」靠素材模板表达");
+  assert.equal(c.scale, 0.5, "贴身一格：1 × 100 / 授权网格 200");
+  assert.equal(travelCues(one(base, {onLeft: true, x: 300}))[0].mirrorY, c.mirrorY,
+    "镜像不许再随 onLeft 翻");
   // no_hit 只有 blue/yellow 两支，yellow 是 51 帧（1.76 倍）——跟伤害色会把时序表整体拉长
   const radiant = {...base, usage: {...base.usage, damageType: "radiant"}};
   assert.equal(travelCues(radiant)[0].file, c.file, "拳击不跟伤害色，否则 0.97s 的时序会变成 1.70s");
 });
 
-test("投掷物镜像跟朝向、跳过收势、未命中透传", () => {
+test("投掷物靠 stretchTo 自己转向、跳过收势、未命中透传", () => {
   const base = byId("flashOfSteel");
   const right = travelCues(one(base, {onLeft: false, x: 700}))[0];
   const left = travelCues(one(base, {onLeft: true, x: 300}))[0];
   assert.equal(right?.rule, "strike.thrown");
   assert.ok(filesOf("blfx.weapon.range.dagger1.throw1.color1.30ft").includes(right.file));
-  assert.equal(left.mirrorY, true, "向左投掷必须镜像，否则匕首倒着飞");
-  assert.equal(right.mirrorY, false);
+  // 旧断言是「向左投掷必须镜像」。带 stretchTo 的 cue 由 _applyDistanceScaling
+  // （sequencer.js:16992-16994）按 source→target 的射线**自己转向**，朝向从来不需要靠
+  // 镜像去凑；mirrorY 翻的是 y 轴，向左投时它把匕首上下颠倒了一次。新判据更强：
+  // 两个方向的拉伸终点必须各自落在自己的目标上，且都不许再带镜像。
+  for (const [name, c, s] of [["左", left, one(base, {onLeft: true, x: 300})],
+                              ["右", right, one(base, {onLeft: false, x: 700})]]) {
+    assert.equal(c.mirrorY, false, `${name}：投掷物不许靠镜像表达方向`);
+    assert.equal(c.at.ref, "origin", `${name}：起点在投掷者`);
+    assert.deepEqual([c.stretchTo.x, c.stretchTo.y], [s.targets[0].x, s.targets[0].y],
+      `${name}：终点必须落在自己的目标上`);
+  }
+  assert.ok(right.template, "blfx ranged 模板 [200,200,200]，首尾各 12.5%·d 的留白要补");
   assert.equal(right.startTime, 533, "f0-16 是向后收势，必须跳过");
   assert.equal(right.duration, 1167, "f51 起归零，必须裁掉");
   const missed = travelCues(one(base, {results: [{result: 1, critical: false}]}))[0];

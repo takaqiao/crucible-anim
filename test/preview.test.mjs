@@ -126,8 +126,12 @@ test("previewEffectPlan：12 个状态分组 + 通用兜底，强制命中后全
     assert.ok(rule, `分组 "${group}" 对应的规则不存在`);
     const plan = previewEffectPlan(rule, t, ENV, deps());
     assert.ok(plan, `分组 "${group}" 强制命中后不该是 null（交接约束 (5) 钉的正是这个症状）`);
-    assert.equal(plan.cues.length, 1);
-    const cue = plan.cues[0];
+    // 【批次 E】每组现在是「一条光环 + 一条上身音」，本条断言问的是光环，按 kind 取。
+    const art = plan.cues.filter(c => c.kind !== "sound");
+    assert.equal(art.length, 1);
+    assert.equal(plan.cues.filter(c => c.kind === "sound").length, 1,
+      `分组 "${group}" 的上身音在预览里出不来——预览宏是这一层唯一的人工验收手段`);
+    const cue = art[0];
     assert.equal(cue.rule, rule.id);
     assert.equal(cue.persist, true);
     assert.equal(cue.tieTo, t.document.uuid, "tieTo 必须钉在目标 token 自己的 uuid 上");
@@ -136,6 +140,8 @@ test("previewEffectPlan：12 个状态分组 + 通用兜底，强制命中后全
   const plan = previewEffectPlan(generic, t, ENV, deps());
   assert.ok(plan);
   assert.equal(plan.cues[0].rule, "generic.persist");
+  // 兜底那一条至今没有配声音（表外状态没有可选的语义档，兜底 > 错配）；它只出光环。
+  assert.deepEqual(plan.cues.filter(c => c.kind === "sound"), []);
 });
 
 test("previewEffectPlan：status.silent 的语义是「就该没有画面」，预览诚实返回 null", () => {
@@ -158,8 +164,14 @@ test("回归：effectUuid 不给真实值（如简报参考实现的字面 null�
     seed: 1
   };
   const naive = resolveEffect(naiveSnapshot, {assets: deps().assets, armory: {persist: [rule]}});
-  assert.equal(naive, null,
-    "effectUuid:null → cue.tieTo 为空 → keepTied 丢弃这条 cue → cues.length===0 → plan===null");
+  // 【批次 E 订正】原断言是 `naive === null`。同一条链路一字未改（keepTied 照旧丢弃这条
+  // 光环），但这一组现在还产一条**上身音**——sound cue 恒 `persist:false`，keepTied 对它
+  // 空过（它不进 Sequencer 的持久化通路，放行也留不下清不掉的光），于是计划不再为空。
+  // 本条守的东西没变、也没被放松：**一条持久 cue 都不许流出去**，这才是主断言。
+  assert.deepEqual((naive?.cues ?? []).filter(c => c.persist), [],
+    "effectUuid:null → cue.tieTo 为空 → keepTied 必须把这条持久 cue 丢掉，否则光效永久残留");
+  assert.deepEqual((naive?.cues ?? []).map(c => c.kind), ["sound"],
+    "剩下的应当只有那条一次性上身音");
 });
 
 /* -------------------------------------------- */
@@ -387,7 +399,7 @@ test("installPreviewCommand：ChatLog.CHAT_COMMANDS 不可用时优雅退化，�
  * 与 runPreview 里的取用方式逐字一致：由 ActiveEffect 驱动的两槽（persist / death）
  * 走 previewEffectPlan，其余四槽走动作快照 + fixture。
  */
-const EFFECT_SLOTS = ["persist", "death"];
+const EFFECT_SLOTS = ["persist", "death", "persistOff"];
 function previewOf(slot, rule) {
   return EFFECT_SLOTS.includes(slot)
     ? previewEffectPlan(rule, target(), ENV, deps(), slot)
@@ -420,7 +432,26 @@ test("F：全兵库每条规则（ALWAYS_SILENT 除外）都能预览出含自�
     }
   }
   assert.deepEqual(gaps, [], `${gaps.length} 条规则预览不出来`);
-  assert.equal(checked, 42,
+  // 【2026-08-29 批次 C+D】42 → 50。新增八条：travel 槽的 spell.gesture.
+  // {fan, blast, contact, step, aura, create} 六个手势规则（此前 84 条法术全落在
+  // generic.travel 的同一支「蓝色物理箭」上），以及 cast 槽的 cast.target.single /
+  // cast.spell.iconic。⚠ 其中 contact 与 aura **一度预览不出来**——它们的 when 认的是
+  // gesture（touch/influence、aura/sense），而默认合成快照的 gesture 是 null。
+  // 上面那条 gaps 断言先红并点了名，补了两份 fixture 才转绿；这个数字要在**确认过
+  // 每条新规则都能预览**之后再改，不是反过来。
+  // 【2026-08-30 批次 E】50 → 53。新增的三条是第七槽 persistOff 的
+  // statusOff.{extinguish, dispel, clear}（第四条 statusOff.silent 与 persist/status.silent
+  // 同理进了 ALWAYS_SILENT）。三条都不需要 fixture：它们吃 EffectSnapshot、走
+  // previewEffectPlan 那一支，而且 build 判据取的是闭包里的档名而不是现查 e.statusId
+  // ——预览把 when 强制成恒真之后照样出得来（armory/persist-off.mjs 的 offRule 有注释）。
+  // 这个数字要在**确认过每条新规则都能预览**之后再改，不是反过来。
+  // 【2026-08-30 批次 E · §4.1】53 → 54。新增的一条是 cast 槽的 `spell.wordless`
+  //（pri 395，只出声不出画面）：12 条「有 spell 标签但没有符文」的戏法此前**连一条
+  // cast cue 都拿不到**——`generic.cast` 对「有目标的攻击动作」主动让路，而
+  // `resolve.mjs:130` 的 firstMatch 只看 when、build 返回 null 不会继续往下找，
+  // 所以兜底必须挂在 `generic.cast` **上面**。不需要 fixture：默认合成快照的 tags 里
+  // 就带 spell 那一支（上面那条 gaps 断言先跑过、没点它的名，才改的这个数字）。
+  assert.equal(checked, 55,
     "兵库规则条数变了：确认新规则要么配了 fixture、要么进了 ALWAYS_SILENT，再改这个数字");
 });
 

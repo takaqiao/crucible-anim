@@ -8,16 +8,23 @@ export const META_KEY = "cav";
 export const PLAN_VERSION = 1;
 
 /**
- * 六个动画槽位。前四个的顺序即动作时间轴上的先后；末尾两个都不挂在动作上，由
+ * 七个动画槽位。前四个的顺序即动作时间轴上的先后；末尾三个都不挂在动作上，由
  * ActiveEffect 驱动，因此排在最后：
- *   · `persist` —— 状态的持续光环，创建/删除成对（trigger/effects.mjs 的 playPersist）；
- *   · `death`   —— 击杀那一刻的一次性爆发，只由 `dead` 落地那一次 createActiveEffect
- *                  驱动，没有「结束」语义（armory/death.mjs 的文件头写了为什么它不能
- *                  留在 aftermath 槽里）。
- * 这份清单的消费者是预览宏（player/preview.mjs 逐槽遍历兵库）；`resolve()` 自己按动作
- * 装配的那四槽是写死的，不读它。
+ *   · `persist`    —— 状态的持续光环，创建/删除成对（trigger/effects.mjs 的 playPersist）；
+ *   · `death`      —— 击杀那一刻的一次性爆发，只由 `dead` 落地那一次 createActiveEffect
+ *                     驱动，没有「结束」语义（armory/death.mjs 的文件头写了为什么它不能
+ *                     留在 aftermath 槽里）；
+ *   · `persistOff` —— 状态**摘下**那一刻的一次性提示音，只由 deleteActiveEffect 驱动
+ *                     （armory/persist-off.mjs 的文件头写了为什么它不能塞进 endPersist，
+ *                     以及为什么它与 death 同构却**不让路**）。
+ * 三者共用同一条装配入口 `resolveEffect(snapshot, deps, slot)`，快照形状与规则签名
+ * `(e, ctx)` 完全相同。
+ *
+ * 这份清单的消费者是预览宏（player/preview.mjs 逐槽遍历兵库，其中由 ActiveEffect 驱动
+ * 的三槽走 `EFFECT_SLOTS` 那一支）；`resolve()` 自己按动作装配的那四槽是写死的，不读它。
  */
-export const SLOTS = Object.freeze(["cast", "travel", "impact", "aftermath", "persist", "death"]);
+export const SLOTS = Object.freeze(
+  ["cast", "travel", "impact", "aftermath", "persist", "death", "persistOff"]);
 
 /** crucible.api.dice.AttackRoll.RESULT_TYPES 的镜像，供纯函数层使用而不依赖运行时。 */
 export const RESULT = Object.freeze({

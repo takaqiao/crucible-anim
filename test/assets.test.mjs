@@ -390,3 +390,138 @@ test("runtime: 路径不存在时仍走 bestFit 降级，divergence 警告照旧
   assert.equal(r.diverged, true);
   assert.equal(assets.warnings.length, 1, "降级必须留下诊断");
 });
+
+/* -------------------------------------------------------------------------- */
+/*  距离档（`.30ft`）：上游选不中，assets.mjs 的 bandOf 接手                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * **逐字复刻** Sequencer 4.2.3 `SequencerDatabase.getEntry`（sequencer.js:6732-6781）
+ * 的 ft 分支与 `SequencerFileRangeFind`（:6485-6520）的存储形态。
+ *
+ * 为什么不能用上面那个 MockSequencerDatabase：它把 `getEntry` 简化成了「按整条路径查表」，
+ * 而这条缺陷**恰恰长在被它简化掉的那几行里**——真实的 getEntry 会先用带前导点的
+ * `".30ft"` 把路径劈成两半，再拿这个带点的串去索引一个键是 `"30ft"` 的对象。简化版
+ * 永远拿得到正确的档，于是这条缺陷在离线测试里**结构性不可见**（本项目第 6 类失败模式）。
+ *
+ * 复刻到什么程度：ft 正则连 `/g` 一起照抄（`.test` 推进 lastIndex 的语义一并复现），
+ * `entries[module]` 的数组形态、`exactEntries` 优先于前缀匹配、
+ * `entry.file?.[ft] ?? foundFile` 那一句的 `??` 兜底、以及
+ * 「1 条返回对象、多条返回数组」的收尾，逐句对应源码。
+ * 只有 `getAllFiles` 里的 `Object.values(...).deepFlatten()` 换成 `.flat(Infinity)`
+ * ——deepFlatten 是 Foundry 给 Array 原型挂的扩展，Node 里没有，语义相同。
+ */
+const FT_REGEX_LITERAL = /\.[0-9]+ft\.*/g;   // === CONSTANTS.FEET_REGEX（sequencer.js:20）
+
+class LiteralRangeFindFile {
+  rangeFind = true;                          // sequencer.js:6491
+  constructor(dbPath, file, template) {
+    this.dbPath = dbPath;
+    this.file = file;                        // {"05ft": …, "15ft": …, …}
+    this.template = template;
+  }
+  getAllFiles() {                            // sequencer.js:6508
+    return Object.values(this.file).flat(Infinity);
+  }
+}
+
+class LiteralFtDatabase {
+  constructor(entriesByModule) { this.entries = entriesByModule; }
+
+  entryExists(inString) {                    // sequencer.js:6709 起，裸 startsWith
+    const module = inString.split(".")[0];
+    return (this.entries[module] ?? []).some(e => e.dbPath.startsWith(inString.split(FT_REGEX_LITERAL)[0]));
+  }
+
+  getEntry(inString, {softFail = false} = {}) {
+    if (typeof inString !== "string") return softFail ? false : null;
+    inString = inString.trim().replace(/\[[0-9]+]$/, "");
+    if (!this.entryExists(inString)) return softFail ? false : null;
+
+    let ft = false;
+    let index2 = false;
+    if (FT_REGEX_LITERAL.test(inString)) {                       // :6752
+      ft = inString.match(FT_REGEX_LITERAL)[0];                  // :6753 —— 实测得 ".30ft"
+      const split = inString.split(ft).filter(str => str !== "");
+      if (split.length > 1) index2 = split[1].split(".")[0];
+      inString = split[0];
+    }
+    FT_REGEX_LITERAL.lastIndex = 0;   // 桩自用：一次 getEntry 里 test+match 各推进一次
+
+    const module = inString.split(".")[0];
+    const exactEntries = this.entries[module].filter(e => e.dbPath === inString);
+    const filteredEntries = (exactEntries.length ? exactEntries
+      : this.entries[module].filter(e => e.dbPath.startsWith(inString))).map(entry => {
+      let foundFile = entry;
+      if (ft) foundFile = entry.file?.[ft] ?? foundFile;         // :6768 —— 恒 undefined
+      if (index2) foundFile = foundFile?.[index2] ?? foundFile;
+      return foundFile;
+    });
+    if (!filteredEntries.length) return softFail ? false : null;
+    return filteredEntries.length === 1 ? filteredEntries[0] : filteredEntries;
+  }
+
+  getPathsUnder() { return false; }
+}
+
+/** 两个真实语料形态：jb2a 箭（5 档 × 1 文件）与 psfx 长弓（5 档 × 5 文件）。 */
+function ftFixtureDb() {
+  const bands = ["05ft", "15ft", "30ft", "60ft", "90ft"];
+  const arrow = new LiteralRangeFindFile(
+    "jb2a.arrow.physical.orange",
+    Object.fromEntries(bands.map(b => [b, `arrow_${b}.webm`])),
+    [200, 200, 200]
+  );
+  const longbow = new LiteralRangeFindFile(
+    "psfx.ranged-weapons.longbow.v1",
+    Object.fromEntries(bands.map(b => [b, [1, 2, 3, 4, 5].map(i => `longbow-00${i}-${b}.ogg`)])),
+    null
+  );
+  return new LiteralFtDatabase({jb2a: [arrow], psfx: [longbow]});
+}
+
+function withDb(db, fn) {
+  const oldSeq = globalThis.Sequencer;
+  globalThis.Sequencer = {Database: db};
+  try { return fn(); } finally { globalThis.Sequencer = oldSeq; }
+}
+
+test("runtime: 带 .30ft 的路径只拿到那一档（上游 :6768 选不中，bandOf 接手）", async () => {
+  const {runtimeBackend} = await import("../scripts/resolver/assets.mjs");
+  withDb(ftFixtureDb(), () => {
+    const backend = runtimeBackend();
+
+    // 实测基线：不修时 files=5（整族五档一起摊平），修后 files=1。
+    const arrow = backend.getEntry("jb2a.arrow.physical.orange.30ft");
+    assert.ok(arrow, "应解析出条目");
+    assert.deepEqual(arrow.file, "arrow_30ft.webm",
+      "拿到的不是 30ft 档 —— bandOf 没生效，ctx.pick 会在五档里随机摇一支");
+
+    // 一档内部本来就是变体池（5 个 ogg），整池带走由 ctx.pick 摇定；
+    // 修前是 25（五档 × 五支），修后 5。
+    const longbow = backend.getEntry("psfx.ranged-weapons.longbow.v1.30ft");
+    assert.ok(Array.isArray(longbow.file), "一档内的变体池应整池带走");
+    assert.equal(longbow.file.length, 5,
+      `拿到 ${longbow.file.length} 个文件：不是 5 就说明档没选中（整族 25 个）`);
+    assert.ok(longbow.file.every(f => f.includes("-30ft.")),
+      `混进了别的档：${longbow.file.join(", ")}`);
+  });
+});
+
+test("runtime: 选档不吃掉条目自带的 template（模板挂条目上、不挂档上）", async () => {
+  const {runtimeBackend} = await import("../scripts/resolver/assets.mjs");
+  withDb(ftFixtureDb(), () => {
+    const r = runtimeBackend().getEntry("jb2a.arrow.physical.orange.30ft");
+    assert.deepEqual(r.template, [200, 200, 200],
+      "templateOfEntry 必须收原始条目：选完档拿到的是裸文件名，上面没有 template");
+  });
+});
+
+test("runtime: 不带 ft 的路径行为不变（bandOf 不许改动非距离档条目）", async () => {
+  const {runtimeBackend} = await import("../scripts/resolver/assets.mjs");
+  withDb(ftFixtureDb(), () => {
+    const r = runtimeBackend().getEntry("jb2a.arrow.physical.orange");
+    assert.equal(r.files?.length ?? (Array.isArray(r.file) ? r.file.length : 1), 5,
+      "没写档位时应当拿到整族五档，交给 ctx.pick 摇 —— 这是原有语义，不该被 bandOf 改掉");
+  });
+});

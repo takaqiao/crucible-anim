@@ -231,3 +231,65 @@ test("entryExists 的部分前缀匹配仍会告警（快路径存在的理由�
     "entryExists 的匹配方式变了：它用的是裸 startsWith，所以查 `jb2a` 会命中 " +
     "`jb2a-extras...`。这是快路径要绕开的具体机制。");
 });
+
+/**
+ * `assets.mjs` 的 `bandOf()` 存在的**唯一**理由：上游自己选不中距离档。
+ *
+ * 判据是两行源码的**错位**——一行产出带点的 `".30ft"`，另一行拿它去索引一个无点键的
+ * 对象。任何一行改了，错位就可能消失，`bandOf` 立刻从「修复」变成「多余的一层」
+ * （更糟：若上游改成返回无点的 ft，`entry.file[".30ft"]` 与我们的 `entry.file["30ft"]`
+ * 会同时命中，行为一致、但注释里那套论证全部过期，下一个人无从判断能不能删）。
+ * 所以两行必须同时钉住，且 FEET_REGEX 那条要连 `/g` 一起钉——bandOf 的局部正则
+ * 特意去掉了 `/g`，理由（lastIndex 有状态）也依赖这条。
+ */
+test("Database.getEntry 仍然选不中距离档（assets.mjs 的 bandOf 的存在理由）", () => {
+  assert.match(src, /FEET_REGEX:\s*new RegExp\(\/\\.\[0-9\]\+ft\\.\*\/g\)/,
+    "CONSTANTS.FEET_REGEX 变了。它带前导点（match 得到 \".30ft\"）且带 /g（.test 有状态），"
+    + "assets.mjs 的 bandOf 就是为这两件事而写；上游若去掉点，bandOf 应当退休");
+  assert.equal(occurrences("if (ft) foundFile = entry.file?.[ft] ?? foundFile;"), 1,
+    "getEntry 里那行按 ft 取档的代码变了（原在 sequencer.js:6768）。它用带点的 ft 去索引"
+    + "无点键的 entry.file，恒 undefined 后 `?? foundFile` 原样返回整个 RangeFind 条目——"
+    + "这正是 bandOf 要接手的那一步");
+  // 反向钉死：库里没有任何一处按**带点**的 ft 建键，所以 :6768 不可能命中。
+  assert.equal(occurrences('replaceAll(".", "")'), 1,
+    "Sequencer 自己的 copyPath（:7273-7276）不再把 ft 段的点去掉了 —— "
+    + "「无点键才是真实存储形态」这个前提要重新核");
+});
+
+/**
+ * `.template()` 的 0 会被静默丢掉 —— play.mjs 那个 `Math.max(startPoint, 1)` 的存在理由。
+ *
+ * 这条 epsilon 是**为上游的一处不对称打的补丁**，不是我们自己的设计：同一个
+ * `template.startPoint`，`_getDistanceScaling`（16971）读它时带 `?? 0` 兜底，
+ * `_setAnchors`（17024）读它时**没有**。于是 `template({startPoint: 0})` 走完
+ * 24105-24107 的 `if (x)` 三连赋值之后，`_template` 里根本没有 startPoint 这个键，
+ * 17024 算出 `undefined / textureWidth = NaN`，`sprite.anchor.set(NaN, 0.5)`，
+ * 顶点全 NaN —— 整条特效一个像素都不画。
+ *
+ * 上游哪天补上 `?? 0`（或把三条赋值改成不吞 0 的写法），那个 epsilon 就该撤掉；
+ * 没有这条守卫，它会以「一个来历不明的 +1」的形态永远留在播放层。
+ */
+test("template() 仍然静默丢弃 0，且 _setAnchors 仍然没有 ?? 0 兜底", () => {
+  const i = src.indexOf("  template({ gridSize, startPoint, endPoint } = {}) {");
+  assert.notEqual(i, -1, "EffectSection.template() 的签名变了（原在 sequencer.js:24079）");
+  const body = src.slice(i, i + 1600);
+  for (const k of ["gridSize", "startPoint", "endPoint"]) {
+    assert.match(body, new RegExp(`if \\(${k}\\) this\\._template\\["${k}"\\] = ${k};`),
+      `template() 里 ${k} 的赋值不再是 \`if (x)\` 形式 —— 0 可能已经不被丢掉了，`
+      + "player/play.mjs 的 Math.max(startPoint, 1) 要重新论证");
+  }
+  assert.match(body, /if \(!gridSize && !startPoint && !endPoint\)\s*throw/,
+    "「三项全空就 throw」那条判据变了：play.mjs 靠 startPoint 恒 ≥1 来保证不撞它");
+
+  // 17024 那一行：没有 ?? 0，所以 undefined 会一路算成 NaN。
+  assert.match(src, /const templateAnchorX = this\.template \? this\.template\.startPoint \/ textureWidth : void 0;/,
+    "_setAnchors 里那行 templateAnchorX 变了（原在 sequencer.js:17024）");
+  const anchorLine = src.slice(src.indexOf("const templateAnchorX"));
+  assert.ok(!anchorLine.slice(0, anchorLine.indexOf("\n")).includes("?? 0"),
+    "_setAnchors 给 startPoint 补上 ?? 0 兜底了 —— NaN 锚点这条路已被上游堵死，"
+    + "player/play.mjs 的 Math.max(startPoint, 1) 可以撤掉了");
+  // 反向：同一个字段在 _getDistanceScaling 里**有**兜底。两处的不对称正是缺陷本身，
+  // 哪一侧变了都说明这条守卫的说理该重看。
+  assert.match(src, /const startPoint = this\.template\?\.startPoint \?\? 0;/,
+    "_getDistanceScaling 里那条 `?? 0` 不见了：两处不对称的说理要重写");
+});

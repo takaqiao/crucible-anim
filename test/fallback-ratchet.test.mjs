@@ -82,10 +82,32 @@ const mk = () => createAssets(offlineBackend(index));
  * 这条订正本身就是「基线必须贴着实测值」那条守卫的第一次实战——它在语料修好后
  * 立刻报警，逼着基线跟着下调，而不是让旧数字继续替新现实背书。
  */
+/**
+ * 【2026-08-29 下调】39/144/307 → 36/138/290。
+ *
+ * 成因是**语料变准了**，不是规则变差：`tools/dump-fixtures.mjs` 的 `TAG_PROPAGATE`
+ * 补齐了漏掉的技能标签，6 条动作的 `isAttack` 从 false 订正成 true、`fallGlide` 补上
+ * `movement`，于是这些动作从「算不出键只能走兜底」变成命中了专属规则。
+ *
+ * 核实过不是「规则塌掉少出 cue」那种假性下降：全量 434 个动作、**2777 条 cue、0 个无计划**，
+ * 总量没有缩水。假性下降的表现会相反——规则不出 cue 时 `generic.*` 会接住，兜底数只会**涨**。
+ */
+/**
+ * 【2026-08-29 批次 C+D 再次下调】36/138/290 → **14/62/124**。
+ *
+ * 成因是**批次 C 给六个手势补了专属规则**（fan / blast / contact / step / aura / create）
+ * 并按元素分派 cone —— 此前 84 条法术全落在 `generic.travel` 的同一支「蓝色物理箭」上，
+ * 现在各走各的姿态规则。兜底率是这批的直接产物，不是放水。
+ *
+ * 同样核实过不是「规则塌掉少出 cue」的假性下降：全量 434 个动作、**2668 条 cue、0 个无计划**。
+ * ⚠ 总 cue 从 2777 降到 2668 也是**有意的**：区域姿态置 `once: true`，一个动作出 1 条 cue
+ * 而不是每个目标各出一条。假性下降的表现会相反——规则不出 cue 时 `generic.*` 会接住，
+ * 兜底数只会**涨**。
+ */
 const BASELINE = Object.freeze({
-  actionsAllFallback: 39,    // 全部 cue 都来自兜底的动作数
-  actionsAnyFallback: 144,   // 至少一条 cue 来自兜底的动作数
-  fallbackCues: 307          // 兜底 cue 总条数
+  actionsAllFallback: 14,    // 全部 cue 都来自兜底的动作数
+  actionsAnyFallback: 50,    // 至少一条 cue 来自兜底的动作数
+  fallbackCues: 100          // 兜底 cue 总条数
 });
 
 /** 跑一遍全量语料，统计兜底命中。 */

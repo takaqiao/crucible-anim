@@ -126,6 +126,17 @@ const R = await runAll();
 /** 全量语料里的 cue，与 R.records 一一对应（play.mjs 对每条画得出的 cue 恰好建一个 section）。 */
 const ALL_CUES = R.plans.flatMap(p => p.cues);
 
+/**
+ * 一条带 `mask:"region"` 的 cue，它的模板是什么形状。
+ *
+ * 遮罩形状由 `regionMaskShape`（play.mjs:172-）按 `region.type` 分派，不是恒为多边形：
+ * circle → `PIXI.Circle`，cone / line → 多边形。批次 C 给 blast 补出 travel cue 之后，
+ * 圆形模板的遮罩第一次真的被下发，两条写死 "polygon" 的断言因此整片红。
+ */
+const maskKind = (cue, plans) => plans.find(p => p.cues.includes(cue))?.region?.type ?? "(无)";
+/** 模板形状 → 期望的遮罩几何。 */
+const MASK_SHAPE = Object.freeze({circle: "circle", cone: "polygon", line: "polygon"});
+
 /* ---- 〇、语料自查：断言不能是空转 ---------------------------------------- */
 
 test("桩确实跑通了：全量语料构造出成千条 section，且覆盖到各条支路", () => {
@@ -134,8 +145,27 @@ test("桩确实跑通了：全量语料构造出成千条 section，且覆盖到
   assert.equal(R.records.length, R.cues,
     "section 数与 cue 数对不上：有 cue 被静默吞掉，或者一条 cue 建了多个 section");
   const n = m => R.records.filter(r => r.has(m)).length;
-  assert.ok(n("stretchTo") > 1500, `带 stretchTo 的 section 只有 ${n("stretchTo")} 条，相关断言会空转`);
-  assert.ok(n("missed") > 1000, `带 missed 的 section 只有 ${n("missed")} 条，相关断言会空转`);
+  // 2026-08-29 批次 C：1500 → 1100（实测 1128）。批次 C 给 fan / blast / contact / step /
+  // aura / create 六个手势补了专属规则，其中区域类置 once —— 一个动作出 1 条 cue 而不是每目标
+  // 各一条。于是 84 条法术从 generic.travel（每目标一条 stretchTo 飞行物）挪走，实例数整体下降。
+  // ⚠ 下调前查过「字段是不是丢了」：全语料 141 条带 stretchTo 的画面 cue，**没带 template 的 0 条**。
+  assert.ok(n("stretchTo") > 900, `带 stretchTo 的 section 只有 ${n("stretchTo")} 条，相关断言会空转`);
+  // 2026-08-29 批次 B 第 6 步：1000 → 500（实测 606）。impact 主规则整槽退出了 missed
+  // ——它的 MISS/DODGE 两行改用确定性几何（施工清单 §0.7 的 .missed() 翻案：
+  // calculate_missed_position 的 !target 分支是逐客户端随机的，而本模组每台机器本地播
+  // 同一份 plan）。剩下的 606 条是飞行物落空（generic.travel 336 / spell.gesture.arrow 48 /
+  // strike.ranged.weapon 36 / strike.thrown 12 / strike.shape.charge 10 /
+  // strike.shape.area 8）与 generic.impact 的落空两档 156——那几支都**不转向**，
+  // .missed() 在它们身上是原设计的用法。下限跟着实测走，不是放水。
+  // 2026-08-29 批次 C：500 → 300（实测 318）。降的 288 条**全部**是 generic.travel 的：
+  // 它服务的法术从 84 条掉到 12 条（−72 个动作 × 每动作 4 条 = −288），与实测差额逐条对上。
+  // 区域姿态锚在模板上、不锚在某个目标身上，.missed() 对它们本来就没有意义。
+  // 三次下调：1000 → 500（批次 B）→ 300（批次 C）→ **260**（2026-08-30 施工清单 §0.10 收尾，
+  // 实测 270）。这次降的是 `spell.*.strike` 那 12 条：`strike` 手势拿到专属规则之后
+  // 画的是一记附魔剑挥砍（近战，不 stretchTo、不 missed），不再是 generic.travel 的飞行物。
+  // ⚠ 至此 `generic.travel` **一条「每目标一份的飞行段」都不再产出**——原先落在它那儿的
+  // 84 条法术已全部被专属规则接管，这正是 §0.10 要的结果。
+  assert.ok(n("missed") > 260, `带 missed 的 section 只有 ${n("missed")} 条，相关断言会空转`);
   assert.ok(n("timeRange") > 1500, `带 timeRange 的 section 只有 ${n("timeRange")} 条，相关断言会空转`);
   assert.ok(n("mask") > 100, `带 mask 的 section 只有 ${n("mask")} 条`);
   assert.ok(n("persist") > 40, `带 persist 的 section 只有 ${n("persist")} 条`);
@@ -209,15 +239,33 @@ test("瞄准点与锚点重合时不调 rotateTowards（否则 sprite 白挪半�
 });
 
 test("真要转向时必须同时给出 anchor，抵消 rotateTowards 的边缘 pivot", () => {
+  let plain = 0, templated = 0;
   for (const r of R.records) {
     if (!r.has("rotateTowards")) continue;
     const a = r.argOf("anchor");
+    // ⚠ **模板锚点分支正好相反：那一支必须不调 anchor()。** 17026 的判据是
+    // `rotateTowards && !rotateTowards.template && !data.anchor`——template 为真时
+    // `!template` 已经为假，pivot 本来就走 17029 的 interpolate 中心分支，不需要 anchor
+    // 来纠正；而 `data.anchor` 一旦存在，17023 那句 `startPoint / 贴图宽`（＝素材标定的
+    // 握把点）就只影响 sprite.anchor，pivot 会按写死的 0.5 再偏一次，「锚点＝握把」当场作废。
+    // 语料里这一支自 2026-08-29 批次 B 第 5 步起真的存在（travel.mjs 四条近战规则），
+    // 所以这条断言必须分叉；下面的计数保证两支都不是空真。
+    if (r.argOf("rotateTowards")?.[1]?.template === true) {
+      templated++;
+      assert.equal(a, undefined,
+        "模板锚点的转向不许调 anchor()：调了 pivot 会把握把点推回贴图中心");
+      continue;
+    }
+    plain++;
     assert.ok(a, "调了 rotateTowards 却没有 anchor：_setAnchors 17026 的判据是 "
       + "`rotateTowards && !rotateTowards.template && !data.anchor`，缺 anchor 就走 -w/2 分支");
     assert.deepEqual(a[0], {x: 0.5, y: 0.5},
       "anchor 必须是 {x:0.5,y:0.5}：17029-17041 的 interpolate(-w/2, w/2, 0.5) = 0，"
       + "pivot 才回到中心。注意 anchor.x 给 0 会落回同一个 -w/2");
   }
+  // 两支都得有样本，否则上面任何一半都可能是空真通过的。
+  assert.ok(templated > 0, "语料里一条模板锚点的转向都没有——近战四条规则的 template 是不是掉了？");
+  assert.ok(plain > 0, "语料里一条不带模板的转向都没有，历史语义那一支已经测不到了");
 });
 
 test("带 stretchTo 时绝不调 anchor", () => {
@@ -230,7 +278,11 @@ test("带 stretchTo 时绝不调 anchor", () => {
 test("aim.missed 的 cue 一律调 .missed(true)，与调不调 rotateTowards 无关", () => {
   const expected = ALL_CUES.filter(c => c.aim?.missed).length;
   const actual = R.records.filter(r => r.argOf("missed")?.[0] === true).length;
-  assert.ok(expected > 1000, `语料里只有 ${expected} 条 missed cue，这条断言测不出东西`);
+  // 下限两次下调：1000 → 500（批次 B，impact 主规则按 §0.7 的翻案整槽退出 missed，实测 606）
+  // → 300（批次 C，实测 318）。第二次降的 288 条**全部**是 generic.travel 的：它服务的法术
+  // 从 84 条掉到 12 条（−72 个动作 × 每动作 4 条 = −288），与实测差额逐条对上。
+  // 区域姿态锚在模板上、不锚在某个目标身上，`.missed()` 对它们本来就没有意义。
+  assert.ok(expected > 260, `语料里只有 ${expected} 条 missed cue，这条断言测不出东西`);
   assert.equal(actual, expected,
     `${expected} 条 cue 声明了 aim.missed，播放层只调出 ${actual} 次 .missed(true)`);
 });
@@ -415,7 +467,12 @@ test("tint / filter / mask 只在 cue 真声明了才下发", () => {
       masked++;
       assert.equal(r.count("mask"), 1, `${c.rule}: mask:"region" 必须真的下发一个形状`);
       const shape = r.argOf("mask")[0];
-      assert.equal(shape.__shape, "polygon", "line/cone 模板的遮罩是多边形");
+      // 遮罩形状**跟着模板形状走**，不是恒为多边形：`regionMaskShape`（play.mjs:172-176）
+      // 对 circle 返回 `PIXI.Circle`，对 cone/line 才返回多边形。
+      // ⚠ 这条断言原本写死 `"polygon"`——批次 C 给 blast 补出 travel cue 之后，
+      // 圆形模板的遮罩第一次真的被下发，它就整片红了。守的东西没变，口径漏了一种形状。
+      assert.equal(shape.__shape, MASK_SHAPE[maskKind(c, R.plans)] ?? "polygon",
+        `${c.rule}: ${maskKind(c, R.plans)} 模板的遮罩形状不对`);
     } else {
       assert.equal(r.count("mask"), 0, `${c.rule}: 没声明 mask 却下发了遮罩`);
     }
@@ -423,16 +480,50 @@ test("tint / filter / mask 只在 cue 真声明了才下发", () => {
   assert.ok(tinted > 0 && masked > 100, `tint ${tinted} 条、mask ${masked} 条，覆盖不足`);
 });
 
-test("mask 形状的锥尖/线首落在 plan.region 上", () => {
+test("mask 形状的锚点落在 plan.region 上", () => {
   for (const p of R.plans) {
     if (!p.cues.some(c => c.mask === "region")) continue;
     assert.ok(p.region, "声明了 mask:region 的计划必须带 region");
   }
-  const i = ALL_CUES.findIndex(c => c.mask === "region");
-  const shape = R.records[i].argOf("mask")[0];
-  const plan = R.plans.find(p => p.cues.includes(ALL_CUES[i]));
-  assert.deepEqual([shape.points[0], shape.points[1]], [plan.region.x, plan.region.y],
-    "遮罩多边形的第一个顶点必须是模板起点");
+  // ⚠ 逐条核**全部**带遮罩的 cue，不是只核第一条。
+  // 原来只取 `findIndex` 的那一条，于是「第一条恰好是多边形」时整条断言就绿了——
+  // 批次 C 给 blast 补出圆形遮罩后第一条变成圆，`shape.points[0]` 直接 TypeError。
+  // 只核一条既漏得多、又让失败信息取决于遍历顺序。
+  const kinds = new Map();
+  for (let i = 0; i < ALL_CUES.length; i++) {
+    const c = ALL_CUES[i];
+    if (c.mask !== "region") continue;
+    const plan = R.plans.find(p => p.cues.includes(c));
+    const shape = R.records[i].argOf("mask")[0];
+    const kind = maskKind(c, R.plans);
+    kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+    if (shape.__shape === "polygon" && kind === "cone") {
+      // 锥形：`grid.getCone` 的文档原话是「the first point of the polygon is the origin」，
+      // flat 分支的扁三角也是从锥尖起笔——两支都能用「首顶点 == 锥尖」验。
+      assert.deepEqual([shape.points[0], shape.points[1]], [plan.region.x, plan.region.y],
+        `${c.rule}: 锥形遮罩的第一个顶点必须是锥尖`);
+    } else if (shape.__shape === "polygon") {
+      // 线形：遮罩是**绕线轴的矩形**（play.mjs 的 line 分支，4 个角各沿法线偏半个线宽），
+      // 所以首顶点是「线首 + 半宽」，**不是**线首本身。
+      // ⚠ 这条断言原本一律按锥形的「首顶点 == 起点」验，`spell.gesture.ray` 实测
+      // 首顶点 (500,510)、线首 (500,500)，差的正好是 width 20 的一半。
+      // 正确的不变式是：**首边的中点**（顶点 0 与顶点 3）落在线首上。
+      const midX = (shape.points[0] + shape.points[6]) / 2;
+      const midY = (shape.points[1] + shape.points[7]) / 2;
+      assert.ok(Math.abs(midX - plan.region.x) < 1e-6 && Math.abs(midY - plan.region.y) < 1e-6,
+        `${c.rule}: 线形遮罩首边的中点必须是线首，实得 (${midX},${midY}) 期望 (${plan.region.x},${plan.region.y})`);
+    } else {
+      assert.deepEqual([shape.x, shape.y], [plan.region.x, plan.region.y],
+        `${c.rule}: 圆形遮罩的圆心必须是模板中心`);
+      assert.equal(shape.radius, plan.region.radius,
+        `${c.rule}: 圆形遮罩的半径必须等于模板半径`);
+    }
+  }
+  // 样本量下限：两种形状都必须真的被行使到，否则上面那两支里有一支是空真。
+  assert.ok((kinds.get("cone") ?? 0) + (kinds.get("line") ?? 0) > 100,
+    `多边形遮罩只核到 ${JSON.stringify([...kinds])} 条`);
+  assert.ok((kinds.get("circle") ?? 0) > 0,
+    "一条圆形遮罩都没核到——blast 那一支要么没出 cue，要么没声明 mask");
 });
 
 test("play.mjs 只调用 Sequencer 上真实存在的方法", () => {
@@ -443,8 +534,43 @@ test("play.mjs 只调用 Sequencer 上真实存在的方法", () => {
   assert.ok(used.size > 20, `只用到 ${used.size} 个方法，桩没跑通`);
 });
 
+/**
+ * 已知待修、暂时豁免的播放层告警。
+ *
+ * 规矩与 fallback-ratchet 一样：**豁免必须点名到规则、必须带贴着实测的条数上限**，
+ * 修完就删。豁免一个「凡是……都放过」的模式等于把这条守卫关掉。
+ *
+ * 【2026-08-29 清空】原本这里豁免着 `aftermath.groundResidue` 的 192 条告警
+ *（它 `at: {ref:"point"}` 锚在爆心却用 `objectScale:1.3` 表达大小，而 scaleToObject
+ * 在裸点上恒等于「一格」）。批次 B 收口时已经在 `armory/aftermath.mjs` 那侧按 region
+ * 半径补上了 `sizePx`，24 条 cue 全部改完、告警归零，**豁免连同数字一起删掉**。
+ *
+ * ⚠ 顺带订正当时写在这里的一个数：原注释说「Crucible 微网格 = 20px → 26×26px，
+ * 小 9.2 倍」——那个 20 是 `canvas.dimensions.distancePixels`（px/ft），不是格宽。
+ * Crucible 的 `grid.distance = 5 ft`，格宽是 100px，真实倍率是 130px vs 240px、
+ * **偏小 1.85 倍**。结构性结论不变，数字当时错了一个量级。
+ *
+ * 空表不是「这条守卫没用了」：它现在是纯粹的零容忍——任何新的播放层告警都会让它红。
+ */
+const WARN_EXEMPT = [];
+
 test("全量语料跑完 playPlan 一条 warn 都不出", () => {
-  assert.deepEqual(R.warns.slice(0, 5), [], `${R.warns.length} 条播放层告警`);
+  const rest = [];
+  const hits = new Map(WARN_EXEMPT.map(x => [x.needle, 0]));
+  for (const w of R.warns) {
+    const ex = WARN_EXEMPT.find(x => w.includes(x.needle) && w.includes(x.rule));
+    if (ex) hits.set(ex.needle, hits.get(ex.needle) + 1);
+    else rest.push(w);
+  }
+  assert.deepEqual(rest.slice(0, 5), [], `${rest.length} 条豁免之外的播放层告警`);
+  // 双向钉死：多了说明缺陷扩散，少了说明已经修完、豁免该删。
+  for (const ex of WARN_EXEMPT) {
+    const n = hits.get(ex.needle);
+    assert.ok(n <= ex.max, `"${ex.rule}" 的已知告警从 ${ex.max} 涨到 ${n} 条——缺陷扩散了`);
+    assert.ok(n > 0,
+      `"${ex.rule}" 的已知告警一条都不出了：要么已经给它补上 sizePx（那就把这条豁免删掉），`
+      + "要么播放层那条「裸点禁 objectScale」的硬规则被谁绕过去了");
+  }
 });
 
 /* ---- 五、fixture 覆盖不到的支路：合成计划直接喂 playPlan ------------------ */
@@ -649,4 +775,201 @@ test("全量语料：两个随机项已在出手端固化，播放层一次都�
   const again = resolve(corpus()[0], {assets: mk(), armory: ARMORY});
   const first = resolve(corpus()[0], {assets: mk(), armory: ARMORY});
   assert.deepEqual(again.cues.map(c => c.angle), first.cues.map(c => c.angle));
+});
+
+/* ---- 六、素材两端留白的补偿（施工清单 §0.4 / §0.5） ---------------------- */
+
+/**
+ * ⚠ 这一节**必须**靠合成 cue 行使。
+ *
+ * 兵库今天一条 `template` 都不传（批次 B 第 5 步才给 travel.mjs 那 8 条 stretchTo 规则
+ * 加上），全量语料驱动的断言在这里全是空转的守门员——删掉播放层整段补偿块它们照样全绿。
+ * 这正是施工清单 §0.1 点名的「∀ 守卫的前提消失后静默通过」那类失效，所以每一条都用
+ * playCues() 直接喂一条构造好的 cue。
+ */
+
+/** 从记录里取 `.template()` 的实参（没调过则 undefined）。 */
+const tplArg = r => r.argOf("template")?.[0];
+
+test("模板补偿：带 stretchTo 且模板有留白 ⇒ 恰调一次 template()，且不传 gridSize", async () => {
+  // jb2a `ranged` 的实测模板：[200, 200, 200]，贴图宽 1600 ⇒ 首尾各 12.5%·d。
+  const {records, warns} = await playCues([{
+    stretchTo: {x: 900, y: 500}, scale: {x: 1, y: 1}, template: [200, 200, 200]
+  }]);
+  const r = records[0];
+  assert.equal(r.count("template"), 1, "带留白的拉伸 cue 必须恰好下发一次模板");
+  assert.deepEqual(tplArg(r), {startPoint: 200, endPoint: 200});
+  assert.equal("gridSize" in tplArg(r), false,
+    "不许传 gridSize：它会经 gridSizeDifference（sequencer.js:15113-15115）"
+    + "改掉非拉伸分支的体积，gridSize=200 就是腰斩；缺了它才会 ?? 100 落回默认");
+  assert.deepEqual(warns, []);
+});
+
+test("模板补偿：startPoint 为 0 必须补成 ≥1，否则 _setAnchors 算出 NaN 锚点、整条特效不可见",
+  async () => {
+  // 本仓 172 条 cue（generic.travel 168 + strike.shape.area 4）正是这个形态：
+  // eskie ray = [200, 0, 100]、jb2a line200B = [200, 0, 300]。
+  // EffectSection.template()（sequencer.js:24105-24107）三条赋值都是 `if (x)`，0 被丢掉；
+  // 丢掉后 _setAnchors:17024 的 `template.startPoint / textureWidth` 没有 ?? 0 兜底
+  // （同一字段在 16971 有），算出 undefined/W = NaN → sprite.anchor.set(NaN, .5) → 全屏不见。
+  for (const tpl of [[200, 0, 100], [200, 0, 300], {gridSize: 200, startPoint: 0, endPoint: 300}]) {
+    const {records} = await playCues([{
+      stretchTo: {x: 900, y: 500}, scale: {x: 1, y: 1}, template: tpl
+    }]);
+    const a = tplArg(records[0]);
+    assert.ok(a, `模板 ${JSON.stringify(tpl)} 应当下发`);
+    assert.ok(Number.isFinite(a.startPoint) && a.startPoint > 0,
+      `startPoint=${a.startPoint} 会被 template() 的 if(x) 丢掉，`
+      + "换来一个 NaN 锚点和一条彻底看不见的特效");
+  }
+  // 代价上界：本仓最小 widthWithPadding 是 line200B 的 1000−1−300=699 ⇒ 0.143%·d，
+  // 像素上读不出来。这个 1 不许涨成「随手取个大点的数」。
+  const {records} = await playCues([{
+    stretchTo: {x: 900, y: 500}, scale: {x: 1, y: 1}, template: [200, 0, 300]
+  }]);
+  assert.equal(tplArg(records[0]).startPoint, 1, "补偿值应恰为 1px，别自己加码");
+});
+
+test("模板补偿：两端留白全为 0 的模板整条跳过（cone 本来没留白要补）", async () => {
+  // jb2a cone = [100, 0, 0]、gust_of_wind 同型。给它们调 template() 只有风险没有收益：
+  // 三项都空还会撞上 sequencer.js:24098 那条「You need to define at least one parameter」的 throw。
+  const {records, warns} = await playCues([{
+    stretchTo: {x: 900, y: 500}, scale: {x: 1, y: 1}, template: [100, 0, 0]
+  }]);
+  assert.equal(records[0].has("template"), false, "没有留白就不该调 template()");
+  assert.deepEqual(warns, []);
+});
+
+test("模板补偿：既不拉伸、也不走模板锚点的 cue 一次都不许调 template()", async () => {
+  // 判据：模板只在 _getDistanceScaling（仅 stretchTo 分支）与 _setAnchors 的
+  // rotateTowards.template 分支被读。落到别处它唯一还能碰到的是 gridSizeDifference，
+  // 那条路会改体积。这条断言在现有语料上恒空转，必须用合成 cue 行使。
+  const {records} = await playCues([{template: [200, 200, 200]}]);
+  assert.equal(records[0].has("template"), false,
+    "不消费模板的 cue 收到 template() 只会经 gridSizeDifference 改掉体积");
+
+  // 退化 aim（瞄准点=锚点）同样不走模板锚点分支 ⇒ 也不许调。
+  const {records: r2} = await playCues([{
+    template: [200, 200, 200], aim: {towards: {x: 500, y: 500}, missed: false}
+  }]);
+  assert.equal(r2[0].has("template"), false, "退化的 aim 不会 rotateTowards，模板无处可用");
+});
+
+test("模板锚点：带 template 的真转向走 {template:true} 且**不**调 anchor()", async () => {
+  // 施工清单 §0.3：锚点的含义从「贴图中心」变成素材标定的握把点
+  // （_setAnchors:17023-17025 把 anchor.x 设成 startPoint/贴图宽）。
+  const {records, warns} = await playCues([{
+    template: [200, 300, 300], aim: {towards: {x: 800, y: 500}, missed: false}
+  }]);
+  const r = records[0];
+  assert.equal(r.argOf("rotateTowards")?.[1]?.template, true,
+    "带 template 的转向必须把 template:true 递给 rotateTowards，否则 17022 的第一个 if 不进");
+  assert.equal(r.has("anchor"), false,
+    "模板锚点分支下调 anchor 会让 pivot 按写死的 0.5 再偏一次，握把点被推回中心");
+  assert.equal(r.count("template"), 1, "模板锚点分支也必须真的把模板下发下去");
+  assert.deepEqual(tplArg(r), {startPoint: 300, endPoint: 300});
+  assert.deepEqual(warns, []);
+
+  // 反向：没有 template 的转向必须保持历史行为（不带 template + 显式 anchor 居中）。
+  const {records: r2} = await playCues([{aim: {towards: {x: 800, y: 500}, missed: false}}]);
+  assert.notEqual(r2[0].argOf("rotateTowards")?.[1]?.template, true);
+  assert.deepEqual(r2[0].argOf("anchor"), [{x: 0.5, y: 0.5}]);
+});
+
+test("模板补偿：坏模板不下发，且留一条 warn（Sequencer 的 is_real_number 会当场 throw）", async () => {
+  const {records, warns} = await playCues([{
+    stretchTo: {x: 900, y: 500}, scale: {x: 1, y: 1}, template: [200, "两百", 200]
+  }]);
+  assert.equal(records[0].has("template"), false);
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /template/);
+});
+
+test("全量语料：凡是下发出去的 template，startPoint 必须有限且 > 0", () => {
+  // 兵库今天一条 template 都不传，所以这条现在只保证「不会有人在语料里悄悄塞进坏模板」；
+  // 批次 B 第 5 步给 travel.mjs 加上 template 之后，它才开始真正行使。
+  for (const r of R.records) {
+    for (const c of r.calls.filter(x => x.m === "template")) {
+      const a = c.args[0];
+      assert.ok(Number.isFinite(a.startPoint) && a.startPoint > 0,
+        `下发了 startPoint=${a.startPoint} 的模板：0 会被 template() 的 if(x) 丢掉，`
+        + "换来 NaN 锚点和一条不可见的特效");
+      assert.equal("gridSize" in a, false, "不许下发 gridSize");
+    }
+  }
+});
+
+/* ---- 七、区域尺寸：sizePx 与「裸点禁 objectScale」（施工清单 §0.12） ------- */
+
+test("裸点锚的 cue 一律不得下发 scaleToObject", async () => {
+  // _applyScaleToObject(17171) → getSourceData(15245) → get_object_dimensions(18122)
+  // 对裸 {x,y} 一路 ?? 落到最后一档 canvas.grid.size ⇒ 恒等于「一格」。
+  const {records} = await playCues([{at: {ref: "point", x: 500, y: 500}, objectScale: 1}]);
+  assert.equal(records[0].has("scaleToObject"), false,
+    "裸点上的 scaleToObject 恒等于一格，表达不了任何尺寸");
+
+  // 反向：锚在真 placeable 上时这条路照旧。
+  const {records: r2} = await playCues([{at: {tokenId: "t"}, objectScale: 1.2}]);
+  assert.deepEqual(r2[0].argOf("scaleToObject"), [1.2]);
+
+  // 全量语料同样不许有例外。
+  for (let i = 0; i < ALL_CUES.length; i++) {
+    if (ALL_CUES[i].at?.ref !== "point") continue;
+    assert.equal(R.records[i].has("scaleToObject"), false,
+      `规则 "${ALL_CUES[i].rule}" 在裸点上下发了 scaleToObject`);
+  }
+});
+
+test("sizePx 映射成 e.size()，并压过 scaleToObject", async () => {
+  const {records} = await playCues([{
+    at: {tokenId: "t"}, sizePx: {width: 240, height: 240}, objectScale: 1.3
+  }]);
+  const r = records[0];
+  assert.deepEqual(r.argOf("size"), [{width: 240, height: 240}]);
+  assert.equal(r.has("scaleToObject"), false,
+    "_transformNoStretchSprite 是 `if (scaleToObject) … else if (size) …`，"
+    + "两者同时下发时 size 是死代码");
+});
+
+/* ---- 八、圆底锥的遮罩（施工清单 §0.13 的硬前置） ------------------------- */
+
+test("mask：flat 与 round 两种锥底是两个形状，round 不许走扁三角那条式子", async () => {
+  const flat = {type: "cone", x: 500, y: 500, radius: 300, angle: 60, rotation: 0,
+                curvature: "flat"};
+  const round = {type: "cone", x: 500, y: 500, radius: 300, angle: 210, rotation: 0,
+                 curvature: "round"};
+
+  const {records: rf} = await playCues([{mask: "region"}], {region: flat});
+  const pf = rf[0].argOf("mask")[0].points;
+  assert.equal(pf.length, 6, "flat 锥是三点扁三角（锥尖 + 两个远端顶点）");
+  assert.ok(Math.abs(Math.hypot(pf[2] - 500, pf[3] - 500) - 300 / Math.cos(30 * Math.PI / 180)) < 0.5,
+    "flat 的边长必须是 radius/cos(halfAngle)，与 travel.mjs 的 templateEnd 同式");
+
+  const {records: rr} = await playCues([{mask: "region"}], {region: round});
+  const pr = rr[0].argOf("mask")[0].points;
+  assert.deepEqual([pr[0], pr[1]], [500, 500],
+    "core 的 getCone 第一个点就是锥尖（common/grid/base.mjs:608）");
+  assert.ok(pr.length > 20, `圆底锥要用圆弧离散，只有 ${pr.length / 2} 个点`);
+  // 每一个弧上的点都恰好落在半径上——扁三角那条式子会把它们甩到 114 倍半径之外。
+  for (let i = 2; i < pr.length; i += 2) {
+    const d = Math.hypot(pr[i] - 500, pr[i + 1] - 500);
+    assert.ok(Math.abs(d - 300) < 0.01,
+      `圆弧上的点离锥尖 ${d.toFixed(1)}px，应恒为 radius=300`);
+  }
+  // 张角覆盖到位：首尾两点的夹角就是 210°。
+  const a0 = Math.atan2(pr[3] - 500, pr[2] - 500);
+  const a1 = Math.atan2(pr[pr.length - 1] - 500, pr[pr.length - 2] - 500);
+  const span = ((a1 - a0) * 180 / Math.PI + 720) % 360;
+  assert.ok(Math.abs(span - 210) < 0.5, `圆底锥张角 ${span.toFixed(1)}°，应为 210°`);
+});
+
+test("mask：缺 curvature 字段时按 core 的默认换算回退（≤90° flat，>90° round）", async () => {
+  // 判据：action-use-dialog.mjs:528 写死 `curvature: angle <= 90 ? "flat" : "round"`。
+  const {records: a} = await playCues([{mask: "region"}],
+    {region: {type: "cone", x: 500, y: 500, radius: 300, angle: 60, rotation: 0}});
+  assert.equal(a[0].argOf("mask")[0].points.length, 6, "60° 无 curvature 应按 flat");
+
+  const {records: b} = await playCues([{mask: "region"}],
+    {region: {type: "cone", x: 500, y: 500, radius: 300, angle: 210, rotation: 0}});
+  assert.ok(b[0].argOf("mask")[0].points.length > 20, "210° 无 curvature 应按 round");
 });
